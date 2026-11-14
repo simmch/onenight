@@ -1003,6 +1003,7 @@ let needRecover = false;
 let holdTime = 0;
 let zoomFov = 70;
 const SANITY_MAX = 100;
+const SANITY_LOOK = 16; // per second while a ghost, the Observer, the Collective, or the Consumer is in view
 const sanity = { value: SANITY_MAX, visionIn: 0, visionT: 0, visionLife: 0, visionSide: 'left', warned: false };
 
 function rampParam(param, value, seconds) {
@@ -2011,6 +2012,29 @@ if (TOUCH) {
     visualViewport.addEventListener('scroll', fitTouch);
   }
   addEventListener('orientationchange', () => setTimeout(fitTouch, 80));
+  const chestPoint = new THREE.Vector3();
+  function chestUnderTap(clientX, clientY) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    camera.updateMatrixWorld();
+    const px = camera.position.x, pz = camera.position.z;
+    const cx0 = Math.floor(px / CFG.chunk), cz0 = Math.floor(pz / CFG.chunk);
+    let best = null, bestHit = Infinity;
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      const c = chunks.get(key(cx0 + dx, cz0 + dz))?.chest;
+      if (!c || opened.has(c.id)) continue;
+      const d = Math.hypot(c.x - px, c.z - pz);
+      if (d > CFG.chestReach) continue;
+      chestPoint.set(c.x, MAP.groundY(c.x, c.z) + 0.45, c.z).project(camera);
+      if (chestPoint.z < -1 || chestPoint.z > 1) continue;
+      const sx = (chestPoint.x * 0.5 + 0.5) * rect.width + rect.left;
+      const sy = (-chestPoint.y * 0.5 + 0.5) * rect.height + rect.top;
+      const hit = Math.hypot(clientX - sx, clientY - sy);
+      const tol = Math.max(56, Math.min(160, (0.85 / Math.max(d, 0.7)) * rect.height));
+      if (hit <= tol && hit < bestHit) { best = c; bestHit = hit; }
+    }
+    return best;
+  }
   function endPointer(e) {
     const gone = fingers.get(e.pointerId);
     fingers.delete(e.pointerId);
@@ -2023,6 +2047,19 @@ if (TOUCH) {
       clearTimeout(pair.timer);
       pair = null;
       if (quick) { clearTimeout(pendingFire); lastTap = 0; pressKey('KeyF'); releaseKey('KeyF'); }
+      return;
+    }
+    const moved = gone ? Math.hypot(e.clientX - gone.sx, e.clientY - gone.sy) : 99;
+    const tapped = gone && moved < 18 && performance.now() - gone.t < 340 && rights.length === 0;
+    if (tapped) {
+      const chest = chestUnderTap(e.clientX, e.clientY);
+      if (chest) {
+        if (look && e.pointerId === look.id) { clearTimeout(look.holdTimer); if (look.aiming) gun.aiming = false; look = null; }
+        clearTimeout(pendingFire);
+        lastTap = 0;
+        openChest(chest);
+        return;
+      }
     }
     if (!look || e.pointerId !== look.id) return;
     clearTimeout(look.holdTimer);
@@ -3323,6 +3360,39 @@ function nearestHostileDistance() {
   return nearest;
 }
 
+function horrorInSight() {
+  const px = camera.position.x, py = camera.position.y, pz = camera.position.z;
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const fx = -Math.sin(yaw) * cp, fy = -sp, fz = -Math.cos(yaw) * cp;
+  const flat = Math.hypot(fx, fz) || 1;
+  const aimPitch = Math.atan2(fy, flat);
+  const vHalf = camera.fov * Math.PI / 360 * 0.92;
+  const hHalf = Math.atan(Math.tan(vHalf) * Math.max(0.6, camera.aspect));
+  const seen = (x, y, z) => {
+    const dx = x - px, dy = y - py, dz = z - pz;
+    const horiz = Math.hypot(dx, dz), dist = Math.hypot(horiz, dy);
+    if (dist > 48) return false;
+    if (dist < 1.2) return true;
+    if (dx * fx + dy * fy + dz * fz <= 0) return false;
+    const hAng = Math.acos(THREE.MathUtils.clamp((dx * fx + dz * fz) / ((horiz || 1) * flat), -1, 1));
+    const vAng = Math.abs(Math.atan2(dy, horiz) - aimPitch);
+    if (hAng > hHalf || vAng > vHalf) return false;
+    return !creatureWorld.losBlocked(px, pz, x, z);
+  };
+  for (const g of ghosts) {
+    if (g.state === 'die') continue;
+    if (seen(g.x, g.mesh.position.y || MAP.groundY(g.x, g.z) + 1.2, g.z)) return true;
+  }
+  if (obsRound.active) for (const o of obsRound.observers) {
+    if (o.active && seen(o.position.x, MAP.groundY(o.position.x, o.position.z) + 1.6, o.position.z)) return true;
+  }
+  if (collective.active) for (const k of collective.kids) {
+    if (!k.gone && seen(k.x, MAP.groundY(k.x, k.z) + 0.9, k.z)) return true;
+  }
+  if (consumer.active && !consumer.dead && seen(consumer.x, MAP.groundY(consumer.x, consumer.z) + 1.7, consumer.z)) return true;
+  return false;
+}
+
 function updateSanity(dt, inControl, running) {
   sanityEl.hidden = !inControl;
   if (!inControl) {
@@ -3351,6 +3421,10 @@ function updateSanity(dt, inControl, running) {
     const darkness = hasLight ? 0 : 0.035;
     const stress = 0.018 + darkness + danger * 0.31 + (running ? 0.045 : 0);
     sanity.value -= dt * stress * (holdingBreath ? 0.72 : 1);
+  }
+  if (horrorInSight()) {
+    sanity.value -= dt * SANITY_LOOK;
+    recovering = false;
   }
   sanity.value = THREE.MathUtils.clamp(sanity.value, 0, SANITY_MAX);
 
