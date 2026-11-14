@@ -3,7 +3,7 @@
 // aabb [x0, z0, x1, z1] wall colliders, boxes {layer: [x, y, z, sx, sy, sz, rotY]}, lights [x, y, z, strength, kind],
 // vents [x, z, period, phase], doors, houses [x0, z0, x1, z1] interiors, secrets (sealed cave walls) and one optional chest.
 
-export const MAP_NAMES = ['forest', 'rural', 'cave', 'snow', 'hell'];
+export const MAP_NAMES = ['forest', 'rural', 'cave', 'snow', 'hell', 'labyrinth'];
 export const MAP_META = {
   forest: { label: 'THE WOODS', fog: 0x000000, fogDensity: 0.04, ambient: [0x000000, 0], eerie: 1, weather: null,
             ground: ['#4d5c36', '#566640', '#45522f', '#5e5a3c', '#4f5e3a', '#665c42'] },
@@ -15,6 +15,8 @@ export const MAP_META = {
             ground: ['#cfd9e6', '#dfe7f0', '#c2cedd', '#e9eff5', '#d5deea', '#b9c6d8'] },
   hell:   { label: 'HELL', fog: 0x0b0100, fogDensity: 0.042, ambient: [0xff3a14, 0.3], eerie: 0, weather: 'embers',
             ground: ['#57302a', '#653a30', '#472620', '#70402e', '#532e27', '#7a462c'] },
+  labyrinth: { label: 'THE LABYRINTH', fog: 0x000000, fogDensity: 0.05, ambient: [0x000000, 0], eerie: 0.7, weather: null, ceiling: 4.2,
+            ground: ['#4c4844', '#57524c', '#423f3b', '#5e574e', '#4a4541', '#655c50'] },
 };
 export const SOLID = 0, FLOOR = 1, LIQUID = 2, SECRET = 3;
 
@@ -37,7 +39,7 @@ export function createMap(name, env) {
 
   // ── chests on open ground: one a short walk ahead of the spawn point, the rest scattered ──
   const spawnChest = (() => {
-    const r = mulberry(seed ^ 0xc4e5), a = (r() - 0.5) * 0.9, d = 9 + r() * 2;
+    const r = mulberry(seed ^ 0xc4e5), a = (r() - 0.5) * 0.9, d = name === 'labyrinth' ? 4.2 : 9 + r() * 2;   // the labyrinth's first room is small
     const x = Math.sin(a) * d, z = -Math.cos(a) * d;
     return { x, z, cx: Math.floor(x / S), cz: Math.floor(z / S) };
   })();
@@ -357,7 +359,8 @@ export function createMap(name, env) {
     regions.set(k, R); return R;
   }
   const regionAt = (i, j) => region(Math.floor((i + HALF) / REG), Math.floor((j + HALF) / REG));
-  function cellType(i, j) { const R = regionAt(i, j); return R.g[(j - R.bj) * REG + (i - R.bi)]; }
+  function caveCellType(i, j) { const R = regionAt(i, j); return R.g[(j - R.bj) * REG + (i - R.bi)]; }
+  const cellType = (i, j) => name === 'labyrinth' ? labCell(i, j) : caveCellType(i, j);
   // Cell (i, j) is centred on (i * CELL, j * CELL), so the spawn point sits in the middle of cell (0, 0) and hallways run through it.
   const cellOf = (v) => Math.floor(v / CELL + 0.5), cellLo = (i) => (i - 0.5) * CELL;
   const secretId = (i, j) => 's' + key(i, j);
@@ -445,13 +448,129 @@ export function createMap(name, env) {
     return false;
   }
 
-  const isGrid = name === 'cave' || name === 'hell';
-  const generateChunk = { forest: forestChunk, snow: snowChunk, rural: ruralChunk, cave: gridChunk, hell: gridChunk }[name];
+  // ───────────────────────── labyrinth: one finite maze, one way out ─────────────────────────
+  // Corridors one cell (4 m) wide between walls one cell thick. You start in a small room at the centre; the exit is a gap
+  // in the outer wall, as far from the centre as the maze allows. Leaving through it calls for a new maze: regen().
+  // Grown with a "growing tree" that mostly extends the newest passage but often branches from an old one, which gives long
+  // winding halls with a great many dead ends; a few dead ends are then opened into loops so nothing can be cornered for certain.
+  const LAB_H = MAP_META.labyrinth.ceiling;
+  const lab = { gen: -1 };
+  function buildLab(gen) {
+    const M = 15 + 2 * Math.min(gen, 2), N = 2 * M + 1;             // M halls a side (odd, so the centre is a hall), N cells a side
+    const g = new Uint8Array(N * N), seen = new Uint8Array(N * N), r = mulberry((seed ^ Math.imul(gen + 1, 0x9e3779b1)) | 0);
+    const at = (a, b) => b * N + a, DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const open = (a, b) => a >= 0 && a < N && b >= 0 && b < N && g[at(a, b)] === FLOOR;
+    for (let b = M - 1; b <= M + 1; b++) for (let a = M - 1; a <= M + 1; a++) g[at(a, b)] = FLOOR;
+    const active = [[M, M]]; seen[at(M, M)] = 1;
+    while (active.length) {
+      const k = r() < 0.5 ? active.length - 1 : (r() * active.length) | 0, [a, b] = active[k];
+      const opts = DIRS.filter(([da, db]) => { const x = a + 2 * da, y = b + 2 * db; return x > 0 && x < N - 1 && y > 0 && y < N - 1 && !seen[at(x, y)]; });
+      if (!opts.length) { active.splice(k, 1); continue; }
+      const [da, db] = opts[(r() * opts.length) | 0];
+      g[at(a + da, b + db)] = g[at(a + 2 * da, b + 2 * db)] = FLOOR; seen[at(a + 2 * da, b + 2 * db)] = 1; active.push([a + 2 * da, b + 2 * db]);
+    }
+    const exitsOf = (a, b) => DIRS.filter(([da, db]) => open(a + da, b + db));
+    for (let b = 1; b < N; b += 2) for (let a = 1; a < N; a += 2) {   // a few loops
+      if (exitsOf(a, b).length !== 1 || r() > 0.09) continue;
+      const walls = DIRS.filter(([da, db]) => !open(a + da, b + db) && a + 2 * da > 0 && a + 2 * da < N - 1 && b + 2 * db > 0 && b + 2 * db < N - 1);
+      if (walls.length) { const [da, db] = walls[(r() * walls.length) | 0]; g[at(a + da, b + db)] = FLOOR; }
+    }
+    // walking distance from the centre to every cell
+    const dist = new Int32Array(N * N).fill(-1), queue = [M, M]; dist[at(M, M)] = 0;
+    for (let q = 0; q < queue.length; q += 2) {
+      const a = queue[q], b = queue[q + 1];
+      for (const [da, db] of DIRS) if (open(a + da, b + db) && dist[at(a + da, b + db)] < 0) { dist[at(a + da, b + db)] = dist[at(a, b)] + 1; queue.push(a + da, b + db); }
+    }
+    // the way out: one of the farthest halls on the rim
+    const rim = [];
+    for (let v = 1; v < N; v += 2) rim.push([v, 1, 0, -1], [v, N - 2, 0, 1], [1, v, -1, 0], [N - 2, v, 1, 0]);
+    rim.sort((p, q) => dist[at(q[0], q[1])] - dist[at(p[0], p[1])]);
+    const [ea, eb, eda, edb] = rim[(r() * Math.max(1, rim.length * 0.2)) | 0];
+    g[at(ea + eda, eb + edb)] = FLOOR;
+    const W = (a) => a - M, beyond = new Set();                       // local cell -> world cell; the passage outside the wall
+    for (let n = 2; n <= 3; n++) beyond.add(key(W(ea + eda * n), W(eb + edb * n)));
+    const exit = { i: W(ea + eda * 3), j: W(eb + edb * 3), di: eda, dj: edb, steps: dist[at(ea, eb)] + 1 };
+    exit.x = exit.i * CELL; exit.z = exit.j * CELL;
+
+    // the dead: slumped at the ends of blind halls, and here and there along the way
+    const ends = new Set(), bodies = [];
+    const near0 = (a, b) => Math.abs(a - M) < 4 && Math.abs(b - M) < 4;
+    const lean = (a, b, [wa, wb]) => ({ kind: 'lean', x: W(a) * CELL + wa * (CELL / 2 - 0.3), z: W(b) * CELL + wb * (CELL / 2 - 0.3), facing: Math.atan2(-wa, -wb) + (r() - 0.5) * 0.5 });
+    const lying = (a, b) => ({ kind: 'ground', x: W(a) * CELL + (r() - 0.5) * 1.6, z: W(b) * CELL + (r() - 0.5) * 1.6, facing: r() * 6.28 });
+    const hung = (a, b) => ({ kind: 'hang', x: W(a) * CELL + (r() - 0.5) * 1.2, z: W(b) * CELL + (r() - 0.5) * 1.2, facing: r() * 6.28, anchorY: LAB_H });
+    for (let b = 1; b < N - 1; b++) for (let a = 1; a < N - 1; a++) {
+      if (!open(a, b) || near0(a, b)) continue;
+      const ex = exitsOf(a, b), node = a % 2 === 1 && b % 2 === 1, roll = r(), which = r();
+      if (node && ex.length === 1 && !(a === ea && b === eb)) {
+        ends.add(key(W(a), W(b)));
+        if (roll < 0.5) bodies.push(which < 0.6 ? lean(a, b, [-ex[0][0], -ex[0][1]]) : which < 0.82 ? lying(a, b) : hung(a, b));
+      } else if (roll < 0.035) {
+        const walls = DIRS.filter(([da, db]) => !open(a + da, b + db));
+        bodies.push(which < 0.4 && walls.length ? lean(a, b, walls[(r() * walls.length) | 0]) : which < 0.75 ? lying(a, b) : hung(a, b));
+      }
+    }
+    return { gen, M, N, g, beyond, exit, ends, bodies, deadEnds: ends.size, half: (N / 2) * CELL };
+  }
+  function setLab(gen) { Object.assign(lab, buildLab(gen)); return lab; }
+  if (name === 'labyrinth') setLab(0);
+  function labCell(i, j) {
+    const a = i + lab.M, b = j + lab.M;
+    if (a >= 0 && a < lab.N && b >= 0 && b < lab.N) return lab.g[b * lab.N + a];
+    return lab.beyond.has(key(i, j)) ? FLOOR : SOLID;
+  }
+  const labOutside = (x, z) => { const a = cellOf(x) + lab.M, b = cellOf(z) + lab.M; return a < 0 || a >= lab.N || b < 0 || b >= lab.N; };
+  function labChunk(cx, cz) {
+    const c = blank(), n = S / CELL, r = mulberry((hash2(cx, cz, 60 + lab.gen) * 4294967296) | 0), id = (k) => 'L' + lab.gen + ':' + k;
+    const taken = (x, z, gap) => lab.bodies.some((b) => (b.x - x) ** 2 + (b.z - z) ** 2 < gap * gap);
+    for (let b = 0; b < n; b++) for (let a = 0; a < n; a++) {
+      const i = cx * n + a, j = cz * n + b, x = i * CELL, z = j * CELL;
+      if (labCell(i, j) === SOLID) {
+        let edge = false;
+        for (let dj = -1; dj <= 1 && !edge; dj++) for (let di = -1; di <= 1; di++) if (labCell(i + di, j + dj) !== SOLID) { edge = true; break; }
+        if (edge) box(c, 'wall', x, LAB_H / 2, z, CELL, LAB_H, CELL);
+        continue;
+      }
+      const far = x * x + z * z > 64, walls = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([di, dj]) => labCell(i + di, j + dj) === SOLID);
+      const at = (spread) => [x + (r() - 0.5) * spread, z + (r() - 0.5) * spread];
+      if (i === lab.exit.i && j === lab.exit.j) {      // the way out: a pale doorway at the end of the last passage
+        const { di, dj } = lab.exit, gx = x + di * (CELL / 2 - 0.05), gz = z + dj * (CELL / 2 - 0.05);
+        box(c, 'exit', gx, LAB_H / 2, gz, di ? 0.1 : CELL, LAB_H, di ? CELL : 0.1);
+        c.lights.push(x, 2.2, z, 1.2, 2);
+        continue;
+      }
+      if (lab.beyond.has(key(i, j))) { c.lights.push(x, 2.2, z, 0.5, 2); continue; }
+      if (lab.ends.has(key(i, j)) && !c.chest && !taken(x, z, 2.2) && hash2(i, j, 70 + lab.gen) < 0.3) c.chest = { x, z, id: id(key(i, j)) };   // blind halls are worth a look
+      if (walls.length && far && r() < 0.03) {         // a torch someone left burning
+        const [di, dj] = walls[(r() * walls.length) | 0], tx = x + di * (CELL / 2 - 0.12), tz = z + dj * (CELL / 2 - 0.12);
+        lit(c, r, 'torch', tx, tz, 0.6, 0.9, 1.25, 0.012); c.lights.push(tx - di * 0.35, 1.9, tz - dj * 0.35, 1, 0);
+      }
+      if (r() < 0.09) { const [px, pz] = at(3); put(c, r, ['bone', 'skull'], px, pz, 0.6, 0.45); }
+      if (far && r() < 0.02) { const [px, pz] = at(2.2); if (!taken(px, pz, 1.4)) put(c, r, 'skeleton', px, pz, 1.0, 1.1, 0.3); }
+      if (r() < 0.04) { const [px, pz] = at(3.2); put(c, r, 'gravel', px, pz, 1.0, 0.6); }
+      if (far && r() < 0.008) { const [px, pz] = at(1.6); if (!taken(px, pz, 1.6)) put(c, r, ['cage', 'coffin'], px, pz, 1.2, 1.8, 0.5); }
+      if (walls.length && r() < 0.16) { const [di, dj] = walls[(r() * walls.length) | 0]; put(c, r, ['web', 'moss'], x + di * 1.6, z + dj * 1.6, 1.1, 1.2, 0, 0.01, LAB_H - 1.2); }
+      if (far && r() < 0.012 && !taken(x, z, 2)) { const [px, pz] = at(2); lit(c, r, 'candle', px, pz, 0.3, 0.42, 0, 0); c.lights.push(px, 0.5, pz, 0.3, 0); }
+    }
+    for (const b of lab.bodies) if (b.kind === 'hang' && Math.floor(b.x / S) === cx && Math.floor(b.z / S) === cz) c.col.push(b.x, b.z, 0.2);   // you walk round the hanged
+    if (isSpawnChunk(cx, cz)) c.chest = { x: spawnChest.x, z: spawnChest.z, id: id('spawn'), tier: 'common' };
+    if (c.chest) {
+      c.chest.tier ||= chestTier(cx, cz);
+      c.col.push(c.chest.x, c.chest.z, 0.4);
+      for (let p = c.props.length - 7; p >= 0; p -= 7) if ((c.props[p] - c.chest.x) ** 2 + (c.props[p + 1] - c.chest.z) ** 2 < 1.4) c.props.splice(p, 7);
+      for (let p = c.col.length - 6; p >= 0; p -= 3) if ((c.col[p] - c.chest.x) ** 2 + (c.col[p + 1] - c.chest.z) ** 2 < 1.4) c.col.splice(p, 3);
+    }
+    return c;
+  }
+
+  const isGrid = name === 'cave' || name === 'hell' || name === 'labyrinth';
+  const generateChunk = { forest: forestChunk, snow: snowChunk, rural: ruralChunk, cave: gridChunk, hell: gridChunk, labyrinth: labChunk }[name];
   return {
     name, meta, label: meta.label, generateChunk, spawnChest,
     groundY: name === 'snow' ? snowY : () => 0,
     grid: isGrid ? { CELL, cellType, solidCell, cellOf, lo: cellLo, secretId, liquid: name === 'hell' ? 'lava' : 'water' } : null,
     blocked: isGrid ? gridBlocked : () => false,
     door: { W: DOOR_W, H: DOOR_H, T: WALL_T }, wallH: WALL_H,
+    // the labyrinth only: its current maze, whether a point lies outside the outer wall, and a fresh maze on demand
+    labyrinth: name === 'labyrinth' ? { state: lab, outside: labOutside, regen: () => setLab(lab.gen + 1) } : null,
   };
 }

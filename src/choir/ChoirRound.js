@@ -243,8 +243,10 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
         let surface = info.swimming ? 1.1 : info.environment === 'cave' ? 0.92 : info.environment === 'snow' ? 0.65 : info.environment === 'rural' ? 0.84 : 0.72;
         if (info.environment === 'rural') surface = clutter > 1 ? 0.68 : 1.08;
         if (info.environment === 'forest') surface = clutter > 1 ? 0.62 : 0.84;
+        // Snow, woods and the outskirts carry footsteps farther. The other maps stay as they are.
+        const carry = info.environment === 'snow' || info.environment === 'forest' || info.environment === 'rural' ? 1.7 : 1;
         const volume = info.holdingBreath ? (info.running ? 0.14 : 0.045) : info.running ? 1 : 0.42;
-        noise(info.x, info.z, volume * surface * Math.max(0.5, 1 - clutter / 5), info.running ? 'running' : 'footstep');
+        noise(info.x, info.z, volume * surface * Math.max(0.5, 1 - clutter / 5) * carry, info.running ? 'running' : 'footstep');
         C.footstepIn = info.running ? Math.max(0.25, 0.46 - C.round * 0.012) : 0.72;
       }
     } else C.footstepIn = Math.min(C.footstepIn, 0.18);

@@ -35,7 +35,7 @@ export function createCollective(ctx) {
   const companionShade = new THREE.Color(0x45484a);
   const S = { phase: 'idle', t: 0, center: { x: 0, z: 0 }, warnT: 0, dark: 0, sinceOff: 0, nextLeave: 0, last: null, lastT: 0,
               aggroT: 0, reason: '', captureT: -1, escaped: false, whisper: null, whisperStage: 0, loudPlayed: false, warned: false, syncPhase: 0, field: null, fieldT: 0,
-              formation: 'ring', gapAngle: null, gapClosed: false, gapCommit: 0, burstClock: Math.random() * 1.8, lookAwayT: 7, distanceEcho: null, distanceEchoT: 0, distanceEchoNext: 9, companion: null, currentRound: 0, aimX: 0, aimY: 0, lastFlashlight: null };
+              formation: 'ring', gapAngle: null, gapClosed: false, gapCommit: 0, burstClock: Math.random() * 1.8, lookAwayT: 7, distanceEcho: null, distanceEchoT: 0, distanceEchoNext: 9, companion: null, currentRound: 0, aimX: 0, aimY: 0, lastFlashlight: null, wasMoving: false, wasSurrounded: false };
 
   // ── sound: the player's own footstep loops, carried by up to six of them at a time ──
   const voices = Array.from({ length: 6 }, () => {
@@ -75,7 +75,7 @@ export function createCollective(ctx) {
   function start() {
     clear();
     S.phase = 'gather'; S.t = 0; S.escaped = false; S.captureT = -1; S.reason = '';
-    S.warnT = 0; S.whisperStage = 0; S.loudPlayed = false; S.warned = false; S.gapClosed = false; S.gapCommit = 0; S.gapAngle = null; S.expected = C.count; S.burstClock = Math.random() * 1.8; S.lookAwayT = 5 + Math.random() * 4; S.distanceEchoNext = 7 + Math.random() * 8; S.lastFlashlight = null;
+    S.warnT = 0; S.whisperStage = 0; S.loudPlayed = false; S.warned = false; S.gapClosed = false; S.gapCommit = 0; S.gapAngle = null; S.expected = C.count; S.burstClock = Math.random() * 1.8; S.lookAwayT = 5 + Math.random() * 4; S.distanceEchoNext = 7 + Math.random() * 8; S.lastFlashlight = null; S.wasMoving = false; S.wasSurrounded = false;
   }
   function clear() {
     for (const k of kids) { k.c.root.removeFromParent(); k.afterImage?.removeFromParent(); k.lagImage?.removeFromParent(); }
@@ -405,6 +405,12 @@ export function createCollective(ctx) {
         hooks.say('The opening closes behind you.');
       }
     } else S.gapCommit = 0;
+
+    // Surrounded, light still on: starting to move, or still moving as they close in, gets a warning to stop.
+    const surrounded = ph === 'warning' || ph === 'surround';
+    if (surrounded && info.flashlightOn && info.moving && (!S.wasMoving || !S.wasSurrounded) && ctx.audio.stopMoving) once(ctx.audio.stopMoving, 1.1);
+    S.wasMoving = !!info.moving;
+    S.wasSurrounded = surrounded;
 
     if (ph === 'warning') {
       S.warnT += dt;
