@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>One Night</title>
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: "Courier New", monospace; color: #b9b3a3; }
+  canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; }
+  #hud { position: fixed; top: 14px; left: 16px; font-size: 14px; letter-spacing: 2px; opacity: .55; pointer-events: none; }
+  #stamina { margin-top: 10px; width: 148px; height: 8px; border: 1px solid rgba(185,179,163,.45); background: rgba(0,0,0,.45); }
+  #staminaFill { height: 100%; width: 100%; background: #b9b3a3; transform: scaleX(1); transform-origin: left center; }
+  #stamina.low #staminaFill { background: #a36a55; }
+  [hidden] { display: none !important; }
+  #status, #ammo, #prompt, #toast { position: fixed; pointer-events: none; font-size: 14px; letter-spacing: 2px; }
+  #status { left: 16px; bottom: 14px; opacity: .7; }
+  #status .row, #ammo { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  #status img, #ammo img { width: 24px; height: 24px; image-rendering: pixelated; }
+  #batt { width: 110px; height: 8px; border: 1px solid rgba(185,179,163,.45); background: rgba(0,0,0,.45); }
+  #battFill { height: 100%; background: #b9b3a3; transform-origin: left center; }
+  #batt.low #battFill { background: #a36a55; }
+  #ammo { right: 18px; bottom: 14px; opacity: .7; }
+  #inventoryPanel { position: fixed; z-index: 2; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none; text-shadow: 0 1px 3px #000; }
+  #inventoryMeta, #inventoryHelp { font-size: 10px; letter-spacing: 1.5px; color: #c5bda8; opacity: .82; }
+  #inventoryMeta { padding-left: 18px; background: url("./assets/items/rune_pouch.png") left center / 14px 14px no-repeat; }
+  #inventorySlots { display: flex; gap: 3px; max-width: 92vw; }
+  .inventory-slot { width: 48px; height: 48px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; border: 1px solid rgba(185,179,163,.35); background: rgba(5,7,6,.72); color: #d6d0bf; font: 9px "Courier New", monospace; overflow: hidden; }
+  .inventory-slot.active { border-color: #d5c58f; box-shadow: inset 0 0 8px rgba(213,197,143,.24); }
+  .inventory-slot.selected { outline: 1px solid rgba(255,255,255,.72); outline-offset: -3px; }
+  .inventory-slot.empty { opacity: .38; }
+  .inventory-slot img { width: 20px; height: 20px; object-fit: contain; image-rendering: pixelated; }
+  #prompt { left: 0; right: 0; bottom: 30%; text-align: center; color: #d8d2c0; }
+  #toast { left: 0; right: 0; bottom: 18%; text-align: center; opacity: 0; transition: opacity .6s; }
+  #hp { width: 110px; height: 8px; border: 1px solid rgba(185,179,163,.45); background: rgba(0,0,0,.45); }
+  #hpFill { height: 100%; background: #9c3b34; transform-origin: left center; }
+  #status .lbl { width: 24px; text-align: center; font-size: 12px; }
+  #hurt { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, rgba(120,0,0,0) 35%, rgba(150,0,0,.85) 100%); }
+  #collectiveMark { position: fixed; left: 4px; top: 42%; width: 42px; height: 68px; opacity: 0; pointer-events: none; transform: rotate(-17deg); filter: blur(.35px); transition: opacity 1.2s; }
+  #collectiveMark.on { opacity: .18; }
+  #banner { position: fixed; left: 0; right: 0; top: 26%; text-align: center; pointer-events: none; opacity: 0; transition: opacity .8s; font-size: 14px; letter-spacing: 2px; }
+  #banner .big { font-size: 30px; letter-spacing: 9px; color: #d8d2c0; margin-bottom: 10px; }
+  #tint { position: fixed; inset: 0; pointer-events: none; opacity: 0; }
+  #air { position: fixed; left: 0; right: 0; bottom: 38%; display: flex; justify-content: center; align-items: center; gap: 10px; pointer-events: none; font-size: 12px; letter-spacing: 2px; }
+  #airBar { width: 160px; height: 8px; border: 1px solid rgba(160,200,230,.5); background: rgba(0,0,0,.45); }
+  #airFill { height: 100%; background: #8fc3e6; transform-origin: left center; }
+  #fade, .lid { position: fixed; left: 0; right: 0; background: #000; pointer-events: none; }
+  #fade { top: 0; bottom: 0; opacity: 0; }
+  .lid { height: 0; display: none; box-shadow: 0 0 40px 30px #000; }
+  #lidTop { top: 0; } #lidBot { bottom: 0; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+             background: rgba(0,0,0,.88); text-align: center; cursor: pointer; }
+  #overlay h1 { font-size: 34px; letter-spacing: 10px; font-weight: normal; color: #d8d2c0; margin: 0 0 18px; }
+  #overlay p { margin: 4px 0; font-size: 14px; line-height: 1.6; }
+  #overlay .go { margin-top: 22px; color: #fff; }
+  #reticle { position: fixed; left: 50%; top: 50%; width: 0; height: 0; pointer-events: none; }
+  #reticle span { position: absolute; background: #d8d2c0; opacity: .85; }
+  #reticle span:nth-child(1) { left: -12px; top: -1px; width: 7px; height: 2px; }
+  #reticle span:nth-child(2) { left: 5px; top: -1px; width: 7px; height: 2px; }
+  #reticle span:nth-child(3) { left: -1px; top: -12px; width: 2px; height: 7px; }
+  #reticle span:nth-child(4) { left: -1px; top: 5px; width: 2px; height: 7px; }
+</style>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+</head>
+<body>
+<div id="hud"><span id="clock"></span><div id="stamina" hidden><div id="staminaFill"></div></div></div>
+<div id="status" hidden>
+  <div class="row"><span class="lbl">HP</span><div id="hp"><div id="hpFill"></div></div></div>
+  <div class="row"><img src="./assets/items/battery.png" alt="Battery"><div id="batt"><div id="battFill"></div></div><span id="spare"></span></div>
+  <div class="row"><img src="./assets/items/match.png" alt="Matches"><span id="matches"></span></div>
+  <div class="row"><img src="./assets/items/potion.png" alt="Potions"><span id="potions"></span></div>
+</div>
+<div id="ammo" hidden><img src="./assets/items/bullet.png" alt="Bullets"><span id="ammoText"></span></div>
+<div id="inventoryPanel" hidden aria-label="Inventory"><div id="inventoryMeta"></div><div id="inventorySlots"></div><div id="inventoryHelp">1–9 SELECT / USE &nbsp; X DROP SELECTED</div></div>
+<div id="reticle" hidden><span></span><span></span><span></span><span></span></div>
+<div id="hurt"></div><div id="collectiveMark" aria-hidden="true"><svg viewBox="0 0 40 64" width="100%" height="100%"><path fill="#bdb5a1" d="M11 29V8a3 3 0 0 1 6 0v17V5a3 3 0 0 1 6 0v20V8a3 3 0 0 1 6 0v19l1-12a3 3 0 0 1 6 .5l-2 23c-.8 9-6.5 17-15 20l-7-2-8-15c-2-4 3-7 6-4l3 4z"/></svg></div><div id="banner"></div>
+<div id="prompt"></div><div id="toast"></div>
+<div id="tint"></div><div id="air" hidden><span>AIR</span><div id="airBar"><div id="airFill"></div></div></div>
+<div id="fade"></div><div id="lidTop" class="lid"></div><div id="lidBot" class="lid"></div>
+<div id="overlay">
+  <h1 id="title">ONE NIGHT</h1>
+  <p id="sub">Seven rounds of the dead, then worse things. Survive until dawn.</p>
+  <p>WASD move &middot; Mouse look &middot; Shift run &middot; F flashlight &middot; G radar &middot; Space hold breath</p>
+  <p>E use (chests, doors, climb out) &middot; Click attack / shoot &middot; Right mouse aim &middot; R reload &middot; B swap battery &middot; M match &middot; Q potion &middot; J journal</p>
+  <p>1–9 select/use inventory &middot; X drop selected item &middot; Better packs add slots</p>
+  <p class="go" id="go">Click to begin</p>
+</div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

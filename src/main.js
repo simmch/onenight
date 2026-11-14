@@ -1,0 +1,2862 @@
+import * as THREE from 'three';
+import { createMap, MAP_NAMES, MAP_META, LIQUID, FLOOR, SECRET } from './maps.js';
+import { createObserverRound, OBS_ROUND, bodiesFor } from './observer/ObserverRound.js';
+import { createCollective, COLLECTIVE } from './collective/CollectiveRound.js';
+import { createChoirRound } from './choir/ChoirRound.js';
+import { createJournal } from './lore/journal.js';
+import { createLorePickups } from './lore/pickups.js';
+
+// ───────────────────────── config ─────────────────────────
+const CFG = {
+  seed: Number(new URLSearchParams(location.search).get('seed')) || (Math.random() * 1e9) | 0,
+  chunk: 16,            // metres per chunk
+  radius: 3,            // chunks loaded around the player
+  renderHeight: 300,    // internal vertical resolution (pixelated upscale)
+  eye: 1.7,
+  walk: 2.6, run: 4.8,
+  nightStartHour: 21, nightEndHour: 6,
+  secondsPerHour: 60,   // 9 in-game hours -> 9 real minutes
+  light: { intensity: 45, distance: 40, angle: 0.44, penumbra: 0.5, decay: 1.35 },
+  batterySeconds: 180,  // beam-on time a full battery lasts
+  startMatches: 3,
+  match: { seconds: 12, intensity: 5, distance: 8 },
+  chestChance: 0.25,    // chance a 16 m chunk holds a chest (about one every 30 m)
+  chestReach: 2.2,
+};
+console.log('seed', CFG.seed);
+// One map per match, picked at random. Force one with ?map=forest|rural|cave|snow|hell.
+const MAP_NAME = (() => {
+  const q = new URLSearchParams(location.search).get('map');
+  return MAP_NAMES.includes(q) ? q : MAP_NAMES[(Math.random() * MAP_NAMES.length) | 0];
+})();
+const META = MAP_META[MAP_NAME];
+console.log('map', MAP_NAME);
+
+// ───────────────────────── rng / noise ─────────────────────────
+function hash2(x, z, s = 0) {
+  let h = (Math.imul(x, 374761393) + Math.imul(z, 668265263) + Math.imul(s + CFG.seed, 2147483647)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function mulberry(a) {
+  return () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function noise(x, z, scale, s) {           // smooth value noise, 0..1
+  x /= scale; z /= scale;
+  const xi = Math.floor(x), zi = Math.floor(z);
+  let fx = x - xi, fz = z - zi;
+  fx = fx * fx * (3 - 2 * fx); fz = fz * fz * (3 - 2 * fz);
+  const a = hash2(xi, zi, s), b = hash2(xi + 1, zi, s), c = hash2(xi, zi + 1, s), d = hash2(xi + 1, zi + 1, s);
+  return a + (b - a) * fx + (c - a) * fz + (a - b - c + d) * fx * fz;
+}
+
+// ───────────────────────── renderer / scene ─────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(1);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(META.fog);
+scene.fog = new THREE.FogExp2(META.fog, META.fogDensity);
+// NOTE: no ambient light on purpose (hell has a faint red glow). The flashlight is the only light you can rely on.
+scene.add(new THREE.AmbientLight(META.ambient[0], META.ambient[1]));
+// Dusk: some Observer rounds on the open maps start before full dark. A cool sky light, a dim violet haze, thinner fog.
+const DUSK = { maps: ['forest', 'rural', 'snow'], chance: 0.4, sky: 0x9a8fc8, ground: 0x3a2a20, intensity: 1.8, fog: 0x2e2a40, fogDensity: 0.028 };
+const duskLight = new THREE.HemisphereLight(DUSK.sky, DUSK.ground, 0);
+scene.add(duskLight);
+let isDusk = false;
+function setDusk(on) {
+  isDusk = on;
+  duskLight.intensity = on ? DUSK.intensity : 0;
+  const c = on ? DUSK.fog : META.fog;
+  scene.fog.color.set(c); scene.fog.density = on ? DUSK.fogDensity : META.fogDensity;
+  scene.background.set(c);
+  bolt.sky.set(c);                                             // the rain map repaints the sky from this every frame
+}
+
+const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 120);
+camera.rotation.order = 'YXZ';
+camera.position.set(0, CFG.eye, 0);
+scene.add(camera);
+
+let visionReady = false;
+function resize() {
+  const h = CFG.renderHeight, w = Math.round(h * innerWidth / innerHeight);
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  if (visionReady) {
+    visionRT.setSize(w, h);
+    visionUniforms.uTexel.value.set(1 / w, 1 / h);
+    visionUniforms.uAspect.value = w / h;
+  }
+}
+addEventListener('resize', resize); resize();
+
+// ───────────────────────── flashlight ─────────────────────────
+const L = CFG.light;
+const spot = new THREE.SpotLight(0xfff0cc, 0, L.distance, L.angle, L.penumbra, L.decay);
+spot.position.set(0.22, -0.18, 0);
+spot.target.position.set(0, -0.35, -10);
+camera.add(spot, spot.target);
+// Dim wider cone so the fringe around the beam has something soft to show.
+const halo = new THREE.SpotLight(0xfff0cc, 0, 26, 0.62, 1, 1.8);
+halo.position.copy(spot.position);
+halo.target = spot.target;
+camera.add(halo);
+
+const texLoader = new THREE.TextureLoader();
+function pixelTex(url) {
+  const t = texLoader.load(url);
+  t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const held = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.34, 0.34),
+  new THREE.MeshBasicMaterial({ map: pixelTex('./assets/flashlight.png'), color: 0x6a6a6a, alphaTest: 0.5, depthTest: false, fog: false, toneMapped: false })
+);
+held.renderOrder = 999;
+held.layers.set(1);
+const HELD_UP = new THREE.Vector3(0.36, -0.30, -0.62), HELD_DOWN = new THREE.Vector3(0.36, -0.75, -0.62);
+held.position.copy(HELD_DOWN);
+camera.add(held);
+
+const SKIP_INTRO = new URLSearchParams(location.search).has('nointro');
+const flashlight = { battery: 1, equipped: SKIP_INTRO, raise: 0, flickerAge: -1, flickerDur: 0, nextFlicker: 7 + Math.random() * 8 };
+
+// Soft fringe around the beam: the core stays sharp, the ring around it is blurred.
+const visionRT = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: true, samples: 0 });
+visionRT.texture.magFilter = visionRT.texture.minFilter = THREE.NearestFilter;
+visionRT.texture.generateMipmaps = false;
+const visionUniforms = {
+  tDiffuse: { value: visionRT.texture },
+  uTexel: { value: new THREE.Vector2(1, 1) },
+  uAspect: { value: 1 },
+  uCore: { value: 0.18 },
+  uSoft: { value: 0.2 },
+};
+const visionMat = new THREE.ShaderMaterial({
+  uniforms: visionUniforms,
+  depthTest: false,
+  depthWrite: false,
+  toneMapped: false,
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform vec2 uTexel;
+    uniform float uAspect;
+    uniform float uCore;
+    uniform float uSoft;
+    varying vec2 vUv;
+    vec3 tap(vec2 o){ return texture2D(tDiffuse, vUv + o).rgb; }
+    void main(){
+      vec3 sharp = tap(vec2(0.0));
+      vec2 px = uTexel * 6.5;
+      vec3 blur = sharp * 0.18;
+      blur += tap(px * vec2( 1.0, 0.0)) + tap(px * vec2(-1.0, 0.0));
+      blur += tap(px * vec2( 0.0, 1.0)) + tap(px * vec2( 0.0,-1.0));
+      blur += tap(px * vec2( 0.7, 0.7)) + tap(px * vec2(-0.7, 0.7));
+      blur += tap(px * vec2( 0.7,-0.7)) + tap(px * vec2(-0.7,-0.7));
+      blur /= 8.18;
+      float d = length((vUv - vec2(0.5, 0.46)) * vec2(uAspect, 1.0));
+      float fringe = smoothstep(uCore, uCore + uSoft, d);
+      gl_FragColor = vec4(mix(sharp, blur, fringe), 1.0);
+    }`,
+});
+const visionScene = new THREE.Scene();
+const visionQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), visionMat);
+visionQuad.frustumCulled = false;
+visionScene.add(visionQuad);
+const visionCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+visionCam.position.z = 1;
+visionReady = true;
+resize();
+
+// ───────────────────────── ground (and cave ceiling) ─────────────────────────
+const GROUND_TILE = 4;
+const GROUND_SIZE = META.terrain ? 240 : 400, GROUND_SEG = META.terrain ? 120 : 1;
+function speckleTexture(pal, salt, repeat) {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), r = mulberry(CFG.seed ^ salt);
+  for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+    g.fillStyle = pal[(r() * r() * pal.length) | 0]; g.fillRect(x, y, 1, 1);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.NearestFilter;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.repeat.set(repeat, repeat);
+  return t;
+}
+// Bias the surface normal toward the viewer so a beam held at eye height still lights the floor
+// (true grazing-angle Lambert would leave it almost black).
+function surfaceMaterial(tex, color = 0xffffff) {
+  const m = new THREE.MeshLambertMaterial({ map: tex, color });
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <defaultnormal_vertex>',
+      'vec3 transformedNormal = normalize(normalMatrix * objectNormal + vec3(0.0, 0.0, 1.2));');
+  };
+  return m;
+}
+const groundMat = surfaceMaterial(speckleTexture(META.ground, 0x9e37, GROUND_SIZE / GROUND_TILE));
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE, GROUND_SEG, GROUND_SEG), groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.frustumCulled = false;
+scene.add(ground);
+const ceiling = META.ceiling ? new THREE.Mesh(new THREE.PlaneGeometry(400, 400), surfaceMaterial(speckleTexture(META.ground, 0x51c3, 100), 0xc8c8d6)) : null;
+if (ceiling) { ceiling.rotation.x = Math.PI / 2; ceiling.frustumCulled = false; scene.add(ceiling); }
+// The ground follows the player in whole texture tiles. On the mountain it is a height field, re-sampled each time it moves.
+let groundX = NaN, groundZ = NaN;
+function placeGround() {
+  const gx = Math.round(camera.position.x / GROUND_TILE) * GROUND_TILE, gz = Math.round(camera.position.z / GROUND_TILE) * GROUND_TILE;
+  if (gx === groundX && gz === groundZ) return;
+  groundX = gx; groundZ = gz;
+  ground.position.set(gx, 0, gz);
+  if (ceiling) ceiling.position.set(gx, META.ceiling, gz);
+  if (META.terrain) {
+    const pos = ground.geometry.attributes.position;       // plane lies in local XY; local Z is world height
+    for (let i = 0; i < pos.count; i++) pos.setZ(i, MAP.groundY(gx + pos.getX(i), gz - pos.getY(i)));
+    pos.needsUpdate = true;
+  }
+}
+
+// ───────────────────────── billboards (instanced, camera-facing) ─────────────────────────
+const atlas = await (await fetch('./assets/atlas.json')).json();
+const MAP = createMap(MAP_NAME, { seed: CFG.seed, S: CFG.chunk, atlas, hash2, mulberry, noise, chestChance: CFG.chestChance });
+const CAP = 24000;
+const uTime = { value: 0 };
+const atlasTex = pixelTex('./assets/atlas.png');
+const dummy = new THREE.Object3D();
+const billboardTint = new THREE.Color();
+
+// lit = shaded by the flashlight like everything else; unlit = glows on its own (torches, fire)
+function billboardLayer(isLit, cap) {
+  const geo = new THREE.PlaneGeometry(1, 1); geo.translate(0, 0.5, 0);   // pivot at the base
+  const cells = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3); // cellX, cellY, sway
+  cells.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('aCell', cells);
+  const mat = isLit ? new THREE.MeshLambertMaterial({ map: atlasTex, alphaTest: 0.5 }) : new THREE.MeshBasicMaterial({ map: atlasTex, alphaTest: 0.5 });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uGrid = { value: new THREE.Vector2(atlas.cols, atlas.rows) };
+    sh.uniforms.uTime = uTime;
+    const origin = `
+      vec3 bbOrigin = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+      vec3 bbToCam = cameraPosition - bbOrigin; bbToCam.y = 0.0; bbToCam = normalize(bbToCam);`;
+    let v = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+      attribute vec3 aCell; uniform vec2 uGrid; uniform float uTime;`)
+      .replace('#include <uv_vertex>', `#include <uv_vertex>
+      vMapUv = (vec2(aCell.x, uGrid.y - 1.0 - aCell.y) + uv * 0.98 + 0.01) / uGrid;`);
+    if (isLit) v = v.replace('#include <defaultnormal_vertex>', origin + `
+      vec3 transformedNormal = normalize((viewMatrix * vec4(bbToCam, 0.0)).xyz);`);
+    sh.vertexShader = v.replace('#include <project_vertex>', (isLit ? '' : origin) + `
+      vec3 bbRight = vec3(bbToCam.z, 0.0, -bbToCam.x);
+      float bbSx = length(instanceMatrix[0].xyz);
+      float bbSy = length(instanceMatrix[1].xyz);
+      float bbSway = sin(uTime * 1.3 + bbOrigin.x * 0.7 + bbOrigin.z * 0.9) * aCell.z * transformed.y * bbSy;
+      vec3 bbWorld = bbOrigin + bbRight * (transformed.x * bbSx + bbSway) + vec3(0.0, transformed.y * bbSy, 0.0);
+      vec4 mvPosition = viewMatrix * vec4(bbWorld, 1.0);
+      gl_Position = projectionMatrix * mvPosition;`);
+  };
+  const mesh = new THREE.InstancedMesh(geo, mat, cap);
+  mesh.frustumCulled = false; mesh.count = 0;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(mesh);
+  return {
+    mesh, n: 0,
+    add(x, y, z, w, h, cell, sway, tint = 0xffffff) {
+      if (this.n >= cap) return;
+      dummy.position.set(x, y, z); dummy.rotation.set(0, 0, 0); dummy.scale.set(w, h, 1); dummy.updateMatrix();
+      mesh.setMatrixAt(this.n, dummy.matrix);
+      mesh.setColorAt(this.n, billboardTint.set(tint));
+      cells.setXYZ(this.n, cell % atlas.cols, Math.floor(cell / atlas.cols), sway);
+      this.n++;
+    },
+    commit() { mesh.count = this.n; mesh.instanceMatrix.needsUpdate = true; cells.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; },
+  };
+}
+const vegLayer = billboardLayer(true, CAP), glowLayer = billboardLayer(false, 2000);
+const veg = vegLayer.mesh;
+
+// ───────────────────────── walls, floors, roads, water, lava (instanced boxes) ─────────────────────────
+function repeatTex(url) { const t = pixelTex(url); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; }
+function paintTexture(size, salt, draw) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  draw(c.getContext('2d'), mulberry(CFG.seed ^ salt), size);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const PAINT = {
+  asphalt(g, r, n) { const pal = ['#2a2b2f', '#303136', '#25262a', '#37383d', '#2c2d31', '#3d3e44']; for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { g.fillStyle = pal[(r() * r() * pal.length) | 0]; g.fillRect(x, y, 1, 1); } },
+  roof(g, r, n) {
+    g.fillStyle = '#2b2422'; g.fillRect(0, 0, n, n);
+    for (let y = 0; y < n; y += 8) for (let x = ((y / 8) % 2) * 4 - 8; x < n; x += 8) { g.fillStyle = ['#4a3a33', '#54423a', '#41332d', '#5c4a40'][(r() * 4) | 0]; g.fillRect(x + 1, y + 1, 7, 7); }
+  },
+  water(g, r, n) {
+    g.fillStyle = '#0b1e2b'; g.fillRect(0, 0, n, n);
+    for (let i = 0; i < 70; i++) { g.fillStyle = ['#15404f', '#1f546c', '#10303f', '#2f7088'][(r() * 4) | 0]; g.fillRect((r() * n) | 0, (r() * n) | 0, 2 + ((r() * 6) | 0), 1); }
+  },
+  lava(g, r, n) {
+    g.fillStyle = '#c63a08'; g.fillRect(0, 0, n, n);
+    for (let i = 0; i < 80; i++) { g.fillStyle = ['#ff7a12', '#ffb21e', '#e2500c', '#ffd34a', '#f06010'][(r() * 5) | 0]; g.fillRect((r() * n) | 0, (r() * n) | 0, 2 + ((r() * 6) | 0), 2 + ((r() * 4) | 0)); }
+    for (let i = 0; i < 26; i++) { g.fillStyle = ['#3a0d05', '#521407', '#2a0903'][(r() * 3) | 0]; g.fillRect((r() * n) | 0, (r() * n) | 0, 3 + ((r() * 7) | 0), 2 + ((r() * 3) | 0)); }
+  },
+};
+const liquidScroll = { value: new THREE.Vector2() };
+// tile: metres per texture repeat, mapped in world space so any box size tiles cleanly (0 = stretch one copy over each face).
+// bias: tilt flat tops toward the viewer, as the ground does, so the beam lights them.
+function boxMaterial({ map = null, tile = 0, color = 0xffffff, unlit = false, bias = 0, scroll = false, gain = 1 }) {
+  const m = unlit ? new THREE.MeshBasicMaterial({ map, color }) : new THREE.MeshLambertMaterial({ map, color });
+  m.color.multiplyScalar(gain);      // dark textures need lifting to read under the beam
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uTile = { value: tile || 1 };
+    sh.uniforms.uScroll = scroll ? liquidScroll : { value: new THREE.Vector2() };
+    let v = sh.vertexShader;
+    if (map && tile) v = v.replace('#include <common>', '#include <common>\nuniform float uTile; uniform vec2 uScroll;').replace('#include <uv_vertex>', `#include <uv_vertex>
+      { vec4 bwp = modelMatrix * instanceMatrix * vec4(position, 1.0);
+        vec3 bwn = abs(normalize(mat3(instanceMatrix) * normal));
+        vMapUv = (bwn.y > 0.5 ? bwp.xz : (bwn.x > 0.5 ? bwp.zy : bwp.xy)) / uTile + uScroll; }`);
+    if (bias && !unlit) v = v.replace('#include <defaultnormal_vertex>', `#include <defaultnormal_vertex>
+      transformedNormal = normalize(transformedNormal + vec3(0.0, 0.0, ${bias.toFixed(2)}));`);
+    sh.vertexShader = v;
+  };
+  return m;
+}
+const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+const layers = {};
+function addLayer(name, material, cap) {
+  const mesh = new THREE.InstancedMesh(boxGeo, material, cap);
+  mesh.frustumCulled = false; mesh.count = 0;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(mesh);
+  layers[name] = { mesh, cap, n: 0 };
+}
+if (MAP.grid) {
+  const rock = repeatTex(MAP_NAME === 'hell' ? './assets/tex/hellrock.png' : './assets/tex/rock.png');
+  const lift = MAP_NAME === 'hell' ? 1.9 : 2.4;
+  addLayer('wall', boxMaterial({ map: rock, tile: 4, gain: lift }), 1600);
+  addLayer('secret', boxMaterial({ map: rock, tile: 4, color: 0xb9bcd6, gain: lift * 0.85 }), 64);          // a shade off: the only tell
+  addLayer('liquid', MAP_NAME === 'hell'
+    ? boxMaterial({ map: paintTexture(64, 0x1a7a, PAINT.lava), tile: 4, unlit: true, scroll: true })
+    : boxMaterial({ map: paintTexture(64, 0x3a7e, PAINT.water), tile: 4, bias: 0.8, scroll: true, gain: 1.8 }), 1000);
+}
+if (MAP_NAME === 'rural') {
+  addLayer('road', boxMaterial({ map: paintTexture(64, 0xa5fa, PAINT.asphalt), tile: 4, bias: 1.2, gain: 2.2 }), 300);
+  addLayer('paint', boxMaterial({ color: 0xa8964e, bias: 1.2 }), 800);
+  addLayer('hwall', boxMaterial({ map: repeatTex('./assets/tex/brick.png'), tile: 4 }), 2000);
+  addLayer('floor', boxMaterial({ map: repeatTex('./assets/tex/floor.png'), tile: 4, bias: 1.2 }), 300);
+  addLayer('roof', boxMaterial({ map: paintTexture(32, 0x400f, PAINT.roof), tile: 2, bias: 1.2 }), 300);
+  addLayer('window', boxMaterial({ map: pixelTex('./assets/tex/window.png') }), 800);
+  addLayer('door', boxMaterial({ map: pixelTex('./assets/tex/door.png') }), 400);
+  layers.door.mesh.material.color.setScalar(2.4);      // dark wood: lift it so the beam shows a door, not a hole
+  layers.window.mesh.material.color.setScalar(1.6);
+}
+// Torches, lava and fire share a small pool of real lights, handed to whichever sources are nearest.
+// They always exist (at zero) so lighting one never recompiles shaders.
+const poolLights = Array.from({ length: 5 }, () => { const l = new THREE.PointLight(0xff8a3c, 0, 16, 1.5); scene.add(l); return l; });
+const near = { lights: [], vents: [], houses: [], doors: [], secrets: [] };   // refreshed with the chunks
+let glowStatic = 0;
+
+// ───────────────────────── procedural chunks ─────────────────────────
+// A chunk is pure data built by maps.js: billboards, colliders, boxes, lights, doors and so on.
+const chunks = new Map();
+const key = (cx, cz) => cx + ',' + cz;
+const pick = (r, kind) => { const a = atlas.sprites[kind]; return a[(r() * a.length) | 0]; };
+
+// Opened chests, open doors and broken-through cave walls, by id. Map generation itself lives in maps.js.
+const opened = new Set();
+const SPAWN_CHEST = MAP.spawnChest;
+const SECRET_H = META.ceiling || 5.5;
+
+let curCx = NaN, curCz = NaN;
+// Places kept clear of grass and clutter (the Observer round's bodies), [x, z, r, ...], and extra round
+// colliders only the player bumps into (hanging bodies, the Observer itself).
+const clearZones = [], extraCircles = [];
+function inClearZone(x, z) {
+  for (let i = 0; i < clearZones.length; i += 3) if ((x - clearZones[i]) ** 2 + (z - clearZones[i + 1]) ** 2 < clearZones[i + 2] ** 2) return true;
+  return false;
+}
+function setBox(L, x, y, z, sx, sy, sz, rot) {
+  if (!L || L.n >= L.cap) return;
+  dummy.position.set(x, y, z); dummy.scale.set(sx, sy, sz); dummy.rotation.set(0, rot, 0); dummy.updateMatrix();
+  L.mesh.setMatrixAt(L.n++, dummy.matrix);
+}
+function refreshChunks(force) {
+  const cx = Math.floor(camera.position.x / CFG.chunk), cz = Math.floor(camera.position.z / CFG.chunk);
+  if (!force && cx === curCx && cz === curCz) return;
+  curCx = cx; curCz = cz;
+  const R = CFG.radius, wanted = new Set(), D = MAP.door;
+  const chestCell = [atlas.sprites.chest[0], atlas.sprites.chestOpen[0]], ventCells = atlas.sprites.vent || [];
+  vegLayer.n = glowLayer.n = 0;
+  for (const name in layers) layers[name].n = 0;
+  for (const name in near) near[name].length = 0;
+  for (let dx = -R; dx <= R; dx++) for (let dz = -R; dz <= R; dz++) {
+    const k = key(cx + dx, cz + dz); wanted.add(k);
+    let c = chunks.get(k);
+    if (!c) chunks.set(k, c = MAP.generateChunk(cx + dx, cz + dz));
+    const p = c.props, q = c.glow;
+    for (let i = 0; i < p.length; i += 7) { if (p[i + 3] < 3 && inClearZone(p[i], p[i + 1])) continue; vegLayer.add(p[i], p[i + 6], p[i + 1], p[i + 2], p[i + 3], p[i + 4], p[i + 5]); }
+    for (let i = 0; i < q.length; i += 7) glowLayer.add(q[i], q[i + 6], q[i + 1], q[i + 2], q[i + 3], q[i + 4], q[i + 5]);
+    if (c.chest) {
+      const tint = c.chest.tier === 'red' ? 0xd27666 : c.chest.tier === 'blue' ? 0x769dc9 : 0xffffff;
+      vegLayer.add(c.chest.x, MAP.groundY(c.chest.x, c.chest.z) - 0.05, c.chest.z, 0.95, 0.95, chestCell[opened.has(c.chest.id) ? 1 : 0], 0, tint);
+    }
+    for (let i = 0; i < c.vents.length && ventCells.length; i += 4) vegLayer.add(c.vents[i], 0, c.vents[i + 1], 1.0, 0.5, ventCells[(i / 4) % ventCells.length], 0);
+    for (const name in c.boxes) {
+      const L = layers[name], b = c.boxes[name];
+      for (let i = 0; i < b.length; i += 7) setBox(L, b[i], b[i + 1], b[i + 2], b[i + 3], b[i + 4], b[i + 5], b[i + 6]);
+    }
+    for (const d of c.doors) {        // shut: across the gap. open: swung in on its hinge
+      const open = opened.has(d.id), alongX = d.along === 'x', lieX = open ? !alongX : alongX;
+      const x = d.x + (open ? (alongX ? -D.W / 2 : d.inward * D.W / 2) : 0), z = d.z + (open ? (alongX ? d.inward * D.W / 2 : -D.W / 2) : 0);
+      setBox(layers.door, x, D.H / 2, z, lieX ? D.W : 0.08, D.H, lieX ? 0.08 : D.W, 0);
+    }
+    for (const s of c.secrets) if (!opened.has(s.id)) setBox(layers.secret, s.x, SECRET_H / 2, s.z, 4, SECRET_H, 4, 0);
+    if (Math.abs(dx) <= 2 && Math.abs(dz) <= 2) {
+      for (const v of c.lights) near.lights.push(v);
+      for (const v of c.vents) near.vents.push(v);
+      for (const v of c.houses) near.houses.push(v);
+    }
+    if (Math.abs(dx) <= 1 && Math.abs(dz) <= 1) { for (const d of c.doors) near.doors.push(d); for (const s of c.secrets) near.secrets.push(s); }
+  }
+  for (const k of chunks.keys()) if (!wanted.has(k)) chunks.delete(k);   // deterministic, so safe to drop
+  vegLayer.commit(); glowStatic = glowLayer.n; glowLayer.commit();
+  for (const name in layers) { const L = layers[name]; L.mesh.count = L.n; L.mesh.instanceMatrix.needsUpdate = true; }
+}
+
+function pushOutBox(pos, x0, z0, x1, z1, PR) {
+  const nx = Math.max(x0, Math.min(pos.x, x1)), nz = Math.max(z0, Math.min(pos.z, z1));
+  const ex = pos.x - nx, ez = pos.z - nz, d2 = ex * ex + ez * ez;
+  if (d2 >= PR * PR) return;
+  if (d2 > 1e-8) { const d = Math.sqrt(d2), k = (PR - d) / d; pos.x += ex * k; pos.z += ez * k; return; }
+  const l = pos.x - x0, r = x1 - pos.x, t = pos.z - z0, b = z1 - pos.z, m = Math.min(l, r, t, b);   // inside: leave by the nearest face
+  if (m === l) pos.x = x0 - PR; else if (m === r) pos.x = x1 + PR; else if (m === t) pos.z = z0 - PR; else pos.z = z1 + PR;
+}
+function collide(pos, PR = 0.3, creature = false) {
+  const cx = Math.floor(pos.x / CFG.chunk), cz = Math.floor(pos.z / CFG.chunk), D = MAP.door;
+  if (!creature) for (let i = 0; i < extraCircles.length; i += 3) {
+    const ex = pos.x - extraCircles[i], ez = pos.z - extraCircles[i + 1], min = extraCircles[i + 2] + PR, d2 = ex * ex + ez * ez;
+    if (d2 < min * min && d2 > 1e-6) { const d = Math.sqrt(d2), push = (min - d) / d; pos.x += ex * push; pos.z += ez * push; }
+  }
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    const c = chunks.get(key(cx + dx, cz + dz)); if (!c) continue;
+    for (let i = 0; i < c.col.length; i += 3) {
+      const ex = pos.x - c.col[i], ez = pos.z - c.col[i + 1], min = c.col[i + 2] + PR;
+      const d2 = ex * ex + ez * ez;
+      if (d2 < min * min && d2 > 1e-6) { const d = Math.sqrt(d2), push = (min - d) / d; pos.x += ex * push; pos.z += ez * push; }
+    }
+    for (let i = 0; i < c.aabb.length; i += 4) pushOutBox(pos, c.aabb[i], c.aabb[i + 1], c.aabb[i + 2], c.aabb[i + 3], PR);
+    for (const d of c.doors) {
+      if (opened.has(d.id)) continue;
+      if (d.along === 'x') pushOutBox(pos, d.x - D.W / 2, d.z - D.T / 2, d.x + D.W / 2, d.z + D.T / 2, PR);
+      else pushOutBox(pos, d.x - D.T / 2, d.z - D.W / 2, d.x + D.T / 2, d.z + D.W / 2, PR);
+    }
+  }
+  if (MAP.grid) {       // cave walls; while swimming, the banks hold you in too
+    const G = MAP.grid, ci = G.cellOf(pos.x), cj = G.cellOf(pos.z);
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      if (!di && !dj) continue;
+      const i = ci + di, j = cj + dj;
+      if (creature ? !cellWalkable(i, j) : swim.in ? G.cellType(i, j) !== LIQUID : G.solidCell(i, j, opened)) pushOutBox(pos, G.lo(i), G.lo(j), G.lo(i + 1), G.lo(j + 1), PR);
+    }
+  }
+}
+
+// ───────────────────────── what a creature can know about the map ─────────────────────────
+// Chunk data for anywhere, not just the loaded area (generation is deterministic, so this is a cache).
+const farChunks = new Map();
+function chunkData(cx, cz) {
+  const k = key(cx, cz);
+  let c = chunks.get(k) || farChunks.get(k);
+  if (!c) { if (farChunks.size > 300) farChunks.clear(); c = MAP.generateChunk(cx, cz); farChunks.set(k, c); }
+  return c;
+}
+function cellWalkable(i, j) {
+  const G = MAP.grid, t = G.cellType(i, j);
+  return t === FLOOR || (t === SECRET && opened.has(G.secretId(i, j)));
+}
+function forChunksNear(x0, z0, x1, z1, fn) {
+  const S = CFG.chunk;
+  for (let cx = Math.floor(Math.min(x0, x1) / S); cx <= Math.floor(Math.max(x0, x1) / S); cx++)
+    for (let cz = Math.floor(Math.min(z0, z1) / S); cz <= Math.floor(Math.max(z0, z1) / S); cz++) fn(chunkData(cx, cz));
+}
+function segHitsBox(x0, z0, x1, z1, bx0, bz0, bx1, bz1) {     // slab test, segment against an axis-aligned box
+  let t0 = 0, t1 = 1;
+  const dx = x1 - x0, dz = z1 - z0;
+  for (const [p, d, lo, hi] of [[x0, dx, bx0, bx1], [z0, dz, bz0, bz1]]) {
+    if (Math.abs(d) < 1e-9) { if (p < lo || p > hi) return false; continue; }
+    let a = (lo - p) / d, b = (hi - p) / d; if (a > b) [a, b] = [b, a];
+    t0 = Math.max(t0, a); t1 = Math.min(t1, b); if (t0 > t1) return false;
+  }
+  return true;
+}
+const creatureWorld = {
+  kind: MAP_NAME, grid: MAP.grid, groundY: MAP.groundY, ceiling: META.ceiling || 0,
+  cellWalkable, solidCell: (i, j) => MAP.grid.solidCell(i, j, opened),
+  collide: (pos, r) => collide(pos, r, true),
+  losBlocked(x0, z0, x1, z1) {
+    if (MAP.grid) return MAP.blocked(x0, z0, x1, z1, opened);
+    let hit = false;                                         // house walls
+    if (MAP_NAME === 'rural') forChunksNear(x0, z0, x1, z1, (c) => {
+      for (let i = 0; i < c.aabb.length && !hit; i += 4) if (segHitsBox(x0, z0, x1, z1, c.aabb[i], c.aabb[i + 1], c.aabb[i + 2], c.aabb[i + 3])) hit = true;
+    });
+    return hit;
+  },
+  walkable(x, z, r) {
+    if (MAP.grid) {
+      const G = MAP.grid, i = G.cellOf(x), j = G.cellOf(z);
+      if (!cellWalkable(i, j)) return false;
+      const lx = x - G.lo(i), lz = z - G.lo(j);
+      if ((lx < r && !cellWalkable(i - 1, j)) || (lx > G.CELL - r && !cellWalkable(i + 1, j)) || (lz < r && !cellWalkable(i, j - 1)) || (lz > G.CELL - r && !cellWalkable(i, j + 1))) return false;
+    }
+    let ok = true;
+    forChunksNear(x - 1.5, z - 1.5, x + 1.5, z + 1.5, (c) => {
+      for (let i = 0; i < c.col.length && ok; i += 3) if ((x - c.col[i]) ** 2 + (z - c.col[i + 1]) ** 2 < (c.col[i + 2] + r) ** 2) ok = false;
+      for (let i = 0; i < c.aabb.length && ok; i += 4) if (x > c.aabb[i] - r && x < c.aabb[i + 2] + r && z > c.aabb[i + 1] - r && z < c.aabb[i + 3] + r) ok = false;
+    });
+    return ok;
+  },
+  clearLine(x0, z0, x1, z1, r) {
+    const G = MAP.grid, d = Math.hypot(x1 - x0, z1 - z0), n = Math.max(1, Math.ceil(d / 0.5)), px = -(z1 - z0) / (d || 1) * r, pz = (x1 - x0) / (d || 1) * r;
+    for (let k = 0; k <= n; k++) {
+      const x = x0 + (x1 - x0) * k / n, z = z0 + (z1 - z0) * k / n;
+      if (!cellWalkable(G.cellOf(x), G.cellOf(z)) || !cellWalkable(G.cellOf(x + px), G.cellOf(z + pz)) || !cellWalkable(G.cellOf(x - px), G.cellOf(z - pz))) return false;
+    }
+    return true;
+  },
+  // a trunk, wall or rock between the player and (x, z)?
+  cover(x, z, px, pz) {
+    if (creatureWorld.losBlocked(px, pz, x, z)) return true;
+    const L = Math.hypot(x - px, z - pz) || 1, ux = (x - px) / L, uz = (z - pz) / L;
+    let hit = false;
+    forChunksNear(x - 1.6, z - 1.6, x + 1.6, z + 1.6, (c) => {
+      for (let i = 0; i < c.col.length && !hit; i += 3) {
+        if (c.col[i + 2] < 0.25) continue;
+        const cx = c.col[i] - px, cz = c.col[i + 1] - pz, t = cx * ux + cz * uz;
+        if (t > L - 1.6 && t < L && Math.abs(cx * uz - cz * ux) < c.col[i + 2] + 0.35) hit = true;
+      }
+    });
+    return hit;
+  },
+  // how much grass and low clutter stands within r of (x, z)
+  clutter(x, z, r) {
+    let n = 0;
+    forChunksNear(x - r, z - r, x + r, z + r, (c) => {
+      for (let i = 0; i < c.props.length; i += 7) if (c.props[i + 3] < 2.4 && (c.props[i] - x) ** 2 + (c.props[i + 1] - z) ** 2 < r * r) n += c.props[i + 3];
+    });
+    return n;
+  },
+  // standing trees near (x, z): [x, z, height, trunk radius]
+  trees(x, z, radius) {
+    const out = [];
+    forChunksNear(x - radius, z - radius, x + radius, z + radius, (c) => {
+      for (let i = 0; i < c.props.length; i += 7) {
+        const h = c.props[i + 3], tx = c.props[i], tz = c.props[i + 1];
+        if (h < 3.4 || (tx - x) ** 2 + (tz - z) ** 2 > radius * radius) continue;
+        for (let k = 0; k < c.col.length; k += 3) if (c.col[k] === tx && c.col[k + 1] === tz) { out.push([tx, tz, h, c.col[k + 2]]); break; }
+      }
+    });
+    return out;
+  },
+};
+
+// ───────────────────────── input ─────────────────────────
+const keys = {};
+const overlay = document.getElementById('overlay');
+let yaw = 0, pitch = 0, playing = false, finished = false, started = false;
+
+// Title-screen loop. Stops once the night actually begins (not on the pause screen).
+const INTRO_SONG_VOLUME = 0.5;
+const introSong = new Audio(new URL('../music/Midnight Creaks.mp3', import.meta.url));
+introSong.loop = true;
+introSong.volume = INTRO_SONG_VOLUME;
+let introSongFading = false;
+let introSongNeedsGesture = true;
+
+function playIntroSong() {
+  if (started || finished) return;
+  introSongFading = false;
+  introSong.volume = INTRO_SONG_VOLUME;
+  introSong.play().then(() => { introSongNeedsGesture = false; }).catch(() => {});
+}
+function stopIntroSong() {
+  if (introSong.paused || introSongFading) return;
+  introSongFading = true;
+  const from = introSong.volume;
+  const t0 = performance.now();
+  const step = (now) => {
+    if (!introSongFading) return;
+    const t = Math.min(1, (now - t0) / 1400);
+    introSong.volume = from * (1 - t);
+    if (t < 1) requestAnimationFrame(step);
+    else {
+      introSong.pause();
+      introSong.currentTime = 0;
+      introSong.volume = INTRO_SONG_VOLUME;
+      introSongFading = false;
+    }
+  };
+  requestAnimationFrame(step);
+}
+
+// Game audio. Footsteps cut on and off with movement. The outdoor night loop
+// stays up until a different ambience clip is configured to take its place.
+const audioCtx = new AudioContext();
+const footstepGain = audioCtx.createGain();
+footstepGain.gain.value = 0.55;
+footstepGain.connect(audioCtx.destination);
+const AMBIENCE_VOLUME = 0.35;
+const AMBIENCE_MOVING = 0.22;
+const ambienceGain = audioCtx.createGain();
+ambienceGain.gain.value = AMBIENCE_VOLUME;
+// Everything that belongs to the open air (night ambience, rain, thunder, wind) leaves through one bus,
+// so stepping indoors can muffle all of it at once.
+const outdoorFilter = audioCtx.createBiquadFilter();
+outdoorFilter.type = 'lowpass';
+outdoorFilter.frequency.value = 18000;
+const outdoorGain = audioCtx.createGain();
+outdoorFilter.connect(outdoorGain).connect(audioCtx.destination);
+const eerieGain = audioCtx.createGain();
+eerieGain.gain.value = META.eerie;
+eerieGain.connect(outdoorFilter);
+ambienceGain.connect(eerieGain);
+// Recorded weather sits on its own gain. Rain and the mountain go through the outdoor bus,
+// so a house can muffle them. The cave and hell loops are the air of those maps.
+const weatherOutdoor = MAP_NAME === 'rural' || MAP_NAME === 'snow';
+const WEATHER_LEVEL = { rural: 0.36, snow: 0.52, cave: 0.55, hell: 0.5 }[MAP_NAME] || 0;
+const weatherGain = audioCtx.createGain();
+weatherGain.gain.value = 0;
+if (weatherOutdoor) weatherGain.connect(outdoorFilter);
+
+async function loadClip(file, dir = '../sound_effects/') {
+  const url = new URL(dir + encodeURIComponent(file), import.meta.url);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('missing audio: ' + file);
+  return audioCtx.decodeAudioData(await res.arrayBuffer());
+}
+const [walkBuffer, runBuffer, outsideAmbience, switchBuffer, idleBreath, walkBreath, runBreath, candleBuffer, gunshotBuffer, ghostChaseBuffer, ghostShotBuffer, ghostGoneBuffer, reloadBuffer, clockBuffer, dyingBuffer, singBuffer, boneBuffer, radarBuffer] = await Promise.all([
+  loadClip('footsteps_in_grass.mp3'),
+  loadClip('footsteps_running_in_#4-1794535151787.mp3'),
+  loadClip('eerie_night_time_for_#4-1794535463202.mp3'),
+  loadClip('immediate_flashlight_#1-1794541663066.mp3'),
+  loadClip('soft_slow_shaky_brea_#1-1794542525684.mp3'),
+  loadClip('slow_breathing_pace_#2-1794542370652.mp3', '../'),
+  loadClip('heavy_breathing_movi_#2-1794542291155.mp3'),
+  loadClip('lit_candle_#4-1794545652511.mp3'),
+  loadClip('pistol_gunshot_1.mp3'),
+  loadClip('ghost_chasing_player.mp3', '../sound_effects/monsters/ghost/'),
+  loadClip('ghost_getting_shot_1.mp3', '../sound_effects/monsters/ghost/'),
+  loadClip('ghost_disppearing_#1-1794546133326.mp3', '../sound_effects/monsters/ghost/'),
+  loadClip('quick_pistol_reload_#1-1794547613496.mp3'),
+  loadClip('haunting_clock_ticks_#3-1794547878289.mp3'),
+  loadClip('dying_sound_choking__#1-1794548072534.mp3', '../'),
+  loadClip('kids_eerily_singing__#4-1794548776803.mp3'),
+  loadClip('bones_crackle_moveme_#4-1794596756264.mp3'),
+  loadClip('radar_sound_#3-1794597997638.mp3'),
+]);
+// Plain clip player for one-shots and simple loops. Returns a handle for stopClip.
+function playClip(buffer, volume = 1, loop = false) {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createBufferSource(), gain = audioCtx.createGain();
+  src.buffer = buffer; src.loop = loop; gain.gain.value = volume;
+  src.connect(gain).connect(audioCtx.destination);
+  src.start();
+  return { src, gain };
+}
+function stopClip(h, fade = 0) {
+  if (!h) return;
+  const t = audioCtx.currentTime;
+  h.gain.gain.cancelScheduledValues(t);
+  h.gain.gain.setValueAtTime(h.gain.gain.value, t);
+  h.gain.gain.linearRampToValueAtTime(0, t + fade);
+  try { h.src.stop(t + fade + 0.02); } catch (e) { /* already stopped */ }
+}
+// The Collective's whispers: one loud whisper once they are close, a quieter one if the light is still on after 10 seconds, and the last one when they come.
+const [collectiveLoud, collectiveWhisper, collectiveHug] = await Promise.all([
+  'loud_toddler_girl_whisper_#2-1794592825608.mp3',
+  'whisper_toddler_girl_whisper_#1-1794592868288.mp3',
+  'HUGtoddler_girl_whisper_#4-1794593109545.mp3',
+].map((file) => loadClip(file, '../sound_effects/kids/')));
+const kidClips = await Promise.all([
+  'scary_kids_giggling_#1-1794542970900.mp3',
+  'scary_kids_giggling_#2-1794542970900.mp3',
+  'scary_kids_giggling_#3-1794542971366.mp3',
+  'scary_kids_giggling_#4-1794542979890.mp3',
+].map((file) => loadClip(file, '../sound_effects/kids/')));
+const drinkBuffer = await loadClip('drinking_potion,_gul_#3-1794631930380.mp3');
+const ambienceClips = { outside: outsideAmbience };
+// The Woods keeps the night loop and adds this bed for the whole time the player is on the map.
+const woodBuffer = MAP_NAME === 'forest' ? await loadClip('AMBForst-Dark_cursed_forest_a-Elevenlabs.mp3') : null;
+const WOOD_LEVEL = 0.7;
+const woodGain = audioCtx.createGain();
+woodGain.gain.value = 0;
+woodGain.connect(ambienceGain);
+const WEATHER_DIR = '../weather sounds/';
+const weatherFiles = {
+  rural: ['heavy_rain_and_thund_#3-1794584535804.mp3', 'heavy_rain_and_thund_#2-1794584537360.mp3'],
+  snow: ['snow_mountain.mp3'],
+  cave: ['Echoing_drips_and_di_#1-1794586326205.mp3'],
+  hell: ['cavernous_hellscape__#2-1794586923139.mp3'],
+}[MAP_NAME] || [];
+const weatherBuffers = await Promise.all(weatherFiles.map((file) => loadClip(file, WEATHER_DIR)));
+const cryBuffers = MAP_NAME === 'hell' ? await Promise.all([
+  'Distant,_echoing_cri_#1-1794586746832.mp3',
+  'Distant,_echoing_cri_#1-1794586787810.mp3',
+  'Distant,_echoing_cri_#4-1794586760786.mp3',
+].map((file) => loadClip(file))) : [];
+
+const switchGain = audioCtx.createGain();
+switchGain.gain.value = 0.55;
+switchGain.connect(audioCtx.destination);
+let switchSrc = null;
+
+function playSwitchSound() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (switchSrc) {
+    try { switchSrc.stop(); } catch (e) { /* already stopped */ }
+    switchSrc.disconnect();
+    switchSrc = null;
+  }
+  const src = audioCtx.createBufferSource();
+  src.buffer = switchBuffer;
+  src.connect(switchGain);
+  src.start();
+  switchSrc = src;
+  src.onended = () => { if (switchSrc === src) switchSrc = null; };
+}
+
+let stepSource = null;
+let stepMode = null;
+
+function syncFootsteps(mode) {
+  if (mode === stepMode) return;
+  if (stepSource) {
+    stepSource.stop();
+    stepSource.disconnect();
+    stepSource = null;
+  }
+  stepMode = mode;
+  const buffer = mode === 'run' ? runBuffer : mode === 'walk' ? walkBuffer : null;
+  if (!buffer) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.loop = true;
+  src.connect(footstepGain);
+  src.start();
+  stepSource = src;
+}
+
+let ambienceSource = null;
+let ambienceId = null;
+
+function syncAmbience(id) {
+  if (id === ambienceId) return;
+  const buffer = id == null ? null : ambienceClips[id];
+  if (id != null && !buffer) return;
+  if (ambienceSource) {
+    ambienceSource.stop();
+    ambienceSource.disconnect();
+    ambienceSource = null;
+  }
+  ambienceId = id;
+  if (!buffer) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.loop = true;
+  src.connect(ambienceGain);
+  src.start();
+  ambienceSource = src;
+}
+
+let woodSource = null;
+function syncWood(on) {
+  if (!woodBuffer || on === !!woodSource) return;
+  const t = audioCtx.currentTime;
+  woodGain.gain.cancelScheduledValues(t);
+  woodGain.gain.setValueAtTime(woodGain.gain.value, t);
+  if (!on) {
+    woodGain.gain.linearRampToValueAtTime(0, t + 0.5);
+    try { woodSource.stop(t + 0.55); } catch (e) { /* already stopped */ }
+    woodSource = null;
+    return;
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createBufferSource();
+  src.buffer = woodBuffer;
+  src.loop = true;
+  src.connect(woodGain);
+  src.start();
+  woodSource = src;
+  woodGain.gain.linearRampToValueAtTime(WOOD_LEVEL, t + 1.4);
+}
+
+let weatherOn = false;
+const weatherVoices = [];
+function syncWeather(on) {
+  if (!weatherBuffers.length || on === weatherOn) return;
+  weatherOn = on;
+  const t = audioCtx.currentTime;
+  weatherGain.gain.cancelScheduledValues(t);
+  weatherGain.gain.setValueAtTime(weatherGain.gain.value, t);
+  if (!on) {
+    weatherGain.gain.linearRampToValueAtTime(0, t + 0.5);
+    for (const src of weatherVoices) { try { src.stop(t + 0.55); } catch (e) { /* already stopped */ } }
+    weatherVoices.length = 0;
+    return;
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  for (const buffer of weatherBuffers) {
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.connect(weatherGain);
+    src.start();
+    weatherVoices.push(src);
+  }
+  weatherGain.gain.linearRampToValueAtTime(WEATHER_LEVEL, t + (weatherOutdoor ? 1.4 : 0.05));
+}
+
+let ambienceDucked = false;
+function duckAmbience(moving) {
+  if (moving === ambienceDucked) return;
+  ambienceDucked = moving;
+  const t = audioCtx.currentTime;
+  ambienceGain.gain.cancelScheduledValues(t);
+  ambienceGain.gain.setValueAtTime(ambienceGain.gain.value, t);
+  ambienceGain.gain.linearRampToValueAtTime(moving ? AMBIENCE_MOVING : AMBIENCE_VOLUME, t + 0.18);
+}
+
+// Breathing. Idle, walk, and run each loop; movement breaths fade out when that pace stops.
+// Holding breath muffles it and silences footsteps so they don't carry.
+const BREATH = { idle: 0.32, walk: 0.42, run: 0.5 };
+const STEP_VOLUME = 0.55;
+const breathFilter = audioCtx.createBiquadFilter();
+breathFilter.type = 'lowpass';
+breathFilter.frequency.value = 16000;
+breathFilter.connect(audioCtx.destination);
+
+function loopBreath(buffer) {
+  const gain = audioCtx.createGain();
+  gain.gain.value = 0;
+  gain.connect(breathFilter);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.loop = true;
+  src.connect(gain);
+  src.start();
+  return gain;
+}
+const idleGain = loopBreath(idleBreath);
+const walkGain = loopBreath(walkBreath);
+const runGain = loopBreath(runBreath);
+let bodyAudio = '';
+let holdingBreath = false;
+let breathBlocked = false;
+const STAMINA_BASE = 1, STAMINA_PEAK = 3, STAMINA_GROW = 0.25, STAMINA_BAR = 148;
+let staminaMax = STAMINA_BASE;
+let stamina = STAMINA_BASE;
+let needRecover = false;
+let holdTime = 0;
+let zoomFov = 70;
+
+function rampParam(param, value, seconds) {
+  const t = audioCtx.currentTime;
+  param.cancelScheduledValues(t);
+  param.setValueAtTime(param.value, t);
+  param.linearRampToValueAtTime(value, t + seconds);
+}
+function syncBodyAudio(pace, holding) {
+  const id = (pace || 'off') + (holding ? '/hold' : '');
+  if (id === bodyAudio) return;
+  bodyAudio = id;
+  const muff = holding ? 0.6 : 1;
+  rampParam(idleGain.gain, pace === 'idle' ? BREATH.idle * muff : 0, 0.5);
+  rampParam(walkGain.gain, pace === 'walk' ? BREATH.walk * muff : 0, 0.5);
+  rampParam(runGain.gain, pace === 'run' ? BREATH.run * muff : 0, 0.5);
+  rampParam(breathFilter.frequency, holding ? 420 : 16000, 0.2);
+  rampParam(footstepGain.gain, holding ? 0 : STEP_VOLUME, 0.18);
+}
+
+// Distant kids. One giggle every 30–60s, loud or quiet, sometimes off to one side.
+function softImpulse(seconds, decay) {
+  const rate = audioCtx.sampleRate;
+  const len = Math.floor(rate * seconds);
+  const impulse = audioCtx.createBuffer(2, len, rate);
+  for (let c = 0; c < 2; c++) {
+    const data = impulse.getChannelData(c);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+  }
+  return impulse;
+}
+const kidsBus = audioCtx.createGain();
+const kidsDry = audioCtx.createGain();
+kidsDry.gain.value = 0.85;
+kidsBus.connect(kidsDry).connect(audioCtx.destination);
+const kidsDelay = audioCtx.createDelay(1);
+kidsDelay.delayTime.value = 0.23;
+const kidsDelayFilter = audioCtx.createBiquadFilter();
+kidsDelayFilter.type = 'lowpass';
+kidsDelayFilter.frequency.value = 2400;
+const kidsDelayGain = audioCtx.createGain();
+kidsDelayGain.gain.value = 0.3;
+const kidsFeedback = audioCtx.createGain();
+kidsFeedback.gain.value = 0.26;
+kidsBus.connect(kidsDelay).connect(kidsDelayFilter);
+kidsDelayFilter.connect(kidsDelayGain).connect(audioCtx.destination);
+kidsDelayFilter.connect(kidsFeedback).connect(kidsDelay);
+const kidsReverb = audioCtx.createConvolver();
+kidsReverb.buffer = softImpulse(1.5, 3.4);
+const kidsReverbGain = audioCtx.createGain();
+kidsReverbGain.gain.value = 0.42;
+kidsBus.connect(kidsReverb).connect(kidsReverbGain).connect(audioCtx.destination);
+const kids = { next: 30 + Math.random() * 30, last: null };
+
+function playKid() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const index = (Math.random() * kidClips.length) | 0;
+  const src = audioCtx.createBufferSource();
+  src.buffer = kidClips[index];
+  const gain = audioCtx.createGain();
+  const closeness = Math.random();
+  gain.gain.value = 0.08 + closeness * closeness * 0.62;
+  const pan = audioCtx.createStereoPanner();
+  const roll = Math.random();
+  pan.pan.value = roll < 0.33 ? -(0.4 + Math.random() * 0.6) : roll < 0.66 ? 0.4 + Math.random() * 0.6 : (Math.random() * 2 - 1) * 0.18;
+  src.connect(gain).connect(pan).connect(kidsBus);
+  src.start();
+  kids.last = { index, volume: gain.gain.value, pan: pan.pan.value };
+}
+function tickKids(dt, active) {
+  if (!active) return;
+  kids.next -= dt;
+  if (kids.next > 0) return;
+  playKid();
+  kids.next = 30 + Math.random() * 30;
+}
+
+// ───────────────────────── opening cutscene ─────────────────────────
+// Wake on the ground, click the flashlight on, blink, stand, look left and right, then hand over control.
+// Each track is [time, value] keyframes, eased between. Skip with ?nointro in the URL.
+const INTRO = {
+  length: 8.2,
+  clickAt: 1.0,                                                          // flashlight switches on
+  fade:  [[0, 1], [0.6, 1], [3.2, 0]],                                   // black overlay opacity
+  lids:  [[0, 0], [0.7, 0], [1.3, 0.5], [1.7, 0.4], [1.85, 0], [2.05, 0], [2.5, 1],
+          [3.6, 1], [3.72, 0], [3.8, 0], [4.0, 1], [5.6, 1], [5.7, 0], [5.78, 0], [5.95, 1]],  // 0 shut .. 1 open
+  y:     [[0, -1.3], [2.2, -1.3], [3.2, -0.75], [3.5, -0.72], [4.6, 0]], // eye height offset: ground, knees, standing
+  pitch: [[0, -0.55], [2.0, -0.55], [3.2, -0.3], [4.6, 0]],
+  roll:  [[0, 0.3], [2.2, 0.3], [3.3, -0.06], [4.6, 0]],
+  yaw:   [[0, 0], [4.8, 0], [5.6, 0.75], [6.0, 0.75], [7.0, -0.75], [7.4, -0.75], [8.1, 0]],   // left, then right
+};
+function track(keys, t) {
+  if (t <= keys[0][0]) return keys[0][1];
+  for (let i = 1; i < keys.length; i++) {
+    if (t <= keys[i][0]) {
+      const [t0, v0] = keys[i - 1], [t1, v1] = keys[i];
+      const k = (t - t0) / (t1 - t0);
+      return v0 + (v1 - v0) * k * k * (3 - 2 * k);
+    }
+  }
+  return keys[keys.length - 1][1];
+}
+const intro = { active: !SKIP_INTRO, t: 0, clicked: false };
+const cut = { y: 0, pitch: 0, yaw: 0, roll: 0, light: 1 };
+const fadeEl = document.getElementById('fade'), lidTop = document.getElementById('lidTop'), lidBot = document.getElementById('lidBot');
+const hudEl = document.getElementById('hud');
+const staminaEl = document.getElementById('stamina');
+const staminaFill = document.getElementById('staminaFill');
+
+function applyIntro() {
+  const t = intro.t;
+  cut.y = track(INTRO.y, t); cut.pitch = track(INTRO.pitch, t);
+  cut.roll = track(INTRO.roll, t); cut.yaw = track(INTRO.yaw, t);
+  // the bulb catches twice before it holds
+  const c = t - INTRO.clickAt;
+  cut.light = c < 0 ? 0 : (c > 0.10 && c < 0.22) || (c > 0.30 && c < 0.37) ? 0.06 : 1;
+  fadeEl.style.opacity = track(INTRO.fade, t);
+  const shut = (1 - track(INTRO.lids, t)) * 52;
+  lidTop.style.height = lidBot.style.height = shut + 'vh';
+  lidTop.style.display = lidBot.style.display = shut > 0.01 ? 'block' : 'none';
+}
+function updateIntro(dt) {
+  if (!intro.singing) intro.singing = playClip(singBuffer, 0.75);
+  intro.t += dt;
+  if (!intro.clicked && intro.t >= INTRO.clickAt) {
+    intro.clicked = true;
+    flashlight.equipped = true;
+    playSwitchSound();
+  }
+  if (intro.t >= INTRO.length) {
+    intro.active = false; intro.t = INTRO.length;
+    stopClip(intro.singing, 1.2);
+    hudEl.style.visibility = 'visible';
+  }
+  applyIntro();
+}
+if (intro.active) { hudEl.style.visibility = 'hidden'; applyIntro(); }
+
+// ───────────────────────── items: chests, battery, matches, gun ─────────────────────────
+// Chest positions and tiers are deterministic per seed. The first chest before the pistol is found guarantees it.
+const GUN = { mag: 6, reload: 2.0, cooldown: 0.3 };   // reload matches the 2 s reload clip
+const inv = { gun: false, mag: 0, reserve: 0, batteries: 0, matches: CFG.startMatches, potions: 0, health: 100 };
+const ITEM_DEFS = {
+  knife: { name: 'Knife', icon: './assets/items/combat_knife.png', kind: 'weapon', damage: 1, reach: 1.9, cooldown: 0.48, noise: 0.28 },
+  sword: { name: 'Longsword', icon: './assets/items/longsword.png', kind: 'weapon', damage: 2, reach: 2.55, cooldown: 0.78, noise: 0.52 },
+  armor: { name: 'Bone armor', icon: './assets/items/spiked_chestplate.png', kind: 'armor', reduction: 0.2 },
+  stamina_tonic: { name: 'Stamina tonic', icon: './assets/items/potion.png', kind: 'consumable' },
+  stamina_surge: { name: 'Wind charm', icon: './assets/items/wind_icon.png', kind: 'consumable' },
+  swift_boots: { name: 'Swift boots', icon: './assets/items/jetpack.png', kind: 'passive' },
+  stamina_charm: { name: 'Skull ring', icon: './assets/items/skull_ring.png', kind: 'passive' },
+  steady_charm: { name: 'Steady ring', icon: './assets/items/skull_ring.png', kind: 'passive' },
+};
+const bag = { capacity: 6, maxCapacity: 9, items: [], counts: {}, selected: 0, activeWeapon: 'gun', armorId: null, staminaUntil: 0 };
+function inventorySlots() {
+  const slots = [];
+  if (inv.gun) slots.push({ id: 'pistol', label: 'Pistol', icon: './assets/items/pistol.png', kind: 'weapon', active: bag.activeWeapon === 'gun' });
+  if (inv.gun && inv.mag + inv.reserve > 0) slots.push({ id: 'ammo', label: `Ammo ${inv.mag + inv.reserve}`, icon: './assets/items/bullet.png', kind: 'ammo' });
+  if (inv.batteries > 0) slots.push({ id: 'battery', label: `Battery ×${inv.batteries}`, icon: './assets/items/battery.png', kind: 'battery' });
+  if (inv.matches > 0) slots.push({ id: 'matches', label: `Matches ×${inv.matches}`, icon: './assets/items/match.png', kind: 'matches' });
+  if (inv.potions > 0) slots.push({ id: 'potion', label: `Potion ×${inv.potions}`, icon: './assets/items/potion.png', kind: 'potion' });
+  if (radar.acquired) slots.push({ id: 'radar', label: 'Radar', icon: './assets/items/radar.png', kind: 'radar' });
+  for (const id of bag.items) {
+    const item = ITEM_DEFS[id];
+    if (item) slots.push({ id, label: bag.counts[id] > 1 ? `${item.name} ×${bag.counts[id]}` : item.name, icon: item.icon, kind: item.kind, active: bag.activeWeapon === id || bag.armorId === id });
+  }
+  return slots;
+}
+function bagHasRoom(id) {
+  return inventorySlots().some((slot) => slot.id === id) || inventorySlots().length < bag.capacity;
+}
+function addBagItem(id) {
+  if (!ITEM_DEFS[id] || !bagHasRoom(id)) return false;
+  if (bag.items.includes(id)) {
+    if (ITEM_DEFS[id].kind !== 'consumable') return false;
+    bag.counts[id] = (bag.counts[id] || 1) + 1;
+    return true;
+  }
+  bag.items.push(id);
+  bag.counts[id] = 1;
+  if (ITEM_DEFS[id].kind === 'armor' && (!bag.armorId || ITEM_DEFS[id].reduction > ITEM_DEFS[bag.armorId].reduction)) bag.armorId = id;
+  if (ITEM_DEFS[id].kind === 'weapon' && id !== 'gun') bag.activeWeapon = id;
+  return true;
+}
+function consumeBagItem(id) {
+  bag.counts[id] = Math.max(0, (bag.counts[id] || 1) - 1);
+  if (!bag.counts[id]) {
+    delete bag.counts[id];
+    const at = bag.items.indexOf(id);
+    if (at >= 0) bag.items.splice(at, 1);
+  }
+}
+function freeBagSlotsFor(ids) {
+  const occupied = new Set(inventorySlots().map((slot) => slot.id));
+  const needed = new Set(ids.filter((id) => !occupied.has(id)));
+  return Math.max(0, bag.capacity - inventorySlots().length) >= needed.size;
+}
+function bagBonuses() {
+  return {
+    runSpeed: bag.items.includes('swift_boots') ? 1.07 : 1,
+    noiseScale: (bag.items.includes('swift_boots') ? 1.08 : 1) * (bag.items.includes('stamina_charm') ? 0.86 : 1),
+    meleeDamage: bag.items.includes('steady_charm') ? 1.12 : 1,
+  };
+}
+const radar = { acquired: false, equipped: false, beepIn: 0, drawIn: 0, map: document.createElement('canvas') };
+radar.map.width = 192; radar.map.height = 224;
+const radarCtx = radar.map.getContext('2d');
+const radarTexture = new THREE.CanvasTexture(radar.map);
+radarTexture.colorSpace = THREE.SRGBColorSpace;
+const radarMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.38, 0.44),
+  new THREE.MeshBasicMaterial({ map: radarTexture, alphaTest: 0.5, depthTest: false, fog: false, toneMapped: false, side: THREE.DoubleSide }));
+radarMesh.renderOrder = 1000; radarMesh.layers.set(1); radarMesh.visible = false;
+camera.add(radarMesh);
+function useInventorySlot(index) {
+  const slots = inventorySlots(), slot = slots[index];
+  if (!slot) { toast('That inventory slot is empty'); return; }
+  bag.selected = index;
+  if (slot.id === 'pistol') { bag.activeWeapon = 'gun'; radar.equipped = false; gun.aiming = false; toast('Pistol equipped'); }
+  else if (slot.id === 'radar') {
+    if (!isObserverRound() && !isChoirRound()) { toast('The radar only catches signals during Observer or Choir rounds'); return; }
+    if (flashlight.battery <= 0) { toast('Radar battery dead. B to swap in a spare'); return; }
+    radar.equipped = !radar.equipped; gun.aiming = false; playSwitchSound();
+  }
+  else if (slot.kind === 'weapon') { bag.activeWeapon = slot.id; radar.equipped = false; gun.aiming = false; toast(`${ITEM_DEFS[slot.id].name} equipped`); }
+  else if (slot.kind === 'armor') { bag.armorId = slot.id; toast(`${ITEM_DEFS[slot.id].name} equipped`); }
+  else if (slot.kind === 'battery') swapBattery();
+  else if (slot.kind === 'ammo') startReload();
+  else if (slot.kind === 'matches') strikeMatch();
+  else if (slot.kind === 'potion') drinkPotion();
+  else if (slot.id === 'stamina_tonic') {
+    const cap = staminaMax * (bag.items.includes('stamina_charm') ? 1.18 : 1);
+    if (stamina >= cap * 0.95) { toast('Stamina is already full'); return; }
+    stamina = Math.min(cap, stamina + cap * 0.45); consumeBagItem(slot.id); toast('The tonic steadies your legs');
+  }
+  else if (slot.id === 'stamina_surge') {
+    bag.staminaUntil = Math.max(bag.staminaUntil, uTime.value + 14);
+    stamina = staminaMax * (bag.items.includes('stamina_charm') ? 1.18 : 1); needRecover = false;
+    consumeBagItem(slot.id); toast('Wind fills your lungs. Stamina will not drain for 14 seconds');
+  }
+  else if (slot.id === 'stamina_charm') toast('Skull ring active: more stamina, quieter movement');
+  else if (slot.id === 'swift_boots') toast('Swift boots active: faster sprint, louder steps');
+  else if (slot.id === 'steady_charm') toast('Steady ring active: melee hits deal a little more damage');
+}
+function dropInventorySlot() {
+  const slots = inventorySlots(), slot = slots[bag.selected];
+  if (!slot) return;
+  if (slot.id === 'pistol') { toast('Keep the pistol. You may need it.'); return; }
+  if (slot.id === 'radar') { toast('The radar is bound to your pack'); return; }
+  if (slot.id === 'ammo') { inv.mag = 0; inv.reserve = 0; }
+  else if (slot.id === 'battery') inv.batteries = 0;
+  else if (slot.id === 'matches') inv.matches = 0;
+  else if (slot.id === 'potion') inv.potions = 0;
+  else {
+    const at = bag.items.indexOf(slot.id);
+    if (at < 0) return;
+    if (bag.counts[slot.id] > 1) bag.counts[slot.id]--;
+    else { bag.items.splice(at, 1); delete bag.counts[slot.id]; }
+    if (bag.activeWeapon === slot.id) bag.activeWeapon = 'gun';
+    if (bag.armorId === slot.id) bag.armorId = bag.items.find((id) => ITEM_DEFS[id]?.kind === 'armor') || null;
+  }
+  bag.selected = Math.max(0, Math.min(bag.selected, inventorySlots().length - 1));
+  toast(`Dropped ${slot.label}`);
+}
+const lootRng = mulberry(CFG.seed ^ 0x51ed);
+const gun = { raise: 0, recoil: 0, reloadT: -1, loaded: false, cooldown: 0, flash: 0, aiming: false, ads: 0 };
+const match = { t: 0 };
+let handSide = 1;          // flashlight hand: 1 right, -1 left (once the pistol takes the right)
+let nearChest = null;
+held.material.side = THREE.DoubleSide;
+
+function handSprite(url, size, color) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
+    new THREE.MeshBasicMaterial({ map: pixelTex(url), color, alphaTest: 0.5, depthTest: false, fog: false, toneMapped: false, side: THREE.DoubleSide }));
+  m.renderOrder = 999; m.layers.set(1); m.visible = false;
+  camera.add(m);
+  return m;
+}
+const gunMesh = handSprite('./assets/items/pistol.png', 0.36, 0x8a8a8a);
+const knifeMesh = handSprite('./assets/items/combat_knife.png', 0.42, 0xffffff);
+const swordMesh = handSprite('./assets/items/longsword.png', 0.48, 0xffffff);
+const matchMesh = handSprite('./assets/items/match_lit.png', 0.26, 0xffffff);
+// Both lights always exist at zero intensity, so striking or firing never recompiles shaders.
+const matchLight = new THREE.PointLight(0xff9a3c, 0, CFG.match.distance, 1.6);
+const muzzle = new THREE.PointLight(0xffd9a0, 0, 30, 1.4);
+muzzle.position.set(0.3, -0.15, -0.9);
+camera.add(matchLight, muzzle);
+
+// A lit match keeps the candle crackling until the flame goes out. Each shot is the pistol clip.
+const candleGain = audioCtx.createGain();
+candleGain.gain.value = 0.4;
+candleGain.connect(audioCtx.destination);
+const gunshotGain = audioCtx.createGain();
+gunshotGain.gain.value = 0.85;
+gunshotGain.connect(audioCtx.destination);
+let candleSrc = null;
+
+function syncCandle(lit) {
+  if (lit === !!candleSrc) return;
+  if (candleSrc) {
+    try { candleSrc.stop(); } catch (e) { /* already stopped */ }
+    candleSrc.disconnect();
+    candleSrc = null;
+  }
+  if (!lit) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createBufferSource();
+  src.buffer = candleBuffer;
+  src.loop = true;
+  src.connect(candleGain);
+  src.start();
+  candleSrc = src;
+}
+function playGunshot() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createBufferSource();
+  src.buffer = gunshotBuffer;
+  src.connect(gunshotGain);
+  src.start();
+}
+
+// Synthesised effects for the cues that have no clip.
+const sfxGain = audioCtx.createGain();
+sfxGain.gain.value = 0.7;
+sfxGain.connect(audioCtx.destination);
+const noiseBuffer = (() => {
+  const b = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.5, audioCtx.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return b;
+})();
+function noise1(dur, type, f0, f1, vol) {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const t = audioCtx.currentTime, src = audioCtx.createBufferSource(), filt = audioCtx.createBiquadFilter(), g = audioCtx.createGain();
+  src.buffer = noiseBuffer; filt.type = type;
+  filt.frequency.setValueAtTime(f0, t); filt.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  src.connect(filt).connect(g).connect(sfxGain);
+  src.start(t); src.stop(t + dur);
+}
+function thump(f0, f1, dur, vol) {
+  const t = audioCtx.currentTime, o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(sfxGain); o.start(t); o.stop(t + dur);
+}
+const sfx = {
+  shot()   { playGunshot(); },
+  swing()  { thump(240, 75, 0.13, 0.34); },
+  click()  { noise1(0.04, 'highpass', 2600, 2000, 0.35); },
+  strike() { noise1(0.38, 'bandpass', 2200, 4200, 0.3); },
+  chest()  { thump(170, 80, 0.16, 0.5); noise1(0.12, 'lowpass', 900, 300, 0.4); },
+  drink()  { playClip(drinkBuffer, 0.85); },
+};
+
+// HUD
+const $ = (id) => document.getElementById(id);
+const ui = { status: $('status'), battFill: $('battFill'), batt: $('batt'), spare: $('spare'), matches: $('matches'), potions: $('potions'), reticle: $('reticle'),
+             ammo: $('ammo'), ammoText: $('ammoText'), prompt: $('prompt'), toast: $('toast'), inventory: $('inventoryPanel'), inventoryMeta: $('inventoryMeta'), inventorySlots: $('inventorySlots') };
+let toastTimer = 0;
+function toast(text) { ui.toast.textContent = text; ui.toast.style.opacity = 1; toastTimer = 3; }
+function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
+let inventoryHudSignature = '';
+function renderInventoryHud(inControl) {
+  ui.inventory.hidden = !inControl;
+  if (!inControl) return;
+  const slots = inventorySlots();
+  bag.selected = Math.max(0, Math.min(bag.selected, Math.max(0, bag.capacity - 1)));
+  const weapon = bag.activeWeapon === 'gun' ? 'Pistol' : ITEM_DEFS[bag.activeWeapon]?.name || 'None';
+  const armor = bag.armorId ? ITEM_DEFS[bag.armorId]?.name : 'None';
+  const surge = bag.staminaUntil > uTime.value ? ` · WIND ${Math.ceil(bag.staminaUntil - uTime.value)}s` : '';
+  const signature = `${bag.capacity}|${bag.selected}|${weapon}|${armor}|${slots.map((slot) => `${slot.id}:${slot.label}:${slot.active ? 1 : 0}`).join('|')}`;
+  setText(ui.inventoryMeta, `PACK ${slots.length}/${bag.capacity} · WEP ${weapon} · ARM ${armor}${surge}`);
+  if (signature === inventoryHudSignature) return;
+  inventoryHudSignature = signature;
+  ui.inventorySlots.replaceChildren();
+  for (let i = 0; i < bag.capacity; i++) {
+    const slot = slots[i], cell = document.createElement('div');
+    cell.className = `inventory-slot${slot ? '' : ' empty'}${i === bag.selected ? ' selected' : ''}${slot?.active ? ' active' : ''}`;
+    const keyLabel = document.createElement('b'); keyLabel.textContent = String(i + 1); cell.append(keyLabel);
+    if (slot) {
+      const img = document.createElement('img'); img.src = slot.icon; img.alt = '';
+      const label = document.createElement('span'); label.textContent = slot.label;
+      cell.title = `${i + 1}: ${slot.label}`; cell.append(img, label);
+    } else {
+      const label = document.createElement('span'); label.textContent = 'empty'; cell.append(label);
+    }
+    ui.inventorySlots.append(cell);
+  }
+}
+
+// Battery: the lower it runs, the more often the beam stutters and the dimmer it gets.
+function flickerGap(u) {
+  const k = Math.min(1, flashlight.battery / 0.5);
+  return 0.7 + 7.3 * k + u * (1.2 + 8.8 * k);
+}
+function batteryDim() { return flashlight.battery >= 0.25 ? 1 : 0.3 + 0.7 * (flashlight.battery / 0.25); }
+
+function onFlashlightToggle() {
+  if (!flashlight.equipped) return;
+  match.t = 0;
+  if (flashlight.battery > 0) maybeScare();
+  if (flashlight.battery <= 0) toast(inv.batteries > 0 ? 'Battery dead. B to swap in a spare' : 'Battery dead. M to strike a match');
+}
+function swapBattery() {
+  if (inv.batteries <= 0) { toast('No spare batteries'); return; }
+  if (flashlight.battery > 0.98) { toast('Battery is still full'); return; }
+  inv.batteries--; flashlight.battery = 1;
+  playSwitchSound();
+  toast('Battery replaced');
+}
+function drawRadarMap() {
+  const g = radarCtx, w = radar.map.width, h = radar.map.height;
+  g.clearRect(0, 0, w, h);
+  g.fillStyle = '#201d19'; g.fillRect(0, 0, w, h);
+  g.strokeStyle = '#726d58'; g.lineWidth = 3; g.strokeRect(2, 2, w - 4, h - 4);
+  g.fillStyle = '#26352b'; g.fillRect(12, 25, w - 24, h - 38);
+  g.fillStyle = '#b9b3a3'; g.font = 'bold 13px monospace'; g.textAlign = 'center'; g.fillText(isChoirRound() ? 'CHOIR LISTENER' : 'BODY RADAR', w / 2, 17);
+  const cx = w / 2, cy = 126, radius = 74, range = 32;
+  g.save(); g.beginPath(); g.rect(12, 25, w - 24, h - 38); g.clip();
+  g.strokeStyle = 'rgba(130,190,135,.35)'; g.lineWidth = 1;
+  for (const r of [radius / 3, radius * 2 / 3, radius]) { g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke(); }
+  g.beginPath(); g.moveTo(cx - radius, cy); g.lineTo(cx + radius, cy); g.moveTo(cx, cy - radius); g.lineTo(cx, cy + radius); g.stroke();
+  const px = camera.position.x, pz = camera.position.z, hunt = obsRound.hunting, now = uTime.value;
+  const choirMode = isChoirRound() && choir.active;
+  if (choirMode) {
+    const phase = (choir.t + (choir.round * 7.3) % 24) % 24;
+    const jammed = phase < 4.5;
+    const hive = choir.hive;
+    const hiveDistance = hive ? Math.hypot(hive.x - px, hive.z - pz) : Infinity;
+    const closeSignal = hiveDistance <= 18;
+    g.fillStyle = jammed ? '#e49b69' : closeSignal ? '#9ad7a4' : '#938c78';
+    g.font = 'bold 9px monospace';
+    g.fillText(jammed ? 'FEEDBACK: VOICES' : closeSignal ? 'CORE SIGNAL NEAR' : 'SIGNAL SEEKING', w / 2, 37);
+    if (jammed) {
+      // During feedback the core disappears; the listener locks onto the bodies bound to it.
+      for (const singer of choir.singers) {
+        if (!singer.alive) continue;
+        const dx = singer.x - px, dz = singer.z - pz, d = Math.hypot(dx, dz);
+        const x = cx + THREE.MathUtils.clamp(dx / range, -1, 1) * radius;
+        const y = cy + THREE.MathUtils.clamp(dz / range, -1, 1) * radius;
+        const pulse = 0.5 + 0.5 * Math.sin(now * 7 + singer.phase);
+        g.fillStyle = `rgba(255,188,119,${0.55 + pulse * 0.4})`;
+        g.beginPath(); g.arc(x, y, d > range ? 2.5 : 4 + pulse, 0, Math.PI * 2); g.fill();
+      }
+      for (let i = 0; i < 85; i++) {
+        g.fillStyle = `rgba(216,169,117,${0.08 + Math.random() * 0.2})`;
+        g.fillRect(12 + Math.random() * (w - 24), 42 + Math.random() * (h - 55), 2, 2);
+      }
+      if (Math.random() < 0.5) {
+        g.fillStyle = 'rgba(222,156,110,.14)';
+        g.fillRect(12, 48 + Math.random() * (h - 60), w - 24, 3 + Math.random() * 7);
+      }
+    } else if (closeSignal && hive) {
+      const dx = hive.x - px, dz = hive.z - pz, d = hiveDistance;
+      const x = cx + THREE.MathUtils.clamp(dx / range, -1, 1) * radius;
+      const y = cy + THREE.MathUtils.clamp(dz / range, -1, 1) * radius;
+      const pulse = 0.5 + 0.5 * Math.sin(now * 5);
+      g.fillStyle = choir.exposed ? '#ff655b' : '#d7e98f';
+      g.beginPath(); g.arc(x, y, 4 + pulse * 2, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = `rgba(215,233,143,${0.7 * (1 - pulse)})`; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(x, y, 7 + pulse * 8, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = '#d7e98f'; g.font = '8px monospace'; g.fillText(`${Math.round(d)}m`, x, y - 9);
+    } else {
+      // At range the instrument only gives a hunting sweep, so it guides without giving away the nest.
+      const sweep = now * 1.3;
+      g.strokeStyle = 'rgba(198,191,154,.26)'; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, radius, sweep - 0.34, sweep + 0.34); g.closePath(); g.stroke();
+      g.fillStyle = 'rgba(201,194,160,.5)'; g.font = '8px monospace'; g.fillText('NO FIX', cx, cy - radius - 5);
+    }
+  } else if (hunt) {                                    // while it hunts the radar is unreliable: static, tearing, dropouts
+    for (let i = 0; i < 170; i++) { g.fillStyle = `rgba(${150 + Math.random() * 100 | 0},${190 + Math.random() * 60 | 0},150,${0.15 + Math.random() * 0.45})`; g.fillRect(12 + Math.random() * (w - 24), 25 + Math.random() * (h - 38), 2, 2); }
+    if (Math.random() < 0.35) { g.fillStyle = 'rgba(190,230,190,.18)'; g.fillRect(12, 25 + Math.random() * (h - 50), w - 24, 3 + Math.random() * 8); }
+  }
+  if (!choirMode) for (const m of obsRound.radarMarks()) {
+    if (m.kind === 'false' && Math.random() < 0.45) continue;       // the hunter shows as a body, flickering in and out
+    if (hunt && m.kind !== 'false' && Math.random() < 0.3) continue;
+    const jit = hunt ? 6 : 0;
+    const dx = m.x - px + (Math.random() - 0.5) * jit, dz = m.z - pz + (Math.random() - 0.5) * jit, d = Math.hypot(dx, dz);
+    const x = cx + THREE.MathUtils.clamp(dx / range, -1, 1) * radius;
+    const y = cy + THREE.MathUtils.clamp(dz / range, -1, 1) * radius;
+    if (m.kind === 'decoy') {                            // a faint blip, there and gone
+      g.fillStyle = `rgba(255,101,91,${0.25 + Math.random() * 0.3})`;
+      g.beginPath(); g.arc(x, y, 3, 0, Math.PI * 2); g.fill();
+      continue;
+    }
+    if (m.kind === 'burning') { g.fillStyle = '#f3a64a'; g.beginPath(); g.arc(x, y, d > range ? 3 : 5, 0, Math.PI * 2); g.fill(); continue; }
+    const pulse = 0.5 + 0.5 * Math.sin(now * 5 + m.x);  // real bodies (and whatever passes for one) pulse strongly
+    g.fillStyle = '#ff655b';
+    g.beginPath(); g.arc(x, y, (d > range ? 3 : 5) + pulse * 1.5, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = `rgba(255,120,100,${0.6 * (1 - pulse)})`; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(x, y, 6 + pulse * 7, 0, Math.PI * 2); g.stroke();
+  }
+  g.translate(cx, cy); g.rotate(-yaw);
+  g.fillStyle = '#e5e1cc'; g.beginPath(); g.moveTo(0, -8); g.lineTo(-5, 6); g.lineTo(0, 3); g.lineTo(5, 6); g.closePath(); g.fill();
+  g.restore();
+  g.fillStyle = '#a9bf9f'; g.font = '10px monospace'; g.fillText('32 m', w / 2, h - 8);
+  radarTexture.needsUpdate = true;
+}
+function strikeMatch() {
+  if (match.t > 0) return;
+  if (inv.matches <= 0) { toast('No matches'); return; }
+  inv.matches--; match.t = CFG.match.seconds;
+  if (isChoirRound()) choir.noise(camera.position.x, camera.position.z, 0.58, 'match strike');
+  if (flashlight.equipped && isCollectiveRound() && collective.encounter) toast('Match lit. Your flashlight is off.');
+  flashlight.equipped = false;
+  sfx.strike();
+  maybeScare();
+}
+function drinkPotion() {
+  if (inv.potions <= 0) { toast('No potions'); return; }
+  if (inv.health >= 100) { toast("You're not hurt"); return; }
+  inv.potions--; inv.health = Math.min(100, inv.health + 50);
+  sfx.drink(); toast('Drank a potion');
+}
+function startReload() {
+  if (!inv.gun || radar.equipped || bag.activeWeapon !== 'gun' || gun.reloadT >= 0 || inv.mag >= GUN.mag) return;
+  if (inv.reserve <= 0) { toast('No spare bullets'); return; }
+  gun.reloadT = 0; gun.loaded = false;
+  playClip(reloadBuffer, 0.8);
+  if (isChoirRound()) choir.noise(camera.position.x, camera.position.z, 0.46, 'reload');
+}
+function shoot() {
+  if (radar.equipped || swim.in) return;
+  if (bag.activeWeapon !== 'gun') { meleeAttack(); return; }
+  if (!inv.gun || gun.reloadT >= 0 || gun.cooldown > 0 || gun.raise < 0.9) return;
+  gun.cooldown = GUN.cooldown;
+  if (inv.mag <= 0) {
+    sfx.click();
+    if (isChoirRound()) choir.noise(camera.position.x, camera.position.z, 0.28, 'empty click');
+    if (inv.reserve > 0) startReload(); else toast('Out of bullets');
+    return;
+  }
+  inv.mag--; gun.recoil = 1; gun.flash = 0.07;
+  pitch = Math.min(1.45, pitch + 0.025);
+  sfx.shot();
+  ghostHit();
+  if (obsRound.active) { camera.getWorldDirection(aim); obsRound.shot(camera.position, aim); }
+  if (collective.active) { camera.getWorldDirection(aim); collective.shot(camera.position, aim); }
+  if (choir.active) { camera.getWorldDirection(aim); choir.shot(camera.position, aim); }
+}
+function meleeAttack() {
+  const item = ITEM_DEFS[bag.activeWeapon], bonuses = bagBonuses();
+  if (!item || item.kind !== 'weapon' || gun.cooldown > 0 || swim.in) return;
+  gun.cooldown = item.cooldown;
+  camera.getWorldDirection(aim);
+  sfx.swing();
+  const damage = Math.max(1, Math.round(item.damage * bonuses.meleeDamage));
+  ghostHit(item.reach, 0.9, damage);
+  if (choir.active) choir.shot(camera.position, aim, { range: item.reach, melee: true, damage, noiseVolume: item.noise });
+  if (collective.active) collective.shot(camera.position, aim);
+}
+const openedChests = [];
+const chestLootRolls = new Map();
+const CHEST_LOOT = {
+  common: [['ammo', 22], ['battery', 20], ['matches', 18], ['potion', 10], ['stamina_tonic', 7], ['knife', 5], ['swift_boots', 4], ['stamina_charm', 3], ['steady_charm', 3], ['armor', 2], ['sword', 0.8], ['stamina_surge', 0.6]],
+  blue: [['pack_blue', 14], ['stamina_surge', 9], ['armor', 14], ['sword', 8], ['knife', 8], ['stamina_tonic', 12], ['swift_boots', 9], ['stamina_charm', 8], ['steady_charm', 6], ['battery', 5], ['ammo', 4], ['potion', 3], ['matches', 3]],
+  red: [['pack_red', 17], ['sword', 16], ['armor', 16], ['stamina_surge', 14], ['stamina_charm', 12], ['steady_charm', 9], ['swift_boots', 6], ['knife', 5], ['stamina_tonic', 5], ['battery', 4], ['ammo', 3], ['potion', 2], ['matches', 1]],
+};
+function canReceiveLoot(id) {
+  if (id === 'pack_blue' || id === 'pack_red') return bag.capacity < bag.maxCapacity;
+  if (id === 'pistol') return !inv.gun && freeBagSlotsFor(['pistol', 'ammo']);
+  if (id === 'radar') return !radar.acquired && bagHasRoom('radar');
+  if (id === 'ammo') return inv.gun && bagHasRoom('ammo');
+  if (id === 'battery') return bagHasRoom('battery');
+  if (id === 'matches') return bagHasRoom('matches');
+  if (id === 'potion') return bagHasRoom('potion');
+  if (ITEM_DEFS[id]) return (ITEM_DEFS[id].kind === 'consumable' || !bag.items.includes(id)) && bagHasRoom(id);
+  return false;
+}
+function rollChestLoot(tier) {
+  const entries = (CHEST_LOOT[tier] || CHEST_LOOT.common).filter(([id]) => canReceiveLoot(id)).map(([id, weight]) => {
+    if (id === 'ammo' && inv.mag + inv.reserve >= 30) weight *= 0.3;
+    if (id === 'battery' && inv.batteries >= 3) weight *= 0.35;
+    if (id === 'potion' && inv.potions >= 2) weight *= 0.35;
+    return [id, weight];
+  });
+  const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+  if (!total) return null;
+  let pick = lootRng() * total;
+  for (const [id, weight] of entries) { pick -= weight; if (pick <= 0) return id; }
+  return entries[entries.length - 1][0];
+}
+function grantChestLoot(id) {
+  if (id === 'pack_blue' || id === 'pack_red') {
+    const add = id === 'pack_blue' ? 2 : 3, before = bag.capacity;
+    bag.capacity = Math.min(bag.maxCapacity, bag.capacity + add);
+    if (bag.capacity === before) return false;
+    toast(`${id === 'pack_blue' ? 'Blue' : 'Red'} field pack: inventory expanded to ${bag.capacity} slots`); return true;
+  }
+  if (id === 'pistol') {
+    if (!canReceiveLoot(id)) return false;
+    inv.gun = true; inv.mag = GUN.mag; inv.reserve = GUN.mag; bag.activeWeapon = 'gun';
+    toast(`Found a pistol: ${GUN.mag} loaded, ${GUN.mag} spare. Click to shoot, right mouse to aim, R to reload`); return true;
+  }
+  if (id === 'radar') {
+    if (!canReceiveLoot(id)) return false;
+    radar.acquired = true; radar.equipped = true; bag.activeWeapon = 'gun'; gun.aiming = false;
+    playSwitchSound(); toast(isChoirRound() ? 'Found a Choir listener. G or its inventory slot swaps it with your weapon' : 'Found a body radar. G or its inventory slot swaps it with your weapon'); return true;
+  }
+  if (id === 'ammo') { if (!canReceiveLoot(id)) return false; const n = 4 + ((lootRng() * 5) | 0); inv.reserve += n; toast(`Found ${n} bullets`); return true; }
+  if (id === 'battery') { if (!canReceiveLoot(id)) return false; inv.batteries++; toast('Found a battery. B to swap it in'); return true; }
+  if (id === 'matches') { if (!canReceiveLoot(id)) return false; inv.matches += 2 + ((lootRng() * 3) | 0); toast(`Found matches (${inv.matches} total)`); return true; }
+  if (id === 'potion') { if (!canReceiveLoot(id)) return false; inv.potions++; toast('Found a potion. Q or its inventory slot to drink'); return true; }
+  if (!canReceiveLoot(id) || !addBagItem(id)) return false;
+  if (id === 'stamina_tonic') toast('Found a stamina tonic. Select its slot to restore stamina');
+  else if (id === 'stamina_surge') toast('Found a wind charm. It grants 14 seconds of unlimited stamina');
+  else if (id === 'swift_boots') toast('Found swift boots: sprint faster, but make more noise');
+  else if (id === 'stamina_charm') toast('Found a skull ring: stamina capacity rises and movement grows quieter');
+  else if (id === 'steady_charm') toast('Found a steady ring: melee weapons hit a little harder');
+  else if (id === 'armor') toast('Found bone armor. It reduces damage while carried');
+  else toast(`Found a ${ITEM_DEFS[id].name}. Select its inventory slot to equip it`);
+  return true;
+}
+function openChest(c) {
+  if (opened.has(c.id)) return;
+  if (isChoirRound()) choir.noise(camera.position.x, camera.position.z, 0.72, 'chest');
+  if (!c.loot) c.loot = chestLootRolls.get(c.id) || null;
+  if (!c.loot) {
+    if (isCollectiveRound()) c.loot = 'matches';
+    else if (!radar.acquired && (isChoirRound() || (isObserverRound() && (round.t >= 90 || lootRng() < 0.16)))) c.loot = 'radar';
+    else if (!inv.gun) c.loot = 'pistol';
+    else if ((c.tier || 'common') === 'common' && lootRng() < 0.12 && lore.dropAt('world', camera.position.x, camera.position.z)) c.loot = 'lore';
+    if (!c.loot) c.loot = rollChestLoot(c.tier || 'common');
+    if (c.loot) chestLootRolls.set(c.id, c.loot);
+  }
+  let granted = false;
+  if (c.loot === 'lore') { toast('Something is folded in with the rest. Look around you.'); granted = true; }
+  else if (c.loot === 'matches' && isCollectiveRound()) {
+    if (bagHasRoom('matches')) { inv.matches += 2 + ((lootRng() * 3) | 0); toast(`Found matches (${inv.matches} total)`); granted = true; }
+  } else granted = c.loot && grantChestLoot(c.loot);
+  if (!granted) { toast(`Inventory full (${inventorySlots().length}/${bag.capacity}). Select a slot and press X to make room`); return; }
+  opened.add(c.id); openedChests.push(c.id); refreshChunks(true); sfx.chest();
+  chestLootRolls.delete(c.id);
+  if (c.loot === 'radar') radar.beepIn = 0;
+  c.loot = null;
+}
+function actionKey(e) {
+  if (e.repeat || !playing || finished || intro.active) return;
+  if (e.code === 'KeyE') { if (swim.in) useAction(); else if (nearLore) collectLore(nearLore); else if (nearChest) openChest(nearChest); else useAction(); }
+  else if (/^Digit[1-9]$/.test(e.code)) useInventorySlot(Number(e.code.slice(-1)) - 1);
+  else if (e.code === 'KeyX') dropInventorySlot();
+  else if (e.code === 'KeyR') startReload();
+  else if (e.code === 'KeyB') swapBattery();
+  else if (e.code === 'KeyM') strikeMatch();
+  else if (e.code === 'KeyQ') drinkPotion();
+  else if (e.code === 'KeyG' && (isObserverRound() || isChoirRound()) && radar.acquired) {
+    if (!radar.equipped && flashlight.battery <= 0) { toast('The radar battery is dead. B to swap in a spare'); return; }
+    radar.equipped = !radar.equipped;
+    gun.aiming = false;
+    playSwitchSound();
+  }
+}
+document.addEventListener('mousedown', (e) => {
+  if (!playing || finished || intro.active) return;
+  if (e.button === 0) shoot();
+  else if (e.button === 2 && inv.gun && bag.activeWeapon === 'gun' && !radar.equipped) gun.aiming = true;
+});
+document.addEventListener('mouseup', (e) => {
+  if (e.button === 2) gun.aiming = false;
+});
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+function updateItems(dt, bobX, bobY, inControl, raised) {
+  // battery drains only while the beam is actually on
+  if (inControl && (raised || radar.equipped) && flashlight.battery > 0) {
+    flashlight.battery = Math.max(0, flashlight.battery - dt / CFG.batterySeconds);
+    if (flashlight.battery === 0) {
+      if (radar.equipped) { radar.equipped = false; flashlight.equipped = false; toast('Radar battery dead. B to swap in a spare'); }
+      else toast(inv.batteries > 0 ? 'Battery dead. B to swap in a spare' : 'Battery dead. M to strike a match');
+    }
+  }
+  flashlight.nextFlicker = Math.min(flashlight.nextFlicker, flickerGap(1));
+
+  // flashlight moves to the left hand once the pistol takes the right
+  handSide += ((inv.gun ? -1 : 1) - handSide) * Math.min(1, dt * 8);
+  held.position.x = handSide * HELD_UP.x + bobX;
+  held.scale.x = handSide < 0 ? -1 : 1;
+  spot.position.x = halo.position.x = 0.22 * handSide;
+
+  // match: a small, short-lived glow in the flashlight hand
+  if (match.t > 0) {
+    if (inControl) match.t -= dt;
+    if (match.t <= 0) scare.armed = true;      // burned out on its own
+    const burn = Math.min(1, match.t / 1.2) * Math.min(1, (CFG.match.seconds - match.t) / 0.25);
+    const waver = 0.8 + 0.2 * Math.sin(uTime.value * 31) * Math.sin(uTime.value * 12.7);
+    matchLight.intensity = CFG.match.intensity * Math.max(0, burn) * waver;
+    matchLight.position.set(handSide * 0.3, -0.2, -0.45);
+    matchMesh.position.set(handSide * 0.33 + bobX, -0.27 + bobY * 0.6, -0.6);
+    matchMesh.visible = match.t > 0;
+  } else { matchLight.intensity = 0; matchMesh.visible = false; }
+  syncCandle(match.t > 0 && !finished);
+
+  // pistol: raise, recoil, reload dip. Holding aim brings the sights up to the reticle.
+  gunMesh.visible = inv.gun && !radar.equipped && bag.activeWeapon === 'gun';
+  knifeMesh.visible = !radar.equipped && bag.activeWeapon === 'knife';
+  swordMesh.visible = !radar.equipped && bag.activeWeapon === 'sword';
+  knifeMesh.position.set(handSide * 0.34 + bobX, -0.27 + bobY * 0.6, -0.58);
+  swordMesh.position.set(handSide * 0.34 + bobX, -0.27 + bobY * 0.6, -0.58);
+  knifeMesh.rotation.z = -0.32 + Math.sin(uTime.value * 1.7) * 0.012;
+  swordMesh.rotation.z = -0.24 + Math.sin(uTime.value * 1.7) * 0.012;
+  radarMesh.visible = radar.equipped;
+  radarMesh.position.set(0.29 + bobX, -0.34 + bobY * 0.6, -0.62);
+  radarMesh.rotation.z = -0.08 + Math.sin(uTime.value * 1.7) * 0.015;
+  if (radar.equipped && inControl) {
+    radar.beepIn -= dt;
+    if (radar.beepIn <= 0) {
+      if (flashlight.battery > 0 && (obsRound.active || choir.active)) {
+        const src = audioCtx.createBufferSource(), gain = audioCtx.createGain();
+        src.buffer = radarBuffer; gain.gain.value = 0.12;
+        if (obsRound.hunting) { src.playbackRate.value = 0.6 + Math.random() * 0.7; gain.gain.value = 0.08 + Math.random() * 0.1; }   // warped while it hunts
+        src.connect(gain).connect(audioCtx.destination); src.start();
+        if (choir.active) choir.noise(camera.position.x, camera.position.z, 0.08, 'listener ping');
+      }
+      radar.beepIn = 3;
+    }
+    radar.drawIn -= dt;
+    if (radar.drawIn <= 0) { drawRadarMap(); radar.drawIn = 0.12; }
+  }
+  const wantAds = gun.aiming && inv.gun && bag.activeWeapon === 'gun' && !radar.equipped && gun.reloadT < 0 && inControl ? 1 : 0;
+  gun.ads += (wantAds - gun.ads) * Math.min(1, dt * 8);
+  gun.cooldown = Math.max(0, gun.cooldown - dt);
+  if (inv.gun) {
+    gun.raise += (1 - gun.raise) * Math.min(1, dt * 6);
+    gun.recoil = Math.max(0, gun.recoil - dt * 6);
+    let dip = 0;
+    if (gun.reloadT >= 0) {
+      if (inControl) gun.reloadT += dt;
+      const u = gun.reloadT / GUN.reload;
+      dip = Math.max(0, Math.min(1, u / 0.22, (1 - u) / 0.22));
+      if (u > 0.4 && u < 0.6) dip += Math.sin((u - 0.4) / 0.2 * Math.PI) * 0.25;   // magazine goes in
+      if (!gun.loaded && u >= 0.6) {
+        gun.loaded = true;
+        const n = Math.min(GUN.mag - inv.mag, inv.reserve);
+        inv.mag += n; inv.reserve -= n;
+      }
+      if (u >= 1) gun.reloadT = -1;
+    }
+    const a = gun.ads, steady = 1 - a * 0.8;
+    gunMesh.position.set(
+      0.36 + (0.02 - 0.36) * a + bobX * steady,
+      -0.31 + (-0.16 - -0.31) * a - (1 - gun.raise) * 0.5 - dip * 0.22 + gun.recoil * 0.05 + bobY * 0.6 * steady,
+      -0.6 + (-0.48 - -0.6) * a + gun.recoil * 0.07);
+    gunMesh.rotation.z = -0.45 + (-0.06 - -0.45) * a - gun.recoil * 0.5 - dip * 0.9;
+    muzzle.position.set(0.3 + (0.02 - 0.3) * a, -0.15 + (-0.05 - -0.15) * a, -0.9 + (-0.7 - -0.9) * a);
+  }
+  gun.flash = Math.max(0, gun.flash - dt);
+  muzzle.intensity = gun.flash > 0 ? 80 * (gun.flash / 0.07) : 0;
+
+  // nearest unopened chest in reach and roughly in view
+  nearChest = null;
+  if (inControl) {
+    const px = camera.position.x, pz = camera.position.z, fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+    const cx = Math.floor(px / CFG.chunk), cz = Math.floor(pz / CFG.chunk);
+    let best = CFG.chestReach;
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      const c = chunks.get(key(cx + dx, cz + dz))?.chest;
+      if (!c || opened.has(c.id)) continue;
+      const ex = c.x - px, ez = c.z - pz, d = Math.hypot(ex, ez);
+      if (d < best && (ex * fx + ez * fz) / d > 0.4) { best = d; nearChest = c; }
+    }
+  }
+
+  // HUD
+  ui.status.hidden = !inControl;
+  ui.ammo.hidden = !inControl || !inv.gun || radar.equipped || bag.activeWeapon !== 'gun';
+  ui.reticle.hidden = !inControl || radar.equipped || bag.activeWeapon !== 'gun' || gun.ads < 0.35;
+  renderInventoryHud(inControl);
+  nearLore = lore.update(dt, inControl, yaw);
+  const chestPrompt = nearChest ? `[E] Open ${nearChest.tier === 'common' ? 'chest' : `${nearChest.tier} supply chest`}` : '';
+  setText(ui.prompt, swim.in ? (mapAction ? mapAction.label : '') : nearLore ? (nearLore.kind === 'item' ? '[E] Pick it up' : '[E] Pick up the paper') : nearChest ? chestPrompt : mapAction ? mapAction.label : '');
+  ui.battFill.style.transform = `scaleX(${flashlight.battery})`;
+  ui.batt.classList.toggle('low', flashlight.battery < 0.25);
+  setText(ui.spare, '+' + inv.batteries);
+  setText(ui.matches, String(inv.matches));
+  setText(ui.potions, String(inv.potions));
+  setText(ui.ammoText, gun.reloadT >= 0 ? 'reloading' : `${inv.mag} / ${inv.reserve}`);
+  if (toastTimer > 0) { toastTimer -= dt; if (toastTimer <= 0) ui.toast.style.opacity = 0; }
+}
+
+let lightConfirmAt = -1e9;
+addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  actionKey(e);
+  if (e.code === 'Space') e.preventDefault();
+  if (!started && introSong.paused) playIntroSong();
+  if (e.code === 'Space' && playing && !finished && !intro.active && !breathBlocked && stamina > 0.02) holdingBreath = true;
+  if (e.code === 'KeyF' && playing && !e.repeat && !finished && !intro.active) {
+    // The Collective: with a match burning the flashlight is already off. F would switch it ON and put the match out,
+    // so it takes a second press to mean it.
+    if (isCollectiveRound() && !flashlight.equipped && match.t > 0 && collective.encounter && performance.now() - lightConfirmAt > 2000) {
+      lightConfirmAt = performance.now();
+      toast('Your flashlight is already off. The match is fine. Press F again to turn the flashlight ON.');
+      return;
+    }
+    flashlight.equipped = !flashlight.equipped;
+    playSwitchSound();
+    if (isChoirRound()) choir.noise(camera.position.x, camera.position.z, 0.18, 'flashlight click');
+    onFlashlightToggle();
+    if (flashlight.flickerAge >= 0) flashlight.flickerAge = -1;
+  }
+});
+addEventListener('keyup', (e) => {
+  keys[e.code] = false;
+  if (e.code === 'Space') { holdingBreath = false; breathBlocked = false; }
+});
+addEventListener('blur', () => { holdingBreath = false; gun.aiming = false; });
+overlay.addEventListener('click', () => {
+  if (finished) { location.reload(); return; }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  // Autoplay is often blocked until a gesture. That first click starts the
+  // title song and leaves the player on the intro; the next click begins.
+  if (!started && introSong.paused && introSongNeedsGesture) {
+    introSongNeedsGesture = false;
+    playIntroSong();
+    return;
+  }
+  renderer.domElement.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', () => {
+  playing = document.pointerLockElement === renderer.domElement;
+  overlay.style.display = playing || journal.isOpen ? 'none' : 'flex';
+  if (playing) { started = true; stopIntroSong(); }
+  else { holdingBreath = false; gun.aiming = false; syncFootsteps(null); }
+  if (!playing && !finished) document.getElementById('go').textContent = started ? 'Paused. Click to resume' : 'Click to begin';
+});
+document.addEventListener('pointerlockerror', () => { if (!journal.isOpen && !finished) { playing = false; overlay.style.display = 'flex'; } });
+addEventListener('mousemove', (e) => {
+  if (!playing || intro.active) return;
+  const sens = 0.0022 * (1 - gun.ads * 0.4);
+  yaw -= e.movementX * sens;
+  pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * sens));
+});
+
+// ───────────────────────── loop ─────────────────────────
+const clockEl = document.getElementById('clock');
+let elapsed = 0, bob = 0, last = performance.now();
+const move = new THREE.Vector3();
+
+// ───────────────────────── world systems: weather, hazards, doors, map sound ─────────────────────────
+const SWIM = { speed: 1.4, air: 14, drown: 20, climb: 1.1, reach: 1.0 };   // seconds of air, damage per second once it runs out
+const LAVA = { damage: 12, every: 0.4, slow: 0.6 };
+const VENT = { warn: 1.2, erupt: 1.7, reach: 1.25, damage: 14, every: 0.3 };
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const swim = { in: false, air: 1, sink: 0, climb: -1, from: null, to: null, tick: 0, shore: null };
+const burn = { in: false, tick: 0 };
+const worldUi = { air: $('air'), airFill: $('airFill'), tint: $('tint') };
+const idleSway = { k: 0, still: 0, t: 0 };
+const runShake = { k: 0 };
+let playerSpeedNow = 0, huntSilence = false, indoors = false, mapAction = null, deathCause = 'ghost', ventTick = 0, mapSoundOn = false;
+const ventOn = new Set(), extraLights = [];
+
+// ── sound ──
+// Cave, hell and water sounds go straight out; rain, wind and thunder go through the outdoor bus so houses muffle them.
+const mapBus = audioCtx.createGain(); mapBus.gain.value = 0; mapBus.connect(audioCtx.destination);
+const skyBus = audioCtx.createGain(); skyBus.gain.value = 0; skyBus.connect(outdoorFilter);
+const longNoise = (() => {
+  const b = audioCtx.createBuffer(1, audioCtx.sampleRate * 3, audioCtx.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return b;
+})();
+function noiseBed(dest, type, freq, q, vol) {
+  const src = audioCtx.createBufferSource(), filter = audioCtx.createBiquadFilter(), gain = audioCtx.createGain();
+  src.buffer = longNoise; src.loop = true; filter.type = type; filter.frequency.value = freq; filter.Q.value = q; gain.gain.value = vol;
+  src.connect(filter).connect(gain).connect(dest); src.start();
+  return { filter, gain };
+}
+const beds = {};
+if (META.weather === 'rain') beds.roof = noiseBed(mapBus, 'bandpass', 260, 0.9, 0);   // rain on the roof, only heard indoors
+if (!weatherOutdoor && weatherBuffers.length) weatherGain.connect(mapBus);
+const echo = audioCtx.createConvolver(); echo.buffer = softImpulse(2.6, 2.2);
+const echoGain = audioCtx.createGain(); echoGain.gain.value = 0.7; echo.connect(echoGain).connect(mapBus);
+const cry = { next: 8 + Math.random() * 10, last: -1 };
+function playHellCry() {
+  if (!cryBuffers.length) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const index = (Math.random() * cryBuffers.length) | 0;
+  const src = audioCtx.createBufferSource();
+  src.buffer = cryBuffers[index];
+  const gain = audioCtx.createGain();
+  const pan = audioCtx.createStereoPanner();
+  gain.gain.value = 0.42 + Math.random() * 0.18;
+  pan.pan.value = (Math.random() * 2 - 1) * 0.65;
+  src.connect(gain).connect(pan).connect(mapBus);
+  src.start();
+  cry.last = index;
+}
+const ambientTimer = { next: 2 };
+function blip(dest, f0, f1, dur, vol, pan = 0) {
+  const t = audioCtx.currentTime, o = audioCtx.createOscillator(), g = audioCtx.createGain(), p = audioCtx.createStereoPanner();
+  o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur); p.pan.value = pan;
+  o.connect(g).connect(p).connect(dest); o.start(t); o.stop(t + dur);
+}
+function thunder(power, delay) {
+  const room = indoors ? 0.22 : 1;
+  const t = audioCtx.currentTime + delay, dur = 2.6 + power * 2.6;
+  const src = audioCtx.createBufferSource(), f = audioCtx.createBiquadFilter(), g = audioCtx.createGain();
+  src.buffer = longNoise; src.loop = true; f.type = 'lowpass';
+  f.frequency.setValueAtTime(260 + power * 520, t); f.frequency.exponentialRampToValueAtTime(55, t + dur);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(5 * power * room, t + 0.06);
+  g.gain.exponentialRampToValueAtTime(1.6 * power * room, t + 0.5); g.gain.exponentialRampToValueAtTime(2.6 * power * room, t + 0.95);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(f).connect(g).connect(skyBus); src.start(t); src.stop(t + dur + 0.1);
+  if (power > 0.75) {       // a close strike cracks first
+    const c = audioCtx.createBufferSource(), cf = audioCtx.createBiquadFilter(), cg = audioCtx.createGain();
+    c.buffer = longNoise; cf.type = 'highpass'; cf.frequency.value = 1400;
+    cg.gain.setValueAtTime(0.5 * room, t); cg.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    c.connect(cf).connect(cg).connect(skyBus); c.start(t); c.stop(t + 0.2);
+  }
+}
+Object.assign(sfx, {
+  splash() { noise1(0.55, 'lowpass', 2400, 300, 0.9); thump(120, 50, 0.3, 0.5); },
+  climb()  { noise1(0.45, 'lowpass', 1500, 400, 0.5); },
+  door()   { thump(140, 70, 0.12, 0.5); noise1(0.18, 'bandpass', 600, 300, 0.3); },
+  rocks()  { noise1(0.8, 'lowpass', 900, 120, 1.0); thump(90, 40, 0.5, 0.7); },
+  jet(v)   { noise1(VENT.erupt, 'bandpass', 300, 900, v); thump(70, 45, 0.5, v * 0.6); },
+  sizzle() { noise1(0.25, 'highpass', 3000, 5000, 0.3); },
+});
+
+// ── rain, snow, embers: only visible where light falls on them ──
+const WEATHER = {
+  rain:   { count: 2600, box: [34, 16, 34], vel: [-1.6, -19, 0.7], streak: 0.6, sway: 0, color: [0.62, 0.7, 0.85], self: 0 },
+  snow:   { count: 3200, box: [30, 14, 30], vel: [-0.9, -1.5, 0.35], streak: 0.12, sway: 0.35, color: [1, 1, 1], self: 0 },
+  embers: { count: 420, box: [30, 12, 30], vel: [0.25, 1.3, 0.1], streak: 0.08, sway: 0.3, color: [1.0, 0.42, 0.08], self: 0.75 },
+}[META.weather];
+let weather = null;
+if (WEATHER) {
+  const n = WEATHER.count, seeds = new Float32Array(n * 6), ends = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random(), b = Math.random(), c = Math.random();
+    seeds.set([a, b, c, a, b, c], i * 6); ends[i * 2 + 1] = 1;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 6), 3));
+  geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 3));
+  geo.setAttribute('aEnd', new THREE.BufferAttribute(ends, 1));
+  const uniforms = {
+    uCam: { value: new THREE.Vector3() }, uDir: { value: new THREE.Vector3() }, uTime: uTime,
+    uBox: { value: new THREE.Vector3(...WEATHER.box) }, uVel: { value: new THREE.Vector3(...WEATHER.vel) },
+    uStreak: { value: WEATHER.streak }, uSway: { value: WEATHER.sway }, uColor: { value: new THREE.Vector3(...WEATHER.color) },
+    uBeam: { value: 0 }, uFlash: { value: 0 }, uSelf: { value: WEATHER.self }, uMatch: { value: 0 },
+    uRoof: { value: [0, 1, 2, 3].map(() => new THREE.Vector4(0, 0, 0, 0)) }, uRoofY: { value: MAP.wallH + 0.3 },
+  };
+  const mat = new THREE.ShaderMaterial({
+    uniforms, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `
+      attribute vec3 aSeed; attribute float aEnd;
+      uniform vec3 uCam, uDir, uBox, uVel; uniform float uTime, uStreak, uSway, uBeam, uFlash, uSelf, uMatch, uRoofY; uniform vec4 uRoof[4];
+      varying float vB;
+      void main() {
+        vec3 p = aSeed * uBox + uVel * uTime;
+        p.x += sin(uTime * 0.9 + aSeed.y * 40.0) * uSway; p.z += cos(uTime * 0.7 + aSeed.x * 40.0) * uSway;
+        p = mod(p - uCam + uBox * 0.5, uBox) - uBox * 0.5 + uCam;          // an endless box of weather centred on the player
+        float hidden = 0.0;                                                // nothing falls through a roof
+        for (int i = 0; i < 4; i++) { vec4 r = uRoof[i]; if (p.x > r.x && p.x < r.z && p.z > r.y && p.z < r.w && p.y < uRoofY) hidden = 1.0; }
+        vec3 to = p - uCam; float d = length(to);
+        float cone = smoothstep(0.86, 0.95, dot(to / d, uDir));
+        float b = uBeam * cone * clamp(1.0 - d / 20.0, 0.0, 1.0) + uFlash
+                + uSelf * (0.55 + 0.45 * sin(uTime * 7.0 + aSeed.z * 60.0)) + uMatch * clamp(1.0 - d / 4.0, 0.0, 1.0);
+        vB = (1.0 - hidden) * b * clamp(2.0 - d / (uBox.x * 0.25), 0.0, 1.0);
+        gl_Position = projectionMatrix * viewMatrix * vec4(p - normalize(uVel) * uStreak * aEnd, 1.0);
+      }`,
+    fragmentShader: `uniform vec3 uColor; varying float vB; void main() { if (vB < 0.004) discard; gl_FragColor = vec4(uColor * vB, 1.0); }`,
+  });
+  const lines = new THREE.LineSegments(geo, mat);
+  lines.frustumCulled = false;
+  scene.add(lines);
+  weather = { uniforms, dir: new THREE.Vector3() };
+}
+// lightning: the whole sky flashes, silhouetting whatever is out there, and thunder follows
+const flashLight = new THREE.AmbientLight(0xbfd0ff, 0);
+scene.add(flashLight);
+const bolt = { next: 9 + Math.random() * 12, t: -1, power: 0, sky: new THREE.Color(META.fog) };
+
+// ── doors, loose rocks, climbing out ──
+function toggleDoor(d) {
+  if (opened.has(d.id)) opened.delete(d.id); else opened.add(d.id);
+  sfx.door();
+  if (isChoirRound()) choir.noise(camera.position.x, camera.position.z, 0.64, 'door');
+  refreshChunks(true);
+}
+function breakSecret(s) { opened.add(s.id); sfx.rocks(); toast('The rocks give way'); refreshChunks(true); }
+function climbOut() {
+  if (!swim.shore || swim.climb >= 0) return;
+  swim.climb = 0; swim.from = { x: camera.position.x, z: camera.position.z }; swim.to = swim.shore;
+  sfx.climb();
+}
+function useAction() { if (mapAction) mapAction.run(); }
+
+function updateSwim(dt, inControl, G, ci, cj, here, px, pz) {
+  if (!swim.in) {
+    swim.sink += (0 - swim.sink) * Math.min(1, dt * 6);
+    swim.air = Math.min(1, swim.air + dt / 5);
+    if (!inControl || here !== LIQUID) return;
+    const lx = px - G.lo(ci), lz = pz - G.lo(cj), m = 0.35, L = (a, b) => G.cellType(ci + a, cj + b) === LIQUID;    // properly over the edge?
+    if ((lx > m || L(-1, 0)) && (lx < G.CELL - m || L(1, 0)) && (lz > m || L(0, -1)) && (lz < G.CELL - m || L(0, 1))) {
+      swim.in = true; swim.tick = 0; holdingBreath = false;
+      sfx.splash(); toast('You fell in. Swim to the edge and press E to climb out');
+    }
+    return;
+  }
+  if (swim.climb >= 0) {       // hauling yourself onto the bank
+    swim.climb += dt / SWIM.climb;
+    const k = Math.min(1, swim.climb), e = k * k * (3 - 2 * k);
+    camera.position.x = swim.from.x + (swim.to.x - swim.from.x) * e; camera.position.z = swim.from.z + (swim.to.z - swim.from.z) * e;
+    swim.sink = 1 - e;
+    if (k >= 1) { swim.in = false; swim.climb = -1; }
+    return;
+  }
+  swim.sink += (1 - swim.sink) * Math.min(1, dt * 5);
+  if (!inControl) return;
+  swim.air -= dt / SWIM.air;
+  if (swim.air <= 0) { swim.air = 0; swim.tick += dt; if (swim.tick >= 1) { swim.tick = 0; damagePlayer(SWIM.drown, 'drowned'); } }
+  swim.shore = null;
+  let best = SWIM.reach;
+  for (const [di, dj] of DIRS) {
+    if (G.cellType(ci + di, cj + dj) === LIQUID || G.solidCell(ci + di, cj + dj, opened)) continue;
+    const edge = di ? Math.abs(G.lo(di > 0 ? ci + 1 : ci) - px) : Math.abs(G.lo(dj > 0 ? cj + 1 : cj) - pz);
+    if (edge < best) { best = edge; swim.shore = { x: px + di * (edge + 0.8), z: pz + dj * (edge + 0.8) }; }
+  }
+  mapAction = swim.shore ? { label: '[E] Climb out', run: climbOut } : { label: 'Swim to the edge', run() {} };
+}
+function updateLava(dt, inControl, G, ci, cj, here, px, pz) {
+  let inLava = false;
+  if (inControl && here === LIQUID) {
+    const lx = px - G.lo(ci), lz = pz - G.lo(cj), m = 0.2, L = (a, b) => G.cellType(ci + a, cj + b) === LIQUID;
+    inLava = (lx > m || L(-1, 0)) && (lx < G.CELL - m || L(1, 0)) && (lz > m || L(0, -1)) && (lz < G.CELL - m || L(0, 1));
+  }
+  if (!inLava) { burn.in = false; return; }
+  if (!burn.in) { burn.in = true; burn.tick = LAVA.every; toast('The lava burns. Get out'); }
+  burn.tick += dt;
+  while (burn.tick >= LAVA.every) { burn.tick -= LAVA.every; damagePlayer(LAVA.damage, 'burned'); sfx.sizzle(); }
+}
+
+function updateWorld(dt, inControl) {
+  const px = camera.position.x, pz = camera.position.z, t = uTime.value;
+  const live = started && !finished;
+  if (live !== mapSoundOn) { mapSoundOn = live; if (!huntSilence) { rampParam(mapBus.gain, live ? 1 : 0, 1.5); rampParam(skyBus.gain, live ? 1 : 0, 1.5); } }
+
+  // under a roof the storm stays outside: dull, and much quieter than in the open
+  let inside = false;
+  for (let i = 0; i < near.houses.length; i += 4) if (px > near.houses[i] && pz > near.houses[i + 1] && px < near.houses[i + 2] && pz < near.houses[i + 3]) { inside = true; break; }
+  if (inside !== indoors) {
+    indoors = inside;
+    rampParam(outdoorFilter.frequency, indoors ? 320 : 18000, 0.45);
+    if (!huntSilence) rampParam(outdoorGain.gain, indoors ? 0.1 : 1, 0.45);
+    if (beds.roof) rampParam(beds.roof.gain.gain, indoors ? 0.55 : 0, 0.35);
+  }
+
+  mapAction = null;
+  if (inControl) {
+    const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+    let best = 1.9;
+    for (const d of near.doors) {
+      const ex = d.x - px, ez = d.z - pz, dist = Math.hypot(ex, ez);
+      if (dist < best && (dist < 0.7 || (ex * fx + ez * fz) / dist > 0.3)) { best = dist; mapAction = { label: opened.has(d.id) ? '[E] Close door' : '[E] Open door', run: () => toggleDoor(d) }; }
+    }
+    if (!mapAction) for (const s of near.secrets) {
+      if (opened.has(s.id)) continue;
+      const ex = s.x - px, ez = s.z - pz, dist = Math.hypot(ex, ez);
+      if (dist < 3.3 && (ex * fx + ez * fz) / dist > 0.6) mapAction = { label: '[E] Push through the loose rocks', run: () => breakSecret(s) };
+    }
+  }
+  if (MAP.grid) {
+    const G = MAP.grid, ci = G.cellOf(px), cj = G.cellOf(pz), here = G.cellType(ci, cj);
+    if (G.liquid === 'water') updateSwim(dt, inControl, G, ci, cj, here, px, pz); else updateLava(dt, inControl, G, ci, cj, here, px, pz);
+    liquidScroll.value.set(t * 0.012, Math.sin(t * 0.35) * 0.03);
+  }
+  worldUi.air.hidden = !swim.in || !inControl;
+  worldUi.airFill.style.transform = `scaleX(${swim.air})`;
+  worldUi.tint.style.background = burn.in ? 'rgba(200,70,10,0.3)' : 'rgba(8,40,70,0.42)';
+  worldUi.tint.style.opacity = burn.in ? 1 : swim.sink;
+
+  // fire jets: a pilot flame, a warning flare, then the column
+  glowLayer.n = glowStatic;
+  extraLights.length = 0;
+  if (near.vents.length) {
+    const big = atlas.sprites.fire, small = atlas.sprites.smallfire || big;
+    let hit = false;
+    for (let i = 0; i < near.vents.length; i += 4) {
+      const vx = near.vents[i], vz = near.vents[i + 1], period = near.vents[i + 2], ph = (t + near.vents[i + 3]) % period, id = vx * 4096 + vz;
+      const erupt = ph > period - VENT.erupt, warn = !erupt && ph > period - VENT.erupt - VENT.warn;
+      let h = 0.28 + 0.08 * Math.sin(t * 17 + i), w = 0.4;
+      if (erupt) {
+        const a = ph - (period - VENT.erupt), k = Math.min(1, a / 0.15) * Math.min(1, (VENT.erupt - a) / 0.3);
+        h = 0.6 + 4.6 * k * (0.9 + 0.1 * Math.sin(t * 31 + i)); w = 1.5;
+      } else if (warn) { const a = (ph - (period - VENT.erupt - VENT.warn)) / VENT.warn; h = 0.35 + a * 0.9 + 0.15 * Math.sin(t * 40 + i); w = 0.6 + a * 0.4; }
+      const list = erupt ? big : small;
+      glowLayer.add(vx, 0, vz, w, h, list[(Math.floor(t * 12) + i) % list.length], 0.02);
+      if (erupt || warn) extraLights.push(vx, erupt ? 2 : 0.6, vz, erupt ? 2.2 : 0.5, 0);
+      const dist = Math.hypot(vx - px, vz - pz);
+      if (!erupt) ventOn.delete(id);
+      else {
+        if (!ventOn.has(id)) { ventOn.add(id); if (live && dist < 26) sfx.jet(Math.max(0.05, 0.9 * (1 - dist / 26))); }
+        if (inControl && dist < VENT.reach) hit = true;
+      }
+    }
+    if (ventOn.size > 400) ventOn.clear();
+    if (!hit) ventTick = VENT.every * 0.8;
+    else { ventTick += dt; if (ventTick >= VENT.every) { ventTick = 0; damagePlayer(VENT.damage, 'burned'); sfx.sizzle(); } }
+  }
+  const bodyAction = obsRound.world(dt, inControl, px, pz, yaw, t);
+  if (bodyAction && (!mapAction || bodyAction.label.startsWith('[E]'))) mapAction = bodyAction;
+  glowLayer.commit();
+
+  // hand the pooled lights to the nearest torches, lava and jets
+  const picks = [];
+  const consider = (arr) => {
+    for (let i = 0; i < arr.length; i += 5) {
+      const d2 = (arr[i] - px) ** 2 + (arr[i + 2] - pz) ** 2;
+      if (d2 > 900) continue;
+      let at = picks.length;
+      while (at > 0 && picks[at - 1].d2 > d2) at--;
+      if (at < poolLights.length) { picks.splice(at, 0, { d2, arr, i }); if (picks.length > poolLights.length) picks.pop(); }
+    }
+  };
+  consider(near.lights); consider(extraLights);
+  poolLights.forEach((light, n) => {
+    const p = picks[n];
+    if (!p) { light.intensity = 0; return; }
+    const { arr, i } = p, lava = arr[i + 4] === 1;
+    light.position.set(arr[i], arr[i + 1], arr[i + 2]);
+    light.color.setHex(lava ? 0xff3b0c : 0xff8a3c);
+    const flicker = 0.85 + 0.15 * Math.sin(t * 11 + arr[i]) * Math.sin(t * 5.3 + arr[i + 2]);
+    light.intensity = arr[i + 3] * (lava ? 9 : 13) * flicker * Math.min(1, (30 - Math.sqrt(p.d2)) / 10);
+  });
+
+  // hell: a distant cry, one of the three, every so often
+  if (live && inControl && MAP_NAME === 'hell' && !huntSilence) {
+    cry.next -= dt;
+    if (cry.next <= 0) { playHellCry(); cry.next = 18 + Math.random() * 22; }
+  }
+  // gusts on the mountain when there is no recorded wind to carry them
+  if (live) {
+    ambientTimer.next -= dt;
+    if (ambientTimer.next <= 0) {
+      if (beds.wind) {
+        const gust = 0.5 + Math.random() * 1.3, at = audioCtx.currentTime;
+        beds.wind.gain.gain.setTargetAtTime(gust, at, 1.2); beds.wind.filter.frequency.setTargetAtTime(280 + Math.random() * 320, at, 1.5);
+        beds.whistle.gain.gain.setTargetAtTime(gust > 1.3 ? 0.7 : 0.15, at, 1.0); beds.whistle.filter.frequency.setTargetAtTime(800 + Math.random() * 700, at, 1.5);
+        ambientTimer.next = 2 + Math.random() * 4;
+      } else ambientTimer.next = 5;
+    }
+  }
+
+  // lightning
+  let flash = 0;
+  if (META.weather === 'rain') {
+    if (bolt.t < 0) {
+      if (live) bolt.next -= dt;
+      if (bolt.next <= 0) { bolt.t = 0; bolt.power = 0.45 + Math.random() * 0.55; bolt.next = 10 + Math.random() * 22; thunder(bolt.power, (1 - bolt.power) * 3.2 + 0.15); }
+    } else {
+      bolt.t += dt;
+      const a = bolt.t;
+      flash = (a < 0.07 ? 1 : a < 0.13 ? 0.12 : a < 0.2 ? 0.8 : Math.max(0, 1 - (a - 0.2) / 0.3)) * bolt.power;
+      if (a > 0.5) bolt.t = -1;
+    }
+    flashLight.intensity = flash * (indoors ? 0.5 : 2.4);
+    scene.background.copy(bolt.sky).lerp(BOLT_SKY, flash);
+  }
+
+  if (debugAmbient) flashLight.intensity = debugAmbient;
+  if (weather) {
+    const u = weather.uniforms;
+    camera.getWorldDirection(weather.dir);
+    u.uCam.value.copy(camera.position); u.uDir.value.copy(weather.dir);
+    u.uBeam.value = Math.min(1, spot.intensity / L.intensity) * 0.85; u.uFlash.value = flash * 0.5; u.uMatch.value = match.t > 0 ? 0.45 : 0;
+    const H = near.houses, order = [];                     // the four nearest roofs keep the rain out
+    for (let i = 0; i < H.length; i += 4) order.push([((H[i] + H[i + 2]) / 2 - px) ** 2 + ((H[i + 1] + H[i + 3]) / 2 - pz) ** 2, i]);
+    order.sort((p, q) => p[0] - q[0]);
+    for (let n = 0; n < 4; n++) {
+      const r = u.uRoof.value[n];
+      if (n < order.length) { const i = order[n][1]; r.set(H[i] - 0.7, H[i + 1] - 0.7, H[i + 2] + 0.7, H[i + 3] + 0.7); } else r.set(0, 0, 0, 0);
+    }
+  }
+}
+const BOLT_SKY = new THREE.Color(0x2b3344);
+let debugAmbient = 0;      // console only: game.debugLight(1.5) floods the map with light for inspection
+
+// ───────────────────────── rounds + monsters ─────────────────────────
+// Each round: survive ROUND.seconds or kill every monster. Inventory carries over between rounds.
+const ROUND = {
+  count: 7, seconds: 300, rest: 6,
+  // Each round draws its monsters at random: ghosts, Observer, Collective, or Choir.
+  // Force one with ?monster=ghosts|observer|collective|choir.
+  types: ['ghosts', 'observer', 'collective', 'choir'],
+  frenzy: 60,                          // the last N seconds of a round: clock ticks, ghosts turn vicious
+  perRoundMenace: 0.15, frenzyMenace: 0.6,
+  sneak: [0, 0.15, 0.35, 0.5, 0.65],   // per round: chance a creeping ghost attacks unlit instead of just staring (always, in a frenzy)
+};
+// How aggressive the ghosts are right now. lvl 0 = round 1 baseline; it scales creep rate and speed,
+// how close they lurk, chase speed and jump-scare odds.
+const isCollectiveRound = () => round.type === 'collective';
+const isObserverRound = () => round.type === 'observer';
+const isChoirRound = () => round.type === 'choir';
+const roundSeconds = () => isObserverRound() ? OBS_ROUND.seconds : isCollectiveRound() || isChoirRound() ? Infinity : ROUND.seconds;
+let forcedMonster = ROUND.types.includes(new URLSearchParams(location.search).get('monster')) ? new URLSearchParams(location.search).get('monster') : null;
+// The same monster may come twice in a row, and never a third time.
+const monsterStreak = [];
+function pickMonster() {
+  if (forcedMonster) return forcedMonster;
+  const repeat = monsterStreak.length >= 2 && monsterStreak[0] === monsterStreak[1] ? monsterStreak[0] : null;
+  const pool = repeat ? ROUND.types.filter((t) => t !== repeat) : ROUND.types;
+  const type = pool[(Math.random() * pool.length) | 0];
+  monsterStreak.unshift(type);
+  if (monsterStreak.length > 2) monsterStreak.pop();
+  return type;
+}
+// Dark Ghosts: somewhere from 5 up to the round number + 3 (never fewer than 5)
+const ghostCount = (n) => 5 + Math.floor(Math.random() * (Math.max(5, n + 3) - 5 + 1));
+function menace() {
+  const frenzy = round.rest <= 0 && round.n > 0 && round.t >= roundSeconds() - ROUND.frenzy;
+  return { frenzy, lvl: (round.n - 1) * ROUND.perRoundMenace + (frenzy ? ROUND.frenzyMenace : 0), sneak: frenzy ? 1 : ROUND.sneak[round.n - 1] ?? 0.65 };
+}
+let tick = null;
+function syncTick(on) {
+  if (on === !!tick) return;
+  if (tick) { stopClip(tick, 0.3); tick = null; }
+  else tick = playClip(clockBuffer, 0.7, true);
+}
+// Dark Ghost (round 1+): drifts until the flashlight beam lands on it, then hunts and claws up close.
+// Beam off it + held breath sends it far away; a few seconds of no light at all and it loses you.
+const GHOST = {
+  spawnMin: 25, spawnMax: 61,          // metres from the player (61 m = 200 ft)
+  hp: 2, damage: 35, reach: 1.7,
+  wander: 1.6, chase: CFG.run, flee: 6.5,  // m/s (player walks 2.6, runs 4.8): a hunting ghost keeps pace with a sprint
+  beamRange: 26, beamAngle: 0.34, noticeTime: 0.25,
+  breathTime: 1.5, darkTime: 4, fleeDist: 50,
+  size: 2.6, hover: 0.15, eyeGlow: 1.6, bodyBoost: 6,
+  // stalking (before the beam ever finds them)
+  grace: 30,                           // seconds into a round before they close in
+  lurkMin: 11, lurkMax: 19,            // metres they hang back at, mostly behind you
+  lurk: 2.6, dart: 7.5, creep: 2.0,    // m/s: repositioning, quick dashes (never with the beam on them), slow approach
+  creepEvery: [9, 22], creepStop: 3.5, stare: 2.5,
+  // jump scare: relighting after a match burns out
+  scareChance: 0.3, scareCooldown: 40, scareDamage: 25,
+};
+const GHOST_ANIMS = {            // sheet, frames, fps, loop
+  idle:   ['Idle', 6, 7, true],
+  fly:    ['Fly', 4, 8, true],
+  hurt:   ['Hurt', 10, 20, false],
+  attack: ['Attack', 20, 28, false],      // fast swipe: the hit lands ~0.35 s in
+  die:    ['Die', 23, 16, false],
+};
+const ghostTex = {};
+for (const [name, [file]] of Object.entries(GHOST_ANIMS)) ghostTex[name] = pixelTex(`./monsters/DarkGhostPaid/${file}.png`);
+
+const ghosts = [];
+const round = { n: 0, t: 0, rest: 0, announced: false, type: 'ghosts' };
+const MAP_HINT = { rural: 'Houses can be entered. E opens doors', cave: 'Watch your step near the water', hell: 'Keep out of the lava and clear of the vents' };
+const bannerEl = document.getElementById('banner'), hurtEl = document.getElementById('hurt'), hpFill = document.getElementById('hpFill');
+let bannerTimer = 0, hurtFlash = 0;
+function banner(title, sub) {
+  bannerEl.innerHTML = '';
+  const h = document.createElement('div'); h.className = 'big'; h.textContent = title;
+  bannerEl.append(h);
+  if (sub) { const s = document.createElement('div'); s.textContent = sub; bannerEl.append(s); }
+  bannerEl.style.opacity = 1; bannerTimer = 4;
+}
+sfx.hurt = () => { thump(210, 60, 0.28, 0.9); noise1(0.15, 'lowpass', 1400, 300, 0.5); };
+
+// Ghost voices. The chase loop runs while a beam is on one, or it is hunting.
+// A non-lethal hit plays the shot reaction; the killing shot cuts over to the vanish.
+const ghostOut = audioCtx.createGain();
+ghostOut.gain.value = 0.9;
+ghostOut.connect(audioCtx.destination);
+function stopSrc(src) {
+  if (!src) return;
+  try { src.stop(); } catch (e) { /* already stopped */ }
+  try { src.disconnect(); } catch (e) { /* already disconnected */ }
+}
+function ghostPlace(g) {
+  const px = camera.position.x, pz = camera.position.z;
+  const dx = g.x - px, dz = g.z - pz, dist = Math.hypot(dx, dz) || 1e-6;
+  const side = (dx * Math.cos(yaw) + dz * -Math.sin(yaw)) / dist;
+  const vol = 0.55 * Math.pow(Math.max(0, 1 - dist / 48), 1.35);
+  return { vol: Math.max(0.08, vol), pan: Math.max(-1, Math.min(1, side)) };
+}
+function playGhostBuffer(buffer, g, loop) {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.loop = !!loop;
+  const gain = audioCtx.createGain();
+  const panner = audioCtx.createStereoPanner();
+  const place = ghostPlace(g);
+  gain.gain.value = place.vol * (loop ? 1 : 1.3);
+  panner.pan.value = place.pan;
+  src.connect(gain).connect(panner).connect(ghostOut);
+  src.start();
+  return { src, gain, panner };
+}
+function syncGhostChase(g, on) {
+  if (on === !!g.chase) return;
+  if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
+  if (on) g.chase = playGhostBuffer(ghostChaseBuffer, g, true);
+}
+function updateGhostChase(g) {
+  if (!g.chase) return;
+  const place = ghostPlace(g);
+  g.chase.gain.gain.value = place.vol * (g.shot ? 0.35 : 1);
+  g.chase.panner.pan.value = place.pan;
+}
+function playGhostShot(g) {
+  if (g.shot) stopSrc(g.shot.src);
+  g.shot = playGhostBuffer(ghostShotBuffer, g, false);
+  const voice = g.shot;
+  voice.src.onended = () => { if (g.shot === voice) g.shot = null; };
+}
+function playGhostDeath(g) {
+  if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
+  if (g.shot) { stopSrc(g.shot.src); g.shot = null; }
+  playGhostBuffer(ghostGoneBuffer, g, false);
+}
+function silenceGhost(g) {
+  if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
+  if (g.shot) { stopSrc(g.shot.src); g.shot = null; }
+}
+
+function setAnim(g, name) {
+  if (g.anim === name) return;
+  g.anim = name; g.animT = 0; g.animDone = false;
+  g.mesh.material.map = g.mesh.material.emissiveMap = ghostTex[name];
+}
+const creepDelay = () => GHOST.creepEvery[0] + Math.random() * (GHOST.creepEvery[1] - GHOST.creepEvery[0]);
+const scare = { armed: false, cooldown: 0 };
+// Sometimes, when a match has burned out and you get a light going again, one is already in your face.
+function maybeScare() {
+  if (!scare.armed) return;
+  scare.armed = false;
+  if (scare.cooldown > 0 || round.rest > 0 || round.t < GHOST.grace || finished) return;
+  if (Math.random() > GHOST.scareChance + menace().lvl * 0.2) return;
+  let pickG = null, best = Infinity;
+  for (const g of ghosts) {
+    if (g.state !== 'wander') continue;
+    const d = Math.hypot(g.x - camera.position.x, g.z - camera.position.z);
+    if (d < best) { best = d; pickG = g; }
+  }
+  if (!pickG) return;
+  scare.cooldown = GHOST.scareCooldown;
+  pickG.state = 'scare'; pickG.timer = 0; pickG.struck = false; pickG.anim = '';
+  setAnim(pickG, 'attack');
+}
+function vanish(g) {
+  if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
+  playGhostBuffer(ghostGoneBuffer, g, false);
+  const a = Math.random() * Math.PI * 2, d = 30 + Math.random() * 12;
+  g.x = camera.position.x + Math.cos(a) * d; g.z = camera.position.z + Math.sin(a) * d;
+  g.state = 'wander'; g.mode = 'lurk'; g.away = 12; g.tx = g.x; g.tz = g.z; g.retarget = 0; g.lit = 0; g.creepIn = creepDelay();
+}
+function makeGhost(x, z) {
+  // Lit by the flashlight like everything else; a faint emissive keeps the red eyes just visible in the dark.
+  const mat = new THREE.MeshLambertMaterial({ map: ghostTex.idle, emissiveMap: ghostTex.idle, emissive: 0xff6060, emissiveIntensity: GHOST.eyeGlow, alphaTest: 0.5, side: THREE.DoubleSide });
+  mat.color.setScalar(GHOST.bodyBoost);   // the sheet is near-black; lift it so the beam shows a shape
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(GHOST.size, GHOST.size), mat);
+  scene.add(mesh);
+  const g = { x, z, mesh, state: 'wander', hp: GHOST.hp, anim: '', animT: 0, animDone: false, tx: x, tz: z, retarget: 0,
+              lit: 0, calm: 0, dark: 0, timer: 0, struck: false,
+              mode: 'lurk', creepIn: creepDelay(), creepT: 0, stare: 0, away: 0, oa: 0, od: 15, flip: false, phase: Math.random() * 6 };
+  setAnim(g, 'idle');
+  return g;
+}
+function removeGhost(g) {
+  silenceGhost(g);
+  scene.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose();
+  const i = ghosts.indexOf(g); if (i >= 0) ghosts.splice(i, 1);
+}
+const ghostsAlive = () => ghosts.reduce((n, g) => n + (g.state !== 'die' ? 1 : 0), 0);
+
+function startRound(n) {
+  while (ghosts.length) removeGhost(ghosts[0]);
+  if (obsRound.active) obsRound.stop();
+  if (collective.active) collective.stop();
+  if (choir.active) choir.stop();
+  radar.equipped = false;
+  setHuntSilence(false);                 // an Observer round can end mid-hunt: bring the world's sound back
+  setDusk(false);
+  round.n = n; round.t = 0; round.rest = 0;
+  lore.spawnRound(n);
+  round.type = pickMonster();
+  if (round.type === 'observer') { startObserverRound(); return; }
+  if (round.type === 'collective') { startCollectiveRound(); return; }
+  if (round.type === 'choir') { startChoirRound(); return; }
+  const count = ghostCount(n), r = mulberry(CFG.seed ^ (n * 7919));
+  for (let i = 0; i < count; i++) {
+    const a = r() * Math.PI * 2;
+    const d = Math.sqrt(GHOST.spawnMin ** 2 + r() * (GHOST.spawnMax ** 2 - GHOST.spawnMin ** 2));   // even over the ring
+    ghosts.push(makeGhost(camera.position.x + Math.cos(a) * d, camera.position.z + Math.sin(a) * d));
+  }
+  if (n > 1) banner(`ROUND ${n}`, `${count} dark ghosts are out there`);
+}
+function endGame(won) {
+  finished = true; playing = false;
+  for (const g of ghosts) silenceGhost(g);
+  if (obsRound.active) obsRound.observer.silence();
+  if (collective.active) { for (const k of collective.kids) k.speed = 0; collective.S.phase = collective.S.phase === 'done' ? 'done' : 'captured'; }
+  if (choir.active) choir.stop();
+  setHuntSilence(false);
+  syncTick(false);
+  if (!won) playClip(dyingBuffer, 0.9);
+  document.getElementById('title').textContent = won ? 'DAWN' : deathCause === 'time' ? 'TOO LATE' : 'YOU DIED';
+  document.getElementById('sub').textContent = won ? `You made it through all ${ROUND.count} rounds.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', choir: 'The Choir found you by sound.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.` }[deathCause] || `The dead took you in round ${round.n}.`);
+  document.getElementById('go').textContent = 'Click to play again';
+  overlay.style.display = 'flex';
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+function roundWon(cleared, line) {
+  if (choir.active) choir.stop();
+  if (round.n >= ROUND.count) { endGame(true); return; }
+  banner(`ROUND ${round.n} SURVIVED`, line || (cleared ? 'Every ghost is gone' : 'You outlasted them'));
+  round.rest = ROUND.rest;
+  for (const g of ghosts) if (g.state !== 'die') { g.state = 'flee'; g.timer = 0; }
+}
+function damagePlayer(amount, cause = 'ghost') {
+  if (finished) return;
+  const reduction = Math.min(0.4, ITEM_DEFS[bag.armorId]?.reduction || 0);
+  inv.health = Math.max(0, inv.health - amount * (1 - reduction));
+  hurtFlash = 1; sfx.hurt();
+  if (inv.health <= 0) { deathCause = cause; endGame(false); }
+}
+function aggro(g) {
+  if (g.state === 'die' || g.state === 'chase' || g.state === 'attack' || g.state === 'alert') return;
+  g.state = 'alert'; g.timer = 0.25; g.calm = 0; g.dark = 0;
+}
+// Bullet: nearest living ghost within half a metre of the aim line.
+const aim = new THREE.Vector3();
+function ghostHit(maxRange = 45, spread = 0.3, damage = 1) {
+  camera.getWorldDirection(aim);
+  const o = camera.position;
+  let best = null, bestT = maxRange;
+  for (const g of ghosts) {
+    if (g.state === 'die') continue;
+    const cx = g.x - o.x, cy = g.mesh.position.y - o.y, cz = g.z - o.z;
+    const t = cx * aim.x + cy * aim.y + cz * aim.z;
+    if (t <= 0 || t >= bestT) continue;
+    const mx = cx - aim.x * t, my = cy - aim.y * t, mz = cz - aim.z * t;
+    if (mx * mx + mz * mz < spread && Math.abs(my) < 0.9) { best = g; bestT = t; }
+  }
+  if (!best || MAP.blocked(o.x, o.z, best.x, best.z, opened)) return false;      // rock stops attacks
+  best.hp -= damage;
+  best.x += aim.x * 0.6; best.z += aim.z * 0.6;
+  if (best.hp <= 0) { best.state = 'die'; setAnim(best, 'die'); playGhostDeath(best); if (Math.random() < 0.45) dropLore('request', best.x, best.z, 'It leaves something behind.'); }
+  else { best.state = 'hurt'; best.timer = 0.5; best.anim = ''; setAnim(best, 'hurt'); playGhostShot(best); }
+  return true;
+}
+
+function updateMonsters(dt, inControl, beamOn) {
+  syncTick(inControl && menace().frenzy && !huntSilence);
+  updateObserver(dt, inControl);
+  updateCollective(dt, inControl);
+  updateChoir(dt, inControl);
+  const px = camera.position.x, pz = camera.position.z;
+  if (!inControl) {
+    for (const g of ghosts) if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
+  } else {
+    if (!round.announced) { round.announced = true; if (isObserverRound()) announceObserver(); else if (isCollectiveRound()) announceCollective(); else if (isChoirRound()) announceChoir(); else { banner(META.label, `Round ${round.n}. ${ghosts.length} dark ghosts are out there. Keep your light off them`); if (MAP_HINT[MAP_NAME]) toast(MAP_HINT[MAP_NAME]); } }
+    if (round.rest > 0) { round.rest -= dt; if (round.rest <= 0) startRound(round.n + 1); }
+    else if (isObserverRound()) {
+      round.t += dt;
+      if (obsRound.total && obsRound.burned >= obsRound.total) { obsRound.stop(); setHuntSilence(false); roundWon(true, 'The dead are ash. Whatever was watching has gone.'); }
+      else if (round.t >= OBS_ROUND.seconds) { deathCause = 'time'; endGame(false); }
+    } else if (isCollectiveRound()) {
+      round.t += dt;
+      if (collective.escaped) {
+        const px = camera.position.x - Math.sin(yaw) * 2.6, pz = camera.position.z - Math.cos(yaw) * 2.6;
+        collective.stop(); roundWon(true, 'They let you go. One of them stayed to watch.');
+        if (dropLore('child', px, pz)) setTimeout(() => toast('Something has been left on the ground ahead of you.'), 2500);
+      }
+    } else if (isChoirRound()) {
+      round.t += dt;
+      if (choir.death) roundWon(true, 'The Hive Mind is dead. The singers have gone quiet.');
+    } else {
+      round.t += dt;
+      const alive = ghostsAlive();
+      if (alive === 0 || round.t >= ROUND.seconds) roundWon(alive === 0);
+    }
+    scare.cooldown = Math.max(0, scare.cooldown - dt);
+    const m = menace();
+    clockEl.style.color = m.frenzy ? '#c0564a' : '';
+    camera.getWorldDirection(aim);
+    const rightX = Math.cos(yaw), rightZ = -Math.sin(yaw);
+    for (let i = ghosts.length - 1; i >= 0; i--) {
+      const g = ghosts[i];
+      const dx = px - g.x, dz = pz - g.z, dist = Math.hypot(dx, dz) || 1e-6;
+      // is the beam on this ghost?
+      const ey = g.mesh.position.y - camera.position.y, len = Math.hypot(dist, ey);
+      const lit = beamOn && dist < GHOST.beamRange && Math.acos(Math.min(1, (-dx * aim.x + ey * aim.y - dz * aim.z) / len)) < GHOST.beamAngle && !MAP.blocked(px, pz, g.x, g.z, opened);
+      let vx = 0, vz = 0;
+      const go = (tx, tz, speed) => {
+        const ex = tx - g.x, ez = tz - g.z, d = Math.hypot(ex, ez);
+        if (d > 0.05) { vx = ex / d * speed; vz = ez / d * speed; }
+        return d;
+      };
+      // Hunting ghosts give up when the beam is off them and you hold your breath, or when the light stays off.
+      if (g.state === 'chase' || g.state === 'attack') {
+        g.calm = !lit && holdingBreath ? g.calm + dt : 0;
+        g.dark = beamOn ? 0 : g.dark + dt;
+        if (g.calm >= GHOST.breathTime) { g.state = 'flee'; g.timer = 0; }
+        else if (g.dark >= GHOST.darkTime) { g.state = 'wander'; g.retarget = 0; g.lit = 0; }
+      }
+      if (g.state === 'wander') {
+        // Stalking. They hang back behind you, dash to keep up, and every so often pace slowly in to stare.
+        const desperate = flashlight.battery <= 0;            // down to matches: closer, and more often
+        let speed = 0;
+        if (round.t < GHOST.grace || g.away > 0) {
+          // start of a round, or just driven off: drift where it is
+          g.away -= dt; g.retarget -= dt; speed = GHOST.wander;
+          if (g.retarget <= 0 || go(g.tx, g.tz, speed) < 1) {
+            const a = Math.random() * Math.PI * 2;
+            g.tx = g.x + Math.cos(a) * 8; g.tz = g.z + Math.sin(a) * 8; g.retarget = 6 + Math.random() * 6;
+          }
+        } else if (g.mode === 'creep') {
+          g.creepT += dt;
+          // A sneaking ghost comes all the way in and swipes once, unlit. Holding your breath as it arrives makes it only stare.
+          if (dist > (g.sneak ? GHOST.reach * 0.9 : GHOST.creepStop * (desperate ? 0.7 : 1))) { speed = GHOST.creep * (desperate ? 1.4 : 1) * (1 + m.lvl); go(px, pz, speed); }
+          else if (g.sneak && !holdingBreath && !lit) { g.state = 'attack'; g.sneaking = true; g.struck = false; g.dark = 0; g.calm = 0; setAnim(g, 'attack'); }
+          else g.stare += dt;
+          if (g.stare > GHOST.stare || g.creepT > 30) { g.mode = 'lurk'; g.retarget = 0; g.creepIn = creepDelay(); }
+        } else {
+          g.retarget -= dt;
+          if (g.retarget <= 0) {
+            g.oa = yaw + Math.PI + (Math.random() - 0.5) * 4.4;                 // mostly behind or beside
+            g.od = (GHOST.lurkMin + Math.random() * (GHOST.lurkMax - GHOST.lurkMin)) * (desperate ? 0.6 : 1) * (1 - Math.min(0.5, m.lvl * 0.5));
+            g.retarget = 4 + Math.random() * 6;
+          }
+          const tx = px - Math.sin(g.oa) * g.od, tz = pz - Math.cos(g.oa) * g.od;
+          const gap = Math.hypot(tx - g.x, tz - g.z);
+          speed = gap > 9 ? GHOST.dart : gap > 1 ? GHOST.lurk : 0;
+          if (lit) speed = Math.min(speed, GHOST.creep);                        // never dashes with the beam on it
+          if (speed) go(tx, tz, speed);
+          g.creepIn -= dt * (desperate ? 2 : 1) * (1 + m.lvl * 2);
+          if (g.creepIn <= 0) { g.mode = 'creep'; g.stare = 0; g.creepT = 0; g.sneak = Math.random() < m.sneak; }
+        }
+        setAnim(g, speed > 3 ? 'fly' : 'idle');
+        g.lit = lit ? g.lit + dt : 0;
+        if (g.lit > GHOST.noticeTime) aggro(g);
+      } else if (g.state === 'scare') {
+        // locked in your face for one swipe, then gone
+        g.timer += dt;
+        g.x = px - Math.sin(yaw) * 1.3; g.z = pz - Math.cos(yaw) * 1.3;
+        if (!g.struck && g.animT * GHOST_ANIMS.attack[2] >= 10) { g.struck = true; damagePlayer(GHOST.scareDamage); }
+        if (g.animDone || g.timer > 1.4) vanish(g);
+      } else if (g.state === 'alert') {
+        g.timer -= dt;
+        if (g.timer <= 0) g.state = 'chase';
+      } else if (g.state === 'chase') {
+        setAnim(g, 'fly');
+        go(px, pz, GHOST.chase * (1 + m.lvl * 0.1));
+        if (dist < GHOST.reach) { g.state = 'attack'; g.sneaking = false; g.struck = false; setAnim(g, 'attack'); }
+      } else if (g.state === 'attack') {
+        if (!g.struck && g.animT * GHOST_ANIMS.attack[2] >= 10) {
+          g.struck = true;
+          if (dist < GHOST.reach + 0.9) damagePlayer(GHOST.damage);
+        }
+        if (g.animDone) {
+          if (g.sneaking) { g.sneaking = false; g.state = 'wander'; g.mode = 'lurk'; g.retarget = 0; g.lit = 0; g.creepIn = creepDelay(); }
+          else g.state = 'chase';
+        }
+      } else if (g.state === 'flee') {
+        setAnim(g, 'fly');
+        g.timer += dt;
+        go(g.x - dx / dist * 10, g.z - dz / dist * 10, GHOST.flee);
+        if (round.rest <= 0 && (dist > GHOST.fleeDist || g.timer > 12)) { g.state = 'wander'; g.mode = 'lurk'; g.away = 15; g.tx = g.x; g.tz = g.z; g.retarget = 0; g.lit = 0; g.creepIn = creepDelay(); }
+      } else if (g.state === 'hurt') {
+        g.timer -= dt;
+        if (g.timer <= 0) g.state = 'chase';
+      } else if (g.state === 'die' && g.animDone) { removeGhost(g); continue; }
+
+      g.beamHold = lit ? 0.45 : Math.max(0, (g.beamHold || 0) - dt);
+      const hunting = g.state !== 'die' && g.state !== 'hurt' && (g.beamHold > 0 || g.state === 'chase' || g.state === 'attack' || g.state === 'scare');
+      syncGhostChase(g, hunting);
+      updateGhostChase(g);
+
+      g.x += vx * dt; g.z += vz * dt;
+      const side = vx * rightX + vz * rightZ;
+      if (Math.abs(side) > 0.3) g.flip = side > 0;      // sheet faces left
+    }
+  }
+  // animate + face the camera (also while paused, so nothing pops)
+  for (const g of ghosts) {
+    const [, frames, fps, loop] = GHOST_ANIMS[g.anim];
+    if (inControl) g.animT += dt;
+    let f = Math.floor(g.animT * fps);
+    if (loop) f %= frames; else if (f >= frames) { f = frames - 1; g.animDone = true; }
+    const u0 = f / frames, u1 = (f + 1) / frames, uv = g.mesh.geometry.attributes.uv;
+    uv.setX(0, g.flip ? u1 : u0); uv.setX(2, g.flip ? u1 : u0); uv.setX(1, g.flip ? u0 : u1); uv.setX(3, g.flip ? u0 : u1);
+    uv.needsUpdate = true;
+    g.mesh.position.set(g.x, MAP.groundY(g.x, g.z) + GHOST.size / 2 + GHOST.hover + Math.sin(uTime.value * 1.7 + g.phase) * 0.08, g.z);
+    g.mesh.rotation.y = Math.atan2(px - g.x, pz - g.z);
+  }
+  // HUD
+  hpFill.style.transform = `scaleX(${inv.health / 100})`;
+  hpFill.parentElement.classList.toggle('low', inv.health <= 25);
+  hurtFlash = Math.max(0, hurtFlash - dt * 1.4);
+  hurtEl.style.opacity = hurtFlash * 0.8 + (inv.health <= 25 && !finished ? 0.18 : 0);
+  if (bannerTimer > 0) { bannerTimer -= dt; if (bannerTimer <= 0) bannerEl.style.opacity = 0; }
+}
+
+// ───────────────────────── the Observer round ─────────────────────────
+// Find and burn three bodies in six minutes while the Observer watches. The creature lives in src/observer/;
+// here it is given the map, the lights, the sound buses and the hooks it uses to frighten and to kill.
+function setHuntSilence(on) {
+  if (on === huntSilence) return;
+  huntSilence = on;
+  const t = on ? 0.12 : 2.5, live = mapSoundOn && !finished;
+  rampParam(mapBus.gain, on || !live ? 0 : 1, t);
+  rampParam(skyBus.gain, on || !live ? 0 : 1, t);
+  rampParam(outdoorGain.gain, on ? 0 : indoors ? 0.1 : 1, t);
+  rampParam(kidsBus.gain, on ? 0 : 1, t);
+}
+function flickerFlashlight(kind) {
+  if (flashlight.flickerAge >= 0 || !flashlight.equipped) return;
+  flashlight.flickerAge = 0;
+  flashlight.flickerDur = kind === 'hunt' ? 0.9 + Math.random() * 1.4 : kind === 'dip' ? 0.35 + Math.random() * 0.3 : 0.6 + Math.random() * 0.8;
+}
+// ───────────────────────── the story: fragments in the world, and the journal that keeps them ─────────────────────────
+// src/lore/ holds the text. Reading pauses the world; what you find is kept between nights.
+let journalWasPlaying = false;
+const journal = createJournal({
+  onOpen() { journalWasPlaying = playing; playing = false; holdingBreath = false; gun.aiming = false; syncFootsteps(null); if (document.pointerLockElement) document.exitPointerLock(); overlay.style.display = 'none'; },
+  onClose() {
+    if (journalWasPlaying && !finished) { playing = true; const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => { playing = false; overlay.style.display = 'flex'; }); }
+    else overlay.style.display = 'flex';
+  },
+});
+const lore = createLorePickups({ scene, camera, world: { walkable: creatureWorld.walkable, groundY: (x, z) => MAP.groundY(x, z) }, map: MAP_NAME, journal, rng: Math.random });
+let nearLore = null;
+function collectLore(it) {
+  const id = lore.collect(it);
+  if (!id) return;
+  noise1(0.18, 'highpass', 2400, 1400, 0.22); noise1(0.3, 'bandpass', 900, 500, 0.12);      // paper, a rustle
+  if (isChoirRound()) choir.noise(camera.position.x, camera.position.z, 0.3, 'rustle');
+  journal.add(id);
+  journal.open(id);
+}
+function dropLore(pool, x, z, line) {
+  const id = lore.dropAt(pool, x, z);
+  if (id && line) toast(line);
+  return id;
+}
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'KeyJ' || e.repeat || !started || intro.active || journal.isOpen) return;
+  journal.open();
+});
+let nextObserverAt = Infinity;
+const ashDropped = new Set();
+const obsRound = createObserverRound({
+  scene, camera, world: creatureWorld, rng: mulberry(CFG.seed ^ 0x0b5e),
+  ambientScale: MAP_NAME === 'hell' ? 0.12 : 1,
+  audio: { ctx: audioCtx, dest: audioCtx.destination, noise: longNoise, bones: boneBuffer },
+  glowAdd: (...a) => glowLayer.add(...a), lightPush: (...a) => extraLights.push(...a),
+  fireCells: atlas.sprites.fire, smallCells: atlas.sprites.smallfire || atlas.sprites.fire,
+  inv, toast, clearZones, circles: extraCircles, refresh: () => refreshChunks(true),
+  sfx: {
+    strike: () => sfx.strike(),
+    crackle(x, z) {                       // seven seconds of fire, quieter the further away you are
+      const d = Math.hypot(x - camera.position.x, z - camera.position.z), v = Math.max(0.15, 1 - d / 20);
+      noise1(0.6, 'lowpass', 600, 300, 0.5 * v);
+      for (let i = 0; i < 40; i++) setTimeout(() => { if (!finished) noise1(0.05 + Math.random() * 0.06, 'highpass', 2200 + Math.random() * 2000, 1500, (0.12 + Math.random() * 0.25) * v); }, Math.random() * 7000);
+    },
+  },
+  onBurned(n) {
+    toast(n >= obsRound.total ? 'The last of them burns' : `${n} of ${obsRound.total} burned`);
+    for (const b of obsRound.bodies()) {                         // what it was carrying is left in the ash
+      const k = b.x.toFixed(1) + ',' + b.z.toFixed(1);
+      if (b.done && !ashDropped.has(k)) { ashDropped.add(k); if (dropLore('body', b.x, b.z)) setTimeout(() => toast('Something is left in the ash.'), 1500); }
+    }
+  },
+  hooks: {
+    huntStart() { setHuntSilence(true); },
+    huntEnd() { setHuntSilence(false); },
+    flicker: flickerFlashlight,
+    // something nearby gets disturbed. On the outskirts that can be a door you left alone swinging on its own.
+    disturb(rel, dist) {
+      if (MAP_NAME !== 'rural' || Math.random() > 0.45) return false;
+      const px = camera.position.x, pz = camera.position.z;
+      const d = near.doors.find((o) => { const k = Math.hypot(o.x - px, o.z - pz); return k > 4 && k < 18; });
+      if (!d) return false;
+      toggleDoor(d); return true;
+    },
+    capture() {                             // the screen cuts to black, then the death screen
+      deathCause = 'observer';
+      fadeEl.style.opacity = 1;
+      playing = false;
+      syncFootsteps(null);
+      setTimeout(() => endGame(false), 1300);
+    },
+  },
+});
+function startObserverRound() {
+  // the loadout the round expects: the flashlight, a loaded pistol, at least five matches
+  radar.equipped = false; radar.beepIn = 0; radar.drawIn = 0;
+  flashlight.equipped = true;
+  inv.gun = true;
+  inv.mag = Math.max(inv.mag, GUN.mag);
+  inv.reserve = Math.max(inv.reserve, GUN.mag);
+  const bodies = bodiesFor(round.n);
+  inv.matches = Math.max(inv.matches, bodies + 2);           // one per body and a couple to see by
+  setDusk(DUSK.maps.includes(MAP_NAME) && Math.random() < DUSK.chance);
+  ashDropped.clear();
+  nextObserverAt = OBS_ROUND.firstExtra;                     // 4:00 brings a second one; after that, a coin flip each minute
+  obsRound.start({ x: camera.position.x, z: camera.position.z }, bodies);
+  if (round.announced) announceObserver();
+}
+function announceObserver() {
+  banner('THE OBSERVER', `${isDusk ? 'Dusk. ' : ''}Find and burn the ${obsRound.total} bodies before dawn. Something is watching you.`);
+  toast('Each body takes one match. The pull tells you how close the nearest one is.');
+}
+function updateObserver(dt, inControl) {
+  if (!obsRound.active) return;
+  if (inControl && round.t >= nextObserverAt) {
+    const first = nextObserverAt === OBS_ROUND.firstExtra;
+    if (first || Math.random() < OBS_ROUND.extraChance) obsRound.addObservers(1);
+    nextObserverAt += OBS_ROUND.extraEvery;
+  }
+  extraCircles.length = 0;
+  for (const b of obsRound.bodies()) if (b.kind !== 'ground') extraCircles.push(b.x, b.z, 0.3);
+  for (const o of obsRound.observers) if (o.active) extraCircles.push(o.position.x, o.position.z, 0.35);
+  obsRound.update(dt, {
+    inControl: inControl && playing, yaw,
+    flashlightOn: flashlight.equipped && flashlight.battery > 0 && flashlight.raise > 0.6,
+    beamLit: Math.min(1, spot.intensity / L.intensity), beamRange: L.distance, beamAngle: L.angle,
+    matchActive: match.t > 0, matchRadius: CFG.match.distance,
+    flash: flashLight.intensity > 0.6 && !debugAmbient ? 1 : 0,
+    playerMoving: keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD,
+    dusk: isDusk,
+  });
+}
+
+// ───────────────────────── the Collective round ─────────────────────────
+// Thirty of them. src/collective/ holds the creatures and their rules; here they get the map, the sound and the death.
+const collective = createCollective({
+  scene, camera, world: creatureWorld,
+  audio: { ctx: audioCtx, dest: audioCtx.destination, walk: walkBuffer, run: runBuffer, loud: collectiveLoud, whisper: collectiveWhisper, hug: collectiveHug },
+  hooks: {
+    say: (text) => toast(text),
+    mark() { document.getElementById('collectiveMark')?.classList.add('on'); },
+    provoked() { syncFootsteps(null); },
+    capture() {                             // they reach you together: cut to black, then the death screen
+      deathCause = 'collective';
+      fadeEl.style.opacity = 1;
+      playing = false;
+      syncFootsteps(null);
+      setTimeout(() => endGame(false), 1300);
+    },
+  },
+});
+function startCollectiveRound() {
+  // every chest is restocked, and every one now holds matches
+  for (const id of openedChests) opened.delete(id);
+  openedChests.length = 0;
+  refreshChunks(true);
+  if (!inv.gun) { inv.gun = true; inv.mag = GUN.mag; inv.reserve = Math.max(inv.reserve, GUN.mag); }
+  inv.matches = Math.max(inv.matches, 3);
+  collective.start();
+  if (round.announced) announceCollective();
+}
+function announceCollective() {
+  banner('The Collective', '');
+}
+function updateCollective(dt, inControl) {
+  const info = {
+    inControl: inControl && playing, yaw, clock: uTime.value,
+    flashlightOn: flashlight.equipped && flashlight.battery > 0 && flashlight.raise > 0.6,
+    beamLit: Math.min(1, spot.intensity / L.intensity), beamRange: L.distance, beamAngle: L.angle,
+    matchLit: match.t > 0,
+    running: playerSpeedNow === CFG.run, moving: playerSpeedNow > 0,
+    moveX: move.x, moveZ: move.z, round: round.n, environment: MAP_NAME,
+  };
+  collective.updateFollower(dt, info);
+  if (collective.active) collective.update(dt, info);
+}
+
+const [hiveQueenDeath, hiveGruntDeath, hiveQueenAttack] = await Promise.all([
+  loadClip('hive_queen_death.mp3'),
+  loadClip('hive_grunt_death.mp3'),
+  loadClip('hive_queen_attack.mp3'),
+]);
+// The Choir tracks sounds and returns in waves until the exposed Hive Mind is destroyed.
+const choir = createChoirRound({
+  scene, camera, world: creatureWorld,
+  audio: { ctx: audioCtx, dest: audioCtx.destination, sing: singBuffer, queenDeath: hiveQueenDeath, gruntDeath: hiveGruntDeath, queenAttack: hiveQueenAttack },
+  hooks: {
+    say: (text) => toast(text),
+    damage: (amount, cause) => damagePlayer(amount, cause),
+  },
+});
+function startChoirRound() {
+  flashlight.equipped = true;
+  if (flashlight.battery <= 0.1 && inv.batteries <= 0) {
+    inv.batteries = 1;
+    toast('A spare battery waits in your pack. B to replace it.');
+  }
+  inv.gun = true;
+  inv.mag = Math.max(inv.mag, GUN.mag);
+  inv.reserve = Math.max(inv.reserve, GUN.mag);
+  choir.start({ round: round.n });
+  if (round.announced) announceChoir();
+}
+function announceChoir() {
+  banner('THE CHOIR', 'They hear footsteps, breath, doors and gunfire. A listener in a chest can find the nest nearby; feedback shows the singers.');
+  toast('At least 1–3 grunts hunt by sound. Hold Space to quiet your breath. Blue/red chests bring better gear and larger packs.');
+}
+function updateChoir(dt, inControl) {
+  if (!choir.active || !inControl) return;
+  const runningNow = (keys.ShiftLeft || keys.ShiftRight) && stamina > 0 && !needRecover && playerSpeedNow > 0;
+  choir.update(dt, {
+    inControl: true, x: camera.position.x, z: camera.position.z, yaw,
+    moving: playerSpeedNow > 0, running: runningNow, holdingBreath,
+    swimming: swim.in, environment: MAP_NAME, noiseScale: bagBonuses().noiseScale,
+  });
+}
+
+function updateClock() {
+  const left = Math.max(0, roundSeconds() - round.t), m = Math.floor(left / 60), s = Math.floor(left % 60);
+  const time = `${m}:${String(s).padStart(2, '0')}`;
+  let text;
+  if (round.rest > 0) text = `ROUND ${round.n} SURVIVED`;
+  else if (isCollectiveRound()) text = `ROUND ${round.n}/${ROUND.count} · THE COLLECTIVE`;
+  else if (isChoirRound()) {
+    const hive = choir.hive;
+    const core = choir.exposed && hive ? `CORE ${hive.hp}/${hive.maxHp}` : 'CORE HIDDEN';
+    text = `ROUND ${round.n}/${ROUND.count} · THE CHOIR · ${choir.state} · SINGERS ${choir.alive} · GRUNTS ${choir.grunts} · ${core}`;
+  } else if (isObserverRound()) text = `ROUND ${round.n}/${ROUND.count} · ${time} · BODIES ${obsRound.burned}/${obsRound.total}${obsRound.sense ? ' · ' + obsRound.sense : ''}`;
+  else text = `ROUND ${round.n}/${ROUND.count} · ${time} · GHOSTS ${ghostsAlive()}`;
+  if (clockEl.textContent !== text) clockEl.textContent = text;
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  uTime.value += dt;
+
+  let speed = 0, running = false;
+  const bonuses = bagBonuses();
+  const staminaCap = staminaMax * (bag.items.includes('stamina_charm') ? 1.18 : 1);
+  const staminaSurge = uTime.value < bag.staminaUntil;
+  stamina = Math.min(stamina, staminaCap);
+  if (playing && intro.active) updateIntro(dt);
+  else if (playing) {
+    elapsed += dt;
+    const f = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0), s = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
+    if ((f || s) && swim.climb < 0) {
+      const canRun = (keys.ShiftLeft || keys.ShiftRight) && (stamina > 0 || staminaSurge) && (!needRecover || staminaSurge);
+      running = canRun && !swim.in;
+      speed = swim.in ? SWIM.speed : (running ? CFG.run * bonuses.runSpeed : CFG.walk) * (burn.in ? LAVA.slow : 1);
+      move.set(s, 0, -f).normalize().applyAxisAngle(THREE.Object3D.DEFAULT_UP, yaw).multiplyScalar(speed * dt);
+      camera.position.x += move.x; camera.position.z += move.z;
+      collide(camera.position);
+      bob += dt * speed * 2.6;
+    }
+    updateClock();
+  }
+  const inControl = playing && !finished && !intro.active;
+  playerSpeedNow = speed;
+  if (inControl) {
+    if (staminaSurge) { stamina = staminaCap; needRecover = false; if (holdingBreath) holdTime += dt; else holdTime = 0; }
+    else {
+      if (running) stamina -= dt / 8;
+      if (holdingBreath) { stamina -= dt / 15; holdTime += dt; }
+      else holdTime = 0;
+      if (stamina <= 0) {
+        if (running && staminaMax < STAMINA_PEAK) staminaMax = Math.min(STAMINA_PEAK, staminaMax + STAMINA_GROW);
+        stamina = 0;
+        needRecover = true;
+        if (holdingBreath) { holdingBreath = false; breathBlocked = true; holdTime = 0; }
+      }
+      if (!running && !holdingBreath) {
+        stamina = Math.min(staminaCap, stamina + dt / 4.5);
+        if (stamina >= staminaCap * 0.28) needRecover = false;
+      }
+    }
+  } else holdTime = 0;
+  tickKids(dt, inControl && round.rest <= 0 && !menace().frenzy && !huntSilence && !collective.encounter);   // the kids go quiet for the last minute, until the next round
+  staminaEl.hidden = !inControl;
+  staminaEl.style.width = `${STAMINA_BAR * staminaCap}px`;
+  staminaFill.style.transform = `scaleX(${stamina / staminaCap})`;
+  staminaEl.classList.toggle('low', stamina / staminaCap < 0.25);
+  const moving = playing && !finished && !intro.active && speed > 0;
+  const pace = !playing || finished || intro.active ? null : running ? 'run' : speed > 0 ? 'walk' : 'idle';
+  syncFootsteps(moving && !holdingBreath && !swim.in ? (pace === 'run' ? 'run' : 'walk') : null);
+  syncBodyAudio(pace, holdingBreath && pace != null);
+  syncAmbience(started ? 'outside' : null);
+  syncWood(started && !finished && MAP_NAME === 'forest');
+  syncWeather(started && !finished);
+  duckAmbience(moving);
+
+  // camera + head bob. Holding breath zooms in; past 10s the view starts to shake.
+  const bobY = Math.sin(bob) * 0.035, bobX = Math.cos(bob * 0.5) * 0.02;
+  // Running: the body pounds and twists. Each foot strike jolts the view down, the shoulders roll side to side
+  // with the stride, the head sways and the whole thing judders. The flashlight hand pumps up and down out of step.
+  runShake.k += ((running && inControl ? 1 : 0) - runShake.k) * Math.min(1, dt * 6);
+  const rk = runShake.k, strike = Math.pow(1 - Math.abs(Math.sin(bob)), 6);       // spikes as each foot lands
+  const judder = Math.sin(uTime.value * 31) * Math.sin(uTime.value * 13.7);
+  const runY = rk * (Math.abs(Math.sin(bob)) * 0.075 - 0.04 - strike * 0.03);
+  camera.position.y = MAP.groundY(camera.position.x, camera.position.z) + CFG.eye + bobY + runY + cut.y - swim.sink * 1.15;
+  let sx = rk * (-0.025 - strike * 0.03 + judder * 0.008), sy = rk * Math.cos(bob) * 0.028, sr = rk * (Math.sin(bob) * 0.045 + judder * 0.01);
+  if (holdingBreath && holdTime >= 10) {
+    const k = Math.min(1, (holdTime - 10) / 1.5);
+    sx += Math.sin(uTime.value * 27) * 0.022 * k;
+    sy += Math.sin(uTime.value * 21) * 0.018 * k;
+    sr += Math.sin(uTime.value * 17) * 0.014 * k;
+  }
+  camera.rotation.set(pitch + cut.pitch + sx, yaw + cut.yaw + sy, cut.roll + sr);
+
+  // flashlight raise / lower, with a faint wobble and occasional hard flicker
+  flashlight.raise += ((flashlight.equipped ? 1 : 0) - flashlight.raise) * Math.min(1, dt * 9);
+  held.position.lerpVectors(HELD_DOWN, HELD_UP, flashlight.raise);
+  held.position.x += bobX; held.position.y += bobY * 0.6;
+  // Standing still, scared: the beam sweeps back and forth along a deep U, jittery hands shaking it, with a
+  // sudden jerk every few seconds as if something moved. Walking steadies it again.
+  const still = playerSpeedNow === 0 && playing && !intro.active && !finished;
+  idleSway.k += ((still && (idleSway.still += dt) > 1.5 ? 1 : 0) - idleSway.k) * Math.min(1, dt * (still ? 0.8 : 4));
+  if (!still) idleSway.still = 0;
+  idleSway.t += dt;
+  const sw = idleSway.t, ph = 1.25 * Math.sin(sw * 0.62) + 0.3 * Math.sin(sw * 0.23 + 1);   // back and forth across the arc, a little hurried
+  // scared hands: a constant shake, and now and then a sharp jerk as if something moved
+  if ((idleSway.jerkIn = (idleSway.jerkIn ?? 4) - dt) <= 0) { idleSway.jerkIn = 3 + Math.random() * 6; idleSway.jx = (Math.random() - 0.5) * 1.1; idleSway.jy = (Math.random() - 0.5) * 0.6; }
+  idleSway.jx = (idleSway.jx || 0) * Math.exp(-dt * 5); idleSway.jy = (idleSway.jy || 0) * Math.exp(-dt * 5);
+  const tremor = 0.07 * Math.sin(sw * 11.3) * Math.sin(sw * 3.7) + 0.035 * Math.sin(sw * 17.9 + 2);
+  const swayX = idleSway.k * (Math.sin(ph) * 1.1 + tremor + idleSway.jx);
+  const swayY = idleSway.k * ((1 - Math.cos(ph)) * 0.8 - 0.45 - 0.15 * (0.5 + 0.5 * Math.sin(sw * 0.09)) + tremor * 0.8 + idleSway.jy);   // a deep U: lowest in the middle of the swing
+  held.position.x += swayX * 0.026; held.position.y += swayY * 0.026;
+  // running: the flashlight hand pumps up and down with the arm, a beat behind the feet
+  const pump = Math.sin(bob + 1.2), runFX = rk * (Math.cos(bob) * 0.9 + judder * 0.15), runFY = rk * (pump * 1.5 - strike * 0.5 + judder * 0.2);
+  held.position.y += rk * pump * 0.06; held.position.x += rk * Math.cos(bob) * 0.03;
+  held.rotation.y = -swayX * 0.03 - runFX * 0.05; held.rotation.x = swayY * 0.03 + runFY * 0.06;
+  held.visible = flashlight.raise > 0.02;
+  const raised = flashlight.raise > 0.6;
+  updateWorld(dt, inControl);
+  updateItems(dt, bobX, bobY, inControl, raised);
+  const breathFov = holdingBreath && inControl ? 61 : 70;
+  zoomFov += (breathFov - zoomFov) * Math.min(1, dt * 3.2);
+  const fov = zoomFov - gun.ads * 16;
+  if (Math.abs(camera.fov - fov) > 0.02) { camera.fov = fov; camera.updateProjectionMatrix(); }
+  const flickerOk = raised && playing && !finished && !intro.active && flashlight.battery > 0;
+  if (flickerOk && flashlight.flickerAge < 0) {
+    flashlight.nextFlicker -= dt;
+    if (flashlight.nextFlicker <= 0) {
+      flashlight.flickerDur = 0.9 + Math.random() * 0.7;
+      flashlight.flickerAge = 0;
+      flashlight.nextFlicker = flickerGap(Math.random());
+    }
+  } else if (!playing && flashlight.flickerAge >= 0) {
+    flashlight.flickerAge = -1;
+  }
+  let flick = 0.94 + 0.06 * Math.sin(uTime.value * 23) * Math.sin(uTime.value * 7.3);
+  if (flashlight.flickerAge >= 0) {
+    flashlight.flickerAge += dt;
+    const age = flashlight.flickerAge, dur = flashlight.flickerDur, fade = 0.6;
+    if (age >= dur) flashlight.flickerAge = -1;
+    else {
+      const stutter = Math.abs(Math.sin(age * 46)) > 0.55 ? 1 : 0.06;
+      const recover = dur - age < fade ? (dur - age) / fade : 1;
+      flick *= 1 - (1 - stutter) * recover;
+    }
+  }
+  const beam = raised && flashlight.battery > 0 ? L.intensity * flick * cut.light * batteryDim() : 0;
+  spot.intensity = beam;
+  halo.intensity = beam * 0.18;
+  updateMonsters(dt, inControl, beam > 1);
+  const dreadAim = collective.active && ['appear', 'warning', 'dispersal', 'last'].includes(collective.phase) && flashlight.equipped;
+  const aimOffset = dreadAim ? Math.sin(uTime.value * 2.3) * 0.38 + Math.sin(uTime.value * 0.53 + 1.4) * 0.16 : 0;
+  spot.target.position.set(bobX * 4 + swayX + aimOffset + runFX, -0.35 + bobY * 5 + swayY + runFY + (dreadAim ? Math.sin(uTime.value * 1.7) * 0.13 : 0), -10);
+
+  // world follows the player
+  refreshChunks(false);
+  placeGround();
+
+  camera.layers.set(0);
+  renderer.setRenderTarget(visionRT);
+  renderer.render(scene, camera);
+  renderer.setRenderTarget(null);
+  renderer.render(visionScene, visionCam);
+  if (held.visible || gunMesh.visible || matchMesh.visible) {
+    camera.layers.set(1);
+    const bg = scene.background;
+    scene.background = null;
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(scene, camera);
+    renderer.autoClear = true;
+    scene.background = bg;
+  }
+  camera.layers.set(0);
+}
+refreshChunks(true);
+// ?round=N starts at round N; ?monster=ghosts|observer|collective|choir forces the monster for every round
+startRound(Math.max(1, Math.min(ROUND.count, Number(new URLSearchParams(location.search).get('round')) || 1)));
+updateClock();
+playIntroSong();
+requestAnimationFrame(frame);
+
+// small debug handle for the console
+window.game = { journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { playing = true; started = true; overlay.style.display = 'none'; }, CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };
