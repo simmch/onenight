@@ -12,6 +12,16 @@
   #stamina { margin-top: 10px; width: 148px; height: 8px; border: 1px solid rgba(185,179,163,.45); background: rgba(0,0,0,.45); }
   #staminaFill { height: 100%; width: 100%; background: #b9b3a3; transform: scaleX(1); transform-origin: left center; }
   #stamina.low #staminaFill { background: #a36a55; }
+  #sanity { display: flex; align-items: center; gap: 7px; margin-top: 8px; width: 210px; font-size: 10px; letter-spacing: 1px; }
+  #sanityBar { width: 112px; height: 7px; border: 1px solid rgba(185,179,163,.45); background: rgba(0,0,0,.45); }
+  #sanityFill { height: 100%; width: 100%; background: #aab99f; transform: scaleX(1); transform-origin: left center; transition: background-color .35s; }
+  #sanity.low #sanityFill { background: #c1a16c; }
+  #sanity.critical #sanityFill { background: #a6534e; }
+  #sanityState { min-width: 64px; text-align: right; }
+  #sanityHaze { position: fixed; z-index: 4; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, transparent 43%, rgba(13,12,18,.54) 100%); mix-blend-mode: multiply; }
+  #sanityVision { position: fixed; z-index: 4; top: 50%; left: 8%; width: clamp(42px, 7vw, 82px); height: clamp(100px, 22vh, 210px); opacity: 0; pointer-events: none; filter: blur(1px) drop-shadow(0 0 10px rgba(10,8,12,.8)); transform: translateY(-50%); transition: opacity .12s linear; }
+  #sanityVision svg { width: 100%; height: 100%; }
+  #sanityVision.right { left: auto; right: 8%; transform: translateY(-50%) scaleX(-1); }
   [hidden] { display: none !important; }
   #status, #ammo, #prompt, #toast { position: fixed; pointer-events: none; font-size: 14px; letter-spacing: 2px; }
   #status { left: 16px; bottom: 14px; opacity: .7; }
@@ -68,8 +78,9 @@
   #reticle span:nth-child(4) { left: -1px; top: 5px; width: 2px; height: 7px; }
   .phone { display: none; }
   #touch, #turn { display: none; }
-  body.touch { touch-action: none; user-select: none; -webkit-user-select: none; height: 100dvh; }
-  body.touch canvas { height: 100dvh; }
+  html.touch-root, html.touch-root body { margin: 0; overflow: hidden; background: #000; }
+  body.touch { touch-action: none; user-select: none; -webkit-user-select: none; overscroll-behavior: none; }
+  body.touch canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
   body.touch #board, body.touch #playerName { touch-action: auto; user-select: text; -webkit-user-select: text; }
   body.touch .desk { display: none; }
   body.touch .phone { display: block; }
@@ -78,16 +89,17 @@
   body.touch #overlay .go { margin-top: 10px; }
   body.touch #boardList { max-height: 64px; }
   body.touch #ammo { top: 14px; bottom: auto; right: 12px; }
-  body.touch #status { top: 58px; bottom: auto; left: 16px; font-size: 12px; }
+  body.touch #status { top: 78px; bottom: auto; left: 16px; font-size: 12px; }
   body.touch #inventoryPanel { bottom: 4px; }
   body.touch .inventory-slot { width: 32px; height: 32px; }
   body.touch #inventorySlots { pointer-events: auto; }
   body.touch.playing #touch { display: block; }
-  body.touch #stick { position: fixed; z-index: 6; left: max(12px, env(safe-area-inset-left)); bottom: max(12px, env(safe-area-inset-bottom)); width: 112px; height: 112px; border-radius: 50%; border: 1px solid rgba(185,179,163,.45); background: rgba(0,0,0,.28); touch-action: none; }
-  body.touch #stickKnob { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%; background: rgba(216,210,192,.4); }
-  body.touch #pad { position: fixed; z-index: 6; right: max(8px, env(safe-area-inset-right)); bottom: 70px; display: grid; grid-template-columns: repeat(4, 52px); gap: 5px; touch-action: none; }
-  body.touch #pad button { height: 32px; padding: 0; background: rgba(0,0,0,.45); color: #d8d2c0; border: 1px solid rgba(185,179,163,.5); font: 9px "Courier New", monospace; letter-spacing: .5px; }
-  body.touch #pad button.on { background: rgba(216,210,192,.28); color: #fff; }
+  body.touch #stick { display: none; position: fixed; z-index: 6; width: 104px; height: 104px; margin: -52px 0 0 -52px; border-radius: 50%; border: 1px solid rgba(185,179,163,.35); background: rgba(0,0,0,.22); touch-action: none; pointer-events: none; }
+  body.touch #stick.on { display: block; }
+  body.touch #stickKnob { position: absolute; left: 50%; top: 50%; width: 42px; height: 42px; margin: -21px 0 0 -21px; border-radius: 50%; background: rgba(216,210,192,.35); }
+  body.touch #gear { display: none; position: fixed; z-index: 7; left: 50%; top: 46%; transform: translate(-50%, -50%); grid-template-columns: repeat(4, max-content); gap: 6px 18px; padding: 12px 16px; background: rgba(0,0,0,.55); }
+  body.touch #gear.on { display: grid; }
+  body.touch #gear button { padding: 8px 0; background: transparent; color: #d8d2c0; border: none; font: 12px "Courier New", monospace; letter-spacing: 1px; }
   @media (orientation: portrait) {
     body.touch #turn { display: flex; position: fixed; inset: 0; z-index: 40; align-items: center; justify-content: center; background: #000; text-align: center; letter-spacing: 3px; }
     body.touch #turn p:first-child { font-size: 22px; color: #d8d2c0; margin: 0 0 8px; }
@@ -98,7 +110,7 @@
 <script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
 </head>
 <body>
-<div id="hud"><span id="clock"></span><div id="stamina" hidden><div id="staminaFill"></div></div></div>
+<div id="hud"><span id="clock"></span><div id="stamina" hidden><div id="staminaFill"></div></div><div id="sanity" hidden title="Hold Space while still, or reach shelter, to recover sanity"><span>SANITY</span><div id="sanityBar"><div id="sanityFill"></div></div><span id="sanityState">CLEAR</span></div></div>
 <div id="status" hidden>
   <div class="row"><span class="lbl">HP</span><div id="hp"><div id="hpFill"></div></div></div>
   <div class="row"><img src="./assets/items/battery.png" alt="Battery"><div id="batt"><div id="battFill"></div></div><span id="spare"></span></div>
@@ -108,7 +120,7 @@
 <div id="ammo" hidden><img src="./assets/items/bullet.png" alt="Bullets"><span id="ammoText"></span></div>
 <div id="inventoryPanel" hidden aria-label="Inventory"><div id="inventoryMeta"></div><div id="inventorySlots"></div><div id="inventoryHelp">1–9 SELECT / USE &nbsp; X DROP SELECTED</div></div>
 <div id="reticle" hidden><span></span><span></span><span></span><span></span></div>
-<div id="hurt"></div><div id="collectiveMark" aria-hidden="true"><svg viewBox="0 0 40 64" width="100%" height="100%"><path fill="#bdb5a1" d="M11 29V8a3 3 0 0 1 6 0v17V5a3 3 0 0 1 6 0v20V8a3 3 0 0 1 6 0v19l1-12a3 3 0 0 1 6 .5l-2 23c-.8 9-6.5 17-15 20l-7-2-8-15c-2-4 3-7 6-4l3 4z"/></svg></div><div id="banner"></div>
+<div id="hurt"></div><div id="sanityHaze" aria-hidden="true"></div><div id="sanityVision" aria-hidden="true"><svg viewBox="0 0 48 120"><path fill="#09090d" d="M18 10c0-6 12-6 12 0v8c7 3 10 10 9 19l-2 18 7 27-7 2-10-22-2 17 7 35h-8l-6-28-6 28H4l9-38-2-18-4 24-6-2 5-34c1-8 4-14 12-17z"/><circle cx="20" cy="19" r="1.5" fill="#8e6e70"/><circle cx="28" cy="19" r="1.5" fill="#8e6e70"/></svg></div><div id="collectiveMark" aria-hidden="true"><svg viewBox="0 0 40 64" width="100%" height="100%"><path fill="#bdb5a1" d="M11 29V8a3 3 0 0 1 6 0v17V5a3 3 0 0 1 6 0v20V8a3 3 0 0 1 6 0v19l1-12a3 3 0 0 1 6 .5l-2 23c-.8 9-6.5 17-15 20l-7-2-8-15c-2-4 3-7 6-4l3 4z"/></svg></div><div id="banner"></div>
 <div id="prompt"></div><div id="toast"></div>
 <div id="tint"></div><div id="air" hidden><span>AIR</span><div id="airBar"><div id="airFill"></div></div></div>
 <div id="fade"></div><div id="lidTop" class="lid"></div><div id="lidBot" class="lid"></div>
@@ -118,7 +130,10 @@
   <p class="desk">WASD move &middot; Mouse look &middot; Shift run &middot; F flashlight &middot; G radar &middot; Space hold breath</p>
   <p class="desk">E use (chests, doors, climb out) &middot; Click attack / shoot &middot; Right mouse aim &middot; R reload &middot; B swap battery &middot; M match &middot; Q potion &middot; J journal</p>
   <p class="desk">1–9 select/use inventory &middot; X drop selected item &middot; Better packs add slots</p>
-  <p class="phone">Turn sideways. Left stick moves, drag the open ground to look.</p>
+  <p class="desk">Sanity: hold Space while still, or find shelter, to recover and clear hallucinations.</p>
+  <p class="phone">Turn sideways. The left finger moves — push farther to run. The right finger looks.</p>
+  <p class="phone">Tap shoots. Hold aims. Double-tap uses. Two fingers: tap the light, hold your breath, swipe up for gear.</p>
+  <p class="phone">Hold still and hold your breath, or find shelter, to recover sanity.</p>
   <p class="go" id="go">Click to begin</p>
   <div id="board">
     <label>NAME <input id="playerName" maxlength="20" autocomplete="nickname" spellcheck="false"></label>
@@ -129,13 +144,7 @@
 </div>
 <div id="touch">
   <div id="stick" aria-hidden="true"><div id="stickKnob"></div></div>
-  <div id="pad">
-    <button type="button" data-hold="ShiftLeft">RUN</button>
-    <button type="button" data-tap="KeyE">USE</button>
-    <button type="button" data-act="fire">FIRE</button>
-    <button type="button" data-act="aim">AIM</button>
-    <button type="button" data-tap="KeyF">LIGHT</button>
-    <button type="button" data-hold="Space">AIR</button>
+  <div id="gear">
     <button type="button" data-tap="KeyR">RELOAD</button>
     <button type="button" data-tap="KeyM">MATCH</button>
     <button type="button" data-tap="KeyQ">POTION</button>

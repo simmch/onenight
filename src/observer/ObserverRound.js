@@ -134,6 +134,9 @@ export function createObserverRound(ctx) {
   }
   function removeDecoy() { if (decoy) { decoy.c.root.removeFromParent(); decoy = null; } }
   function updateDecoy(dt, info) {
+    // False bodies are a sanity hallucination. Recovering above the clear threshold removes
+    // an active false sighting immediately and prevents another one from spawning.
+    if (Number.isFinite(info.sanity) && info.sanity > 68) { removeDecoy(); return; }
     if (!decoy) {
       if (huntOn || !(info.flashlightOn || info.dusk)) return;
       decoyIn -= dt;

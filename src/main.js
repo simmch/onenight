@@ -20,9 +20,9 @@ const CFG = {
   nightStartHour: 21, nightEndHour: 6,
   secondsPerHour: 60,   // 9 in-game hours -> 9 real minutes
   light: { intensity: 45, distance: 40, angle: 0.44, penumbra: 0.5, decay: 1.35 },
-  batterySeconds: 180,  // beam-on time a full battery lasts
+  batterySeconds: 200,  // beam-on time a full battery lasts
   startMatches: 3,
-  match: { seconds: 12, intensity: 5, distance: 8 },
+  match: { seconds: 30, intensity: 5, distance: 10 },
   chestChance: 0.25,    // chance a 16 m chunk holds a chest (about one every 30 m)
   chestReach: 2.2,
 };
@@ -99,7 +99,11 @@ scene.add(camera);
 
 let visionReady = false;
 function resize() {
-  const h = CFG.renderHeight, w = Math.round(h * innerWidth / innerHeight);
+  let vw = innerWidth, vh = innerHeight;
+  if (window.visualViewport && matchMedia('(hover: none) and (pointer: coarse)').matches) {
+    vw = visualViewport.width; vh = visualViewport.height;
+  }
+  const h = CFG.renderHeight, w = Math.max(1, Math.round(h * vw / Math.max(1, vh)));
   renderer.setSize(w, h, false);
   camera.aspect = w / h; camera.updateProjectionMatrix();
   if (visionReady) {
@@ -998,6 +1002,8 @@ let stamina = STAMINA_BASE;
 let needRecover = false;
 let holdTime = 0;
 let zoomFov = 70;
+const SANITY_MAX = 100;
+const sanity = { value: SANITY_MAX, visionIn: 0, visionT: 0, visionLife: 0, visionSide: 'left', warned: false };
 
 function rampParam(param, value, seconds) {
   const t = audioCtx.currentTime;
@@ -1105,6 +1111,11 @@ const fadeEl = document.getElementById('fade'), lidTop = document.getElementById
 const hudEl = document.getElementById('hud');
 const staminaEl = document.getElementById('stamina');
 const staminaFill = document.getElementById('staminaFill');
+const sanityEl = document.getElementById('sanity');
+const sanityFill = document.getElementById('sanityFill');
+const sanityStateEl = document.getElementById('sanityState');
+const sanityHazeEl = document.getElementById('sanityHaze');
+const sanityVisionEl = document.getElementById('sanityVision');
 
 function applyIntro() {
   const t = intro.t;
@@ -1898,8 +1909,15 @@ addEventListener('mousemove', (e) => {
 
 function pressKey(code) { window.dispatchEvent(new KeyboardEvent('keydown', { code, bubbles: true })); }
 function releaseKey(code) { window.dispatchEvent(new KeyboardEvent('keyup', { code, bubbles: true })); }
+function touchView() {
+  const vv = window.visualViewport;
+  const winLand = innerWidth > innerHeight;
+  if (!vv || winLand !== (vv.width > vv.height)) return { w: innerWidth, h: innerHeight, top: 0, left: 0 };
+  return { w: vv.width, h: vv.height, top: vv.offsetTop, left: vv.offsetLeft };
+}
 function beginTouch() {
-  if (innerWidth <= innerHeight) return;
+  const view = touchView();
+  if (view.w <= view.h) return;
   if (finished) { location.reload(); return; }
   if (audioCtx.state === 'suspended') audioCtx.resume();
   if (!started && introSong.paused && introSongNeedsGesture) {
@@ -1907,92 +1925,181 @@ function beginTouch() {
     playIntroSong();
     return;
   }
+  const root = document.documentElement;
+  const req = root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen;
+  if (req && !document.fullscreenElement && !document.webkitFullscreenElement) {
+    const pending = req.call(root);
+    if (pending && pending.catch) pending.catch(() => {});
+  }
+  try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); } catch (err) {}
   playing = true;
   started = true;
   stopIntroSong();
   overlay.style.display = 'none';
+  fitTouch();
 }
+let releaseTouch = () => {};
 function pauseTouch() {
   playing = false;
   overlay.style.display = 'flex';
   holdingBreath = false;
   gun.aiming = false;
   keys.KeyW = keys.KeyA = keys.KeyS = keys.KeyD = keys.ShiftLeft = false;
+  releaseTouch();
   document.getElementById('go').textContent = started ? 'Tap to resume' : 'Tap to begin';
 }
 if (TOUCH) {
   document.body.classList.add('touch');
   const view = document.querySelector('meta[name=viewport]');
   if (view) view.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+  for (const [name, content] of [['mobile-web-app-capable', 'yes'], ['apple-mobile-web-app-capable', 'yes'], ['apple-mobile-web-app-status-bar-style', 'black'], ['theme-color', '#000000']]) {
+    let meta = document.querySelector(`meta[name="${name}"]`);
+    if (!meta) { meta = document.createElement('meta'); meta.name = name; document.head.append(meta); }
+    meta.content = content;
+  }
   document.getElementById('go').textContent = 'Tap to begin';
-  document.getElementById('inventoryHelp').textContent = 'TAP A SLOT · DROP TO THROW';
-  const stick = document.getElementById('stick'), knob = document.getElementById('stickKnob'), pad = document.getElementById('pad');
-  let stickId = null, lookId = null, lookX = 0, lookY = 0;
-  const held = new Map();
-  function moveStick(e) {
-    const r = stick.getBoundingClientRect();
-    const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
-    const len = Math.hypot(dx, dy) || 1, reach = Math.min(34, len);
-    knob.style.transform = `translate(${dx / len * reach}px, ${dy / len * reach}px)`;
-    const x = dx / len * (reach / 34), y = dy / len * (reach / 34);
-    keys.KeyW = y < -0.28; keys.KeyS = y > 0.28; keys.KeyA = x < -0.28; keys.KeyD = x > 0.28;
-  }
-  function releaseStick() {
+  document.getElementById('inventoryHelp').textContent = 'TAP A SLOT';
+  const stick = document.getElementById('stick'), knob = document.getElementById('stickKnob'), gear = document.getElementById('gear');
+  const fingers = new Map();
+  let stickId = null, stickX = 0, stickY = 0, look = null, pair = null, breathOn = false, lastTap = 0, pendingFire = 0;
+  function hideStick() {
     stickId = null;
+    stick.classList.remove('on');
     knob.style.transform = '';
-    keys.KeyW = keys.KeyA = keys.KeyS = keys.KeyD = false;
+    keys.KeyW = keys.KeyA = keys.KeyS = keys.KeyD = keys.ShiftLeft = false;
   }
-  stick.addEventListener('pointerdown', (e) => {
-    if (!playing || intro.active) return;
-    stickId = e.pointerId;
-    try { stick.setPointerCapture(e.pointerId); } catch (err) {}
-    moveStick(e);
-    e.preventDefault();
-    e.stopPropagation();
-  });
-  stick.addEventListener('pointermove', (e) => { if (e.pointerId === stickId) moveStick(e); });
-  stick.addEventListener('pointerup', (e) => { if (e.pointerId === stickId) releaseStick(); });
-  stick.addEventListener('pointercancel', (e) => { if (e.pointerId === stickId) releaseStick(); });
-  function endPad(e) {
-    const code = held.get(e.pointerId);
-    if (code === 'aim') gun.aiming = false;
-    else if (code) releaseKey(code);
-    held.delete(e.pointerId);
-    const btn = e.target.closest?.('button');
-    if (btn) btn.classList.remove('on');
+  function moveStick(x, y) {
+    const dx = x - stickX, dy = y - stickY, len = Math.hypot(dx, dy) || 1, reach = Math.min(46, len);
+    knob.style.transform = `translate(${dx / len * reach}px, ${dy / len * reach}px)`;
+    const nx = dx / len * (reach / 46), ny = dy / len * (reach / 46);
+    keys.KeyW = ny < -0.22; keys.KeyS = ny > 0.22; keys.KeyA = nx < -0.22; keys.KeyD = nx > 0.22;
+    keys.ShiftLeft = reach > 40;
   }
-  pad.addEventListener('pointerdown', (e) => {
-    const btn = e.target.closest('button');
-    if (!btn || !playing) return;
-    e.preventDefault();
-    e.stopPropagation();
-    try { btn.setPointerCapture(e.pointerId); } catch (err) {}
-    btn.classList.add('on');
-    if (btn.dataset.hold) { pressKey(btn.dataset.hold); held.set(e.pointerId, btn.dataset.hold); }
-    else if (btn.dataset.tap) { pressKey(btn.dataset.tap); releaseKey(btn.dataset.tap); btn.classList.remove('on'); }
-    else if (btn.dataset.act === 'fire') { shoot(); btn.classList.remove('on'); }
-    else if (btn.dataset.act === 'aim') { gun.aiming = true; held.set(e.pointerId, 'aim'); }
-    else if (btn.dataset.act === 'pause') { pauseTouch(); btn.classList.remove('on'); }
-  });
-  pad.addEventListener('pointerup', endPad);
-  pad.addEventListener('pointercancel', endPad);
+  function rightFingers() { return [...fingers.values()].filter((f) => f.side === 'right'); }
+  function endBreath() { if (!breathOn) return; breathOn = false; releaseKey('Space'); }
+  function fitTouch() {
+    const box = touchView();
+    document.documentElement.classList.add('touch-root');
+    const b = document.body;
+    b.style.position = 'fixed';
+    b.style.top = box.top + 'px';
+    b.style.left = box.left + 'px';
+    b.style.width = box.w + 'px';
+    b.style.height = box.h + 'px';
+    const canvas = document.querySelector('canvas');
+    canvas.style.position = 'fixed';
+    canvas.style.top = box.top + 'px';
+    canvas.style.left = box.left + 'px';
+    canvas.style.width = box.w + 'px';
+    canvas.style.height = box.h + 'px';
+    resize();
+  }
+  releaseTouch = () => {
+    hideStick();
+    endBreath();
+    gun.aiming = false;
+    clearTimeout(pendingFire);
+    if (look) clearTimeout(look.holdTimer);
+    if (pair) clearTimeout(pair.timer);
+    look = null; pair = null; fingers.clear();
+    gear.classList.remove('on');
+  };
+  fitTouch();
+  addEventListener('resize', fitTouch);
+  if (window.visualViewport) {
+    visualViewport.addEventListener('resize', fitTouch);
+    visualViewport.addEventListener('scroll', fitTouch);
+  }
+  addEventListener('orientationchange', () => setTimeout(fitTouch, 80));
+  function endPointer(e) {
+    const gone = fingers.get(e.pointerId);
+    fingers.delete(e.pointerId);
+    if (e.pointerId === stickId) hideStick();
+    const rights = rightFingers();
+    const wasBreath = breathOn;
+    if (gone && gone.side === 'right' && rights.length < 2 && breathOn) endBreath();
+    if (gone && gone.side === 'right' && rights.length === 0 && pair) {
+      const quick = !pair.opened && !pair.used && !wasBreath && pair.moved < 18 && performance.now() - pair.t < 320;
+      clearTimeout(pair.timer);
+      pair = null;
+      if (quick) { clearTimeout(pendingFire); lastTap = 0; pressKey('KeyF'); releaseKey('KeyF'); }
+    }
+    if (!look || e.pointerId !== look.id) return;
+    clearTimeout(look.holdTimer);
+    const dist = Math.hypot(e.clientX - look.sx, e.clientY - look.sy);
+    const tap = !look.dragged && !look.aiming && dist < 16 && performance.now() - look.t < 320;
+    const doubled = gone && gone.double;
+    if (look.aiming) gun.aiming = false;
+    look = null;
+    if (rights.length > 0 || !tap) return;
+    if (doubled) { lastTap = 0; clearTimeout(pendingFire); pressKey('KeyE'); releaseKey('KeyE'); return; }
+    const stamp = performance.now();
+    lastTap = stamp;
+    pendingFire = setTimeout(() => { if (lastTap === stamp) shoot(); }, 280);
+  }
   document.addEventListener('pointerdown', (e) => {
-    if (!playing || intro.active || lookId != null) return;
-    if (e.target.closest && e.target.closest('#touch, #inventorySlots, #overlay, #turn, #board')) return;
-    lookId = e.pointerId;
-    lookX = e.clientX; lookY = e.clientY;
+    if (!playing || intro.active) return;
+    if (e.target.closest && e.target.closest('#overlay, #turn, #board, #inventorySlots')) return;
+    const btn = e.target.closest && e.target.closest('#gear button');
+    if (btn) {
+      e.preventDefault();
+      if (btn.dataset.tap) { pressKey(btn.dataset.tap); releaseKey(btn.dataset.tap); }
+      else if (btn.dataset.act === 'pause') pauseTouch();
+      gear.classList.remove('on');
+      return;
+    }
+    if (gear.classList.contains('on')) { gear.classList.remove('on'); return; }
+    const side = e.clientX < touchView().w * 0.5 ? 'left' : 'right';
+    const rec = { id: e.pointerId, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, side, t: performance.now(), double: false };
+    if (side === 'right' && performance.now() - lastTap < 320) { rec.double = true; clearTimeout(pendingFire); }
+    fingers.set(e.pointerId, rec);
+    if (side === 'left' && stickId == null) {
+      stickId = e.pointerId; stickX = e.clientX; stickY = e.clientY;
+      stick.style.left = e.clientX + 'px'; stick.style.top = e.clientY + 'px';
+      stick.classList.add('on'); knob.style.transform = '';
+    }
+    const rights = rightFingers();
+    if (rights.length >= 2) {
+      if (look) { clearTimeout(look.holdTimer); if (look.aiming) gun.aiming = false; look = null; }
+      clearTimeout(pendingFire);
+      pair = { t: performance.now(), sy: rights.reduce((sum, f) => sum + f.sy, 0) / rights.length, moved: 0, opened: false, timer: 0 };
+      pair.timer = setTimeout(() => {
+        if (!pair || pair.opened || pair.moved >= 16 || breathOn || rightFingers().length < 2) return;
+        breathOn = true; pair.used = true; pressKey('Space');
+      }, 240);
+      return;
+    }
+    if (side === 'right' && !look) {
+      look = { id: e.pointerId, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: rec.t, dragged: false, aiming: false, holdTimer: 0 };
+      look.holdTimer = setTimeout(() => {
+        if (!look || look.id !== e.pointerId || look.dragged || rightFingers().length >= 2) return;
+        look.aiming = true; gun.aiming = true;
+      }, 280);
+    }
+    e.preventDefault();
   });
   document.addEventListener('pointermove', (e) => {
-    if (e.pointerId !== lookId) return;
-    const dx = e.clientX - lookX, dy = e.clientY - lookY;
-    lookX = e.clientX; lookY = e.clientY;
-    if (!playing || intro.active) return;
+    const f = fingers.get(e.pointerId);
+    if (!f || !playing || intro.active) return;
+    const dx = e.clientX - f.x, dy = e.clientY - f.y;
+    f.x = e.clientX; f.y = e.clientY;
+    const rights = rightFingers();
+    if (rights.length >= 2 && pair) {
+      const ay = rights.reduce((sum, p) => sum + p.y, 0) / rights.length;
+      pair.moved = Math.max(pair.moved, Math.abs(pair.sy - ay));
+      if (!pair.opened && pair.sy - ay > 46) { pair.opened = true; pair.used = true; gear.classList.add('on'); endBreath(); }
+      return;
+    }
+    if (e.pointerId === stickId) { moveStick(e.clientX, e.clientY); return; }
+    if (!look || e.pointerId !== look.id) return;
+    if (Math.hypot(e.clientX - look.sx, e.clientY - look.sy) > 12) { look.dragged = true; clearTimeout(look.holdTimer); }
+    if (!look.dragged && !look.aiming) return;
     const sens = 0.0045 * (1 - gun.ads * 0.4);
     yaw -= dx * sens;
     pitch = Math.max(-1.45, Math.min(1.45, pitch - dy * sens));
   });
-  document.addEventListener('pointerup', (e) => { if (e.pointerId === lookId) lookId = null; });
-  document.addEventListener('pointercancel', (e) => { if (e.pointerId === lookId) lookId = null; });
+  document.addEventListener('pointerup', endPointer);
+  document.addEventListener('pointercancel', endPointer);
   document.addEventListener('touchmove', (e) => { if (!e.target.closest('#board, #playerName')) e.preventDefault(); }, { passive: false });
 }
 
@@ -2654,6 +2761,7 @@ function stainFromInnocent() {
 }
 function damagePlayer(amount, cause = 'ghost') {
   if (finished) return;
+  sanity.value = Math.max(0, sanity.value - Math.min(12, amount * 0.18));
   const reduction = Math.min(0.4, ITEM_DEFS[bag.armorId]?.reduction || 0);
   inv.health = Math.max(0, inv.health - amount * (1 - reduction));
   hurtFlash = 1; sfx.hurt();
@@ -2975,7 +3083,7 @@ function updateObserver(dt, inControl) {
     matchActive: match.t > 0, matchRadius: CFG.match.distance,
     flash: flashLight.intensity > 0.6 && !debugAmbient ? 1 : 0,
     playerMoving: keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD,
-    dusk: isDusk,
+    dusk: isDusk, sanity: sanity.value,
   });
 }
 
@@ -3017,7 +3125,7 @@ function updateCollective(dt, inControl) {
     beamLit: Math.min(1, spot.intensity / L.intensity), beamRange: L.distance, beamAngle: L.angle,
     matchLit: match.t > 0,
     running: playerSpeedNow === CFG.run, moving: playerSpeedNow > 0,
-    moveX: move.x, moveZ: move.z, round: round.n, environment: MAP_NAME,
+    moveX: move.x, moveZ: move.z, round: round.n, environment: MAP_NAME, sanity: sanity.value,
   };
   collective.updateFollower(dt, info);
   if (collective.active) collective.update(dt, info);
@@ -3200,11 +3308,100 @@ function updateClock() {
   if (clockEl.textContent !== text) clockEl.textContent = text;
 }
 
+function nearestHostileDistance() {
+  const px = camera.position.x, pz = camera.position.z;
+  let nearest = Infinity;
+  const consider = (x, z) => { if (Number.isFinite(x) && Number.isFinite(z)) nearest = Math.min(nearest, Math.hypot(x - px, z - pz)); };
+  for (const g of ghosts) if (g.state !== 'die' && g.state !== 'flee') consider(g.x, g.z);
+  if (obsRound.active) for (const o of obsRound.observers) if (o.active) consider(o.position.x, o.position.z);
+  if (collective.active) for (const k of collective.kids) if (!k.gone) consider(k.x, k.z);
+  if (choir.active) {
+    for (const s of choir.singers) if (s.alive) consider(s.x, s.z);
+    if (choir.hive && !choir.hive.dead) consider(choir.hive.x, choir.hive.z);
+  }
+  if (consumer.active && !consumer.dead) consider(consumer.x, consumer.z);
+  return nearest;
+}
+
+function updateSanity(dt, inControl, running) {
+  sanityEl.hidden = !inControl;
+  if (!inControl) {
+    sanityVisionEl.style.opacity = '0';
+    sanityHazeEl.style.opacity = '0';
+    return;
+  }
+
+  const nearest = nearestHostileDistance();
+  const danger = round.rest > 0 ? 0 : THREE.MathUtils.clamp(1 - nearest / 36, 0, 1);
+  const safeToRecover = !swim.in && !burn.in && nearest > 14;
+  const sheltered = indoors && safeToRecover;
+  const breathCalm = holdingBreath && !running && playerSpeedNow < 0.08 && safeToRecover;
+  let recovering = false;
+  if (round.rest > 0) {
+    sanity.value += dt * 1.6;
+    recovering = true;
+  } else if (sheltered) {
+    sanity.value += dt * (holdingBreath && playerSpeedNow < 0.08 ? 1.15 : 0.55);
+    recovering = true;
+  } else if (breathCalm) {
+    sanity.value += dt * 0.62;
+    recovering = true;
+  } else {
+    const hasLight = (flashlight.equipped && flashlight.battery > 0.05) || match.t > 0;
+    const darkness = hasLight ? 0 : 0.035;
+    const stress = 0.018 + darkness + danger * 0.31 + (running ? 0.045 : 0);
+    sanity.value -= dt * stress * (holdingBreath ? 0.72 : 1);
+  }
+  sanity.value = THREE.MathUtils.clamp(sanity.value, 0, SANITY_MAX);
+
+  if (sanity.value <= 62 && !sanity.warned) {
+    sanity.warned = true;
+    toast('Your mind is fraying. Hold Space while still, or reach shelter to recover sanity.');
+  } else if (sanity.value >= 82) sanity.warned = false;
+
+  const value = sanity.value;
+  const stress = THREE.MathUtils.clamp((68 - value) / 68, 0, 1);
+  sanityFill.style.transform = `scaleX(${value / SANITY_MAX})`;
+  sanityEl.classList.toggle('low', value <= 68 && value > 30);
+  sanityEl.classList.toggle('critical', value <= 30);
+  sanityStateEl.textContent = recovering ? 'RECOVERING' : value > 75 ? 'CLEAR' : value > 50 ? 'UNSTEADY' : value > 25 ? 'FRACTURED' : 'BREAKING';
+  sanityEl.title = recovering
+    ? 'Sanity is recovering. Shelter restores it; holding Space while still restores it faster.'
+    : 'Hold Space while still and away from danger, or get indoors, to recover sanity.';
+  sanityHazeEl.style.opacity = String(stress * 0.22);
+
+  if (value > 68) {
+    sanity.visionT = 0;
+    sanity.visionIn = Math.max(sanity.visionIn, 5);
+    sanityVisionEl.style.opacity = '0';
+  } else {
+    sanity.visionIn -= dt;
+    if (sanity.visionIn <= 0 && sanity.visionT <= 0) {
+      sanity.visionLife = 1.25;
+      sanity.visionT = sanity.visionLife;
+      sanity.visionSide = Math.random() < 0.5 ? 'left' : 'right';
+      sanity.visionIn = value <= 25 ? 6 + Math.random() * 6 : value <= 45 ? 11 + Math.random() * 8 : 19 + Math.random() * 12;
+    }
+    if (sanity.visionT > 0) {
+      sanity.visionT = Math.max(0, sanity.visionT - dt);
+      const age = sanity.visionLife - sanity.visionT;
+      const fadeIn = THREE.MathUtils.clamp(age / 0.22, 0, 1);
+      const fadeOut = THREE.MathUtils.clamp(sanity.visionT / 0.55, 0, 1);
+      const strength = value <= 25 ? 0.78 : value <= 45 ? 0.62 : 0.42;
+      sanityVisionEl.classList.toggle('right', sanity.visionSide === 'right');
+      sanityVisionEl.style.opacity = String(Math.min(fadeIn, fadeOut) * strength);
+    } else sanityVisionEl.style.opacity = '0';
+  }
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (TOUCH && playing && innerWidth <= innerHeight) pauseTouch();
-  if (TOUCH) document.body.classList.toggle('playing', playing && innerWidth > innerHeight);
+  if (TOUCH) {
+    const box = touchView();
+    if (playing && box.w <= box.h) pauseTouch();
+    document.body.classList.toggle('playing', playing && box.w > box.h);
+  }
   uTime.value += dt;
 
   let speed = 0, running = false;
@@ -3247,6 +3444,7 @@ function frame(now) {
       }
     }
   } else holdTime = 0;
+  updateSanity(dt, inControl, running);
   tickKids(dt, inControl && round.rest <= 0 && !menace().frenzy && !huntSilence && !collective.encounter);   // the kids go quiet for the last minute, until the next round
   staminaEl.hidden = !inControl;
   staminaEl.style.width = `${STAMINA_BAR * staminaCap}px`;

@@ -184,7 +184,8 @@ export function createCollective(ctx) {
     draw(0, info);
     hooks.say('Something is running toward you.');
   }
-  function showAfterimages() {
+  function showAfterimages(info) {
+    if (Number.isFinite(info?.sanity) && info.sanity > 68) return;
     for (const k of kids) {
       if (k.gone || !k.c.root.visible) continue;
       k.afterImage?.removeFromParent();
@@ -195,6 +196,7 @@ export function createCollective(ctx) {
     }
   }
   function showDistanceEcho(info) {
+    if (Number.isFinite(info.sanity) && info.sanity > 68) return;
     const candidates = kids.filter((k) => !k.gone && k.mode !== 'decoyHidden' && k.role !== 'peripheral');
     if (!candidates.length) return;
     const fx = -Math.sin(info.yaw), fz = -Math.cos(info.yaw), base = Math.max((info.beamRange || 26) + 5, 32);
@@ -350,7 +352,7 @@ export function createCollective(ctx) {
     world.collide(pos, 0.25);
     k.x = pos.x; k.z = pos.z;
     k.speed = Math.hypot(k.x - ox, k.z - oz) / dt;
-    if (k.role === 'fragment' && k.speed > 0.15) {
+    if (k.role === 'fragment' && k.speed > 0.15 && (S.sanity ?? 100) <= 68) {
       if (k.lagDistance === 0 || !k.lagStart) k.lagStart = { x: ox, z: oz, heading: k.heading };
       k.lagDistance = (k.lagDistance || 0) + Math.hypot(k.x - ox, k.z - oz);
       if (k.lagDistance >= 2.4 && !(k.lagT > 0)) {
@@ -381,18 +383,22 @@ export function createCollective(ctx) {
   function update(dt, info) {
     if (S.phase === 'idle' || S.phase === 'done') return;
     if (!info.inControl) { for (const v of voices) v.gain.gain.setTargetAtTime(0, ac.currentTime, 0.05); S.wasRunning = !!(info.running && info.moving); return; }
-    S.t += dt; S.burstClock += dt; S.currentRound = info.round || S.currentRound;
+    S.t += dt; S.burstClock += dt; S.currentRound = info.round || S.currentRound; S.sanity = info.sanity ?? S.sanity ?? 100;
     const p = P(), ph = S.phase;
     if (S.distanceEchoT > 0 && (S.distanceEchoT -= dt) <= 0) { S.distanceEcho?.removeFromParent(); S.distanceEcho = null; }
     if (info.flashlightOn && ['appear', 'warning'].includes(ph)) {
       S.distanceEchoNext -= dt;
       if (S.distanceEchoNext <= 0) { showDistanceEcho(info); S.distanceEchoNext = rand([15, 24]); }
     }
-    if (S.lastFlashlight === true && !info.flashlightOn) showAfterimages();
+    if (S.lastFlashlight === true && !info.flashlightOn) showAfterimages(info);
     S.lastFlashlight = info.flashlightOn;
     for (const k of kids) k.litFreeze = beamHits(k, info);
     for (const k of kids) {
       if (k.role !== 'decoy') continue;
+      if (Number.isFinite(info.sanity) && info.sanity > 68) {
+        if (k.mode === 'decoyHidden') { k.mode = 'arrive'; k.delay = 0; k.c.root.visible = true; }
+        continue;
+      }
       if (k.mode === 'decoyHidden') {
         k.decoyT -= dt; k.speed = 0;
         if (k.decoyT <= 0) {
