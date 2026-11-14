@@ -406,7 +406,7 @@ function refreshChunks(force) {
     for (let i = 0; i < p.length; i += 7) { if (p[i + 3] < 3 && inClearZone(p[i], p[i + 1])) continue; vegLayer.add(p[i], p[i + 6], p[i + 1], p[i + 2], p[i + 3], p[i + 4], p[i + 5]); }
     for (let i = 0; i < q.length; i += 7) glowLayer.add(q[i], q[i + 6], q[i + 1], q[i + 2], q[i + 3], q[i + 4], q[i + 5]);
     if (c.chest) {
-      const tint = c.chest.tier === 'red' ? 0xd27666 : c.chest.tier === 'blue' ? 0x769dc9 : 0xffffff;
+      const tint = c.chest.tier === 'armory' ? 0xd9b86c : c.chest.tier === 'red' ? 0xd27666 : c.chest.tier === 'blue' ? 0x769dc9 : 0xffffff;
       vegLayer.add(c.chest.x, MAP.groundY(c.chest.x, c.chest.z) - 0.05, c.chest.z, 0.95, 0.95, chestCell[opened.has(c.chest.id) ? 1 : 0], 0, tint);
     }
     for (let i = 0; i < c.vents.length && ventCells.length; i += 4) vegLayer.add(c.vents[i], 0, c.vents[i + 1], 1.0, 0.5, ventCells[(i / 4) % ventCells.length], 0);
@@ -1011,7 +1011,9 @@ const GUN = { mag: 6, reload: 2.0, cooldown: 0.3 };   // reload matches the 2 s 
 const inv = { gun: false, mag: 0, reserve: 0, batteries: 0, matches: CFG.startMatches, potions: 0, health: 100 };
 const ITEM_DEFS = {
   knife: { name: 'Knife', icon: './assets/items/combat_knife.png', kind: 'weapon', damage: 1, reach: 1.9, cooldown: 0.48, noise: 0.28 },
-  sword: { name: 'Longsword', icon: './assets/items/longsword.png', kind: 'weapon', damage: 2, reach: 2.55, cooldown: 0.78, noise: 0.52 },
+  sword: { name: 'Worn Sword', icon: './assets/items/longsword.png', kind: 'weapon', damage: 2, reach: 2.55, cooldown: 0.78, noise: 0.52, maxDurability: 18, color: 0xc5b9a6 },
+  sword_iron: { name: 'Tempered Sword', icon: './assets/items/longsword.png', kind: 'weapon', damage: 3, reach: 2.65, cooldown: 0.82, noise: 0.56, maxDurability: 30, color: 0xb4d4dc },
+  sword_hive: { name: 'Choir Cleaver', icon: './assets/items/longsword.png', kind: 'weapon', damage: 4, reach: 2.75, cooldown: 0.92, noise: 0.62, maxDurability: 22, color: 0xe18e85 },
   armor: { name: 'Bone armor', icon: './assets/items/spiked_chestplate.png', kind: 'armor', reduction: 0.2 },
   stamina_tonic: { name: 'Stamina tonic', icon: './assets/items/potion.png', kind: 'consumable' },
   stamina_surge: { name: 'Wind charm', icon: './assets/items/wind_icon.png', kind: 'consumable' },
@@ -1019,7 +1021,7 @@ const ITEM_DEFS = {
   stamina_charm: { name: 'Skull ring', icon: './assets/items/skull_ring.png', kind: 'passive' },
   steady_charm: { name: 'Steady ring', icon: './assets/items/skull_ring.png', kind: 'passive' },
 };
-const bag = { capacity: 6, maxCapacity: 9, items: [], counts: {}, selected: 0, activeWeapon: 'gun', armorId: null, staminaUntil: 0 };
+const bag = { capacity: 6, maxCapacity: 9, items: [], counts: {}, durability: {}, selected: 0, activeWeapon: 'gun', armorId: null, staminaUntil: 0 };
 function inventorySlots() {
   const slots = [];
   if (inv.gun) slots.push({ id: 'pistol', label: 'Pistol', icon: './assets/items/pistol.png', kind: 'weapon', active: bag.activeWeapon === 'gun' });
@@ -1030,7 +1032,10 @@ function inventorySlots() {
   if (radar.acquired) slots.push({ id: 'radar', label: 'Radar', icon: './assets/items/radar.png', kind: 'radar' });
   for (const id of bag.items) {
     const item = ITEM_DEFS[id];
-    if (item) slots.push({ id, label: bag.counts[id] > 1 ? `${item.name} ×${bag.counts[id]}` : item.name, icon: item.icon, kind: item.kind, active: bag.activeWeapon === id || bag.armorId === id });
+    if (item) {
+      const durability = item.maxDurability ? ` ${bag.durability[id] ?? item.maxDurability}/${item.maxDurability}` : '';
+      slots.push({ id, label: `${bag.counts[id] > 1 ? `${item.name} ×${bag.counts[id]}` : item.name}${durability}`, icon: item.icon, kind: item.kind, active: bag.activeWeapon === id || bag.armorId === id });
+    }
   }
   return slots;
 }
@@ -1046,8 +1051,7 @@ function addBagItem(id) {
   }
   bag.items.push(id);
   bag.counts[id] = 1;
-  if (ITEM_DEFS[id].kind === 'armor' && (!bag.armorId || ITEM_DEFS[id].reduction > ITEM_DEFS[bag.armorId].reduction)) bag.armorId = id;
-  if (ITEM_DEFS[id].kind === 'weapon' && id !== 'gun') bag.activeWeapon = id;
+  if (ITEM_DEFS[id].maxDurability) bag.durability[id] = ITEM_DEFS[id].maxDurability;
   return true;
 }
 function consumeBagItem(id) {
@@ -1122,8 +1126,8 @@ function dropInventorySlot() {
     const at = bag.items.indexOf(slot.id);
     if (at < 0) return;
     if (bag.counts[slot.id] > 1) bag.counts[slot.id]--;
-    else { bag.items.splice(at, 1); delete bag.counts[slot.id]; }
-    if (bag.activeWeapon === slot.id) bag.activeWeapon = 'gun';
+    else { bag.items.splice(at, 1); delete bag.counts[slot.id]; delete bag.durability[slot.id]; }
+    if (bag.activeWeapon === slot.id) bag.activeWeapon = inv.gun ? 'gun' : 'none';
     if (bag.armorId === slot.id) bag.armorId = bag.items.find((id) => ITEM_DEFS[id]?.kind === 'armor') || null;
   }
   bag.selected = Math.max(0, Math.min(bag.selected, inventorySlots().length - 1));
@@ -1132,7 +1136,8 @@ function dropInventorySlot() {
 const lootRng = mulberry(CFG.seed ^ 0x51ed);
 const gun = { raise: 0, recoil: 0, reloadT: -1, loaded: false, cooldown: 0, flash: 0, aiming: false, ads: 0 };
 const match = { t: 0 };
-let handSide = 1;          // flashlight hand: 1 right, -1 left (once the pistol takes the right)
+const swordSwing = { t: 1, duration: 0.36 };
+let handSide = 1;          // flashlight hand: 1 right, -1 left (when a right-hand weapon is equipped)
 let nearChest = null;
 held.material.side = THREE.DoubleSide;
 
@@ -1232,7 +1237,8 @@ function renderInventoryHud(inControl) {
   if (!inControl) return;
   const slots = inventorySlots();
   bag.selected = Math.max(0, Math.min(bag.selected, Math.max(0, bag.capacity - 1)));
-  const weapon = bag.activeWeapon === 'gun' ? 'Pistol' : ITEM_DEFS[bag.activeWeapon]?.name || 'None';
+  const weaponDef = ITEM_DEFS[bag.activeWeapon];
+  const weapon = bag.activeWeapon === 'gun' ? 'Pistol' : weaponDef ? `${weaponDef.name}${weaponDef.maxDurability ? ` ${bag.durability[bag.activeWeapon] ?? weaponDef.maxDurability}/${weaponDef.maxDurability}` : ''}` : 'None';
   const armor = bag.armorId ? ITEM_DEFS[bag.armorId]?.name : 'None';
   const surge = bag.staminaUntil > uTime.value ? ` · WIND ${Math.ceil(bag.staminaUntil - uTime.value)}s` : '';
   const signature = `${bag.capacity}|${bag.selected}|${weapon}|${armor}|${slots.map((slot) => `${slot.id}:${slot.label}:${slot.active ? 1 : 0}`).join('|')}`;
@@ -1409,19 +1415,34 @@ function meleeAttack() {
   const item = ITEM_DEFS[bag.activeWeapon], bonuses = bagBonuses();
   if (!item || item.kind !== 'weapon' || gun.cooldown > 0 || swim.in) return;
   gun.cooldown = item.cooldown;
+  if (item.maxDurability) swordSwing.t = 0;
   camera.getWorldDirection(aim);
   sfx.swing();
   const damage = Math.max(1, Math.round(item.damage * bonuses.meleeDamage));
   ghostHit(item.reach, 0.9, damage);
   if (choir.active) choir.shot(camera.position, aim, { range: item.reach, melee: true, damage, noiseVolume: item.noise });
   if (collective.active) collective.shot(camera.position, aim);
+  if (item.maxDurability) {
+    const remaining = (bag.durability[bag.activeWeapon] ?? item.maxDurability) - 1;
+    if (remaining <= 0) {
+      const brokenId = bag.activeWeapon;
+      bag.items = bag.items.filter((id) => id !== brokenId);
+      delete bag.counts[brokenId]; delete bag.durability[brokenId];
+      bag.activeWeapon = inv.gun ? 'gun' : 'none';
+      toast(`${item.name} broke. It lasted ${item.maxDurability} strikes`);
+    } else {
+      bag.durability[bag.activeWeapon] = remaining;
+      if (remaining === 3) toast(`${item.name} is wearing out: 3 strikes remain`);
+    }
+  }
 }
 const openedChests = [];
 const chestLootRolls = new Map();
 const CHEST_LOOT = {
-  common: [['ammo', 22], ['battery', 20], ['matches', 18], ['potion', 10], ['stamina_tonic', 7], ['knife', 5], ['swift_boots', 4], ['stamina_charm', 3], ['steady_charm', 3], ['armor', 2], ['sword', 0.8], ['stamina_surge', 0.6]],
-  blue: [['pack_blue', 14], ['stamina_surge', 9], ['armor', 14], ['sword', 8], ['knife', 8], ['stamina_tonic', 12], ['swift_boots', 9], ['stamina_charm', 8], ['steady_charm', 6], ['battery', 5], ['ammo', 4], ['potion', 3], ['matches', 3]],
-  red: [['pack_red', 17], ['sword', 16], ['armor', 16], ['stamina_surge', 14], ['stamina_charm', 12], ['steady_charm', 9], ['swift_boots', 6], ['knife', 5], ['stamina_tonic', 5], ['battery', 4], ['ammo', 3], ['potion', 2], ['matches', 1]],
+  common: [['ammo', 22], ['battery', 20], ['matches', 18], ['potion', 10], ['stamina_tonic', 7], ['knife', 5], ['swift_boots', 4], ['stamina_charm', 3], ['steady_charm', 3], ['armor', 2], ['sword', 0.8], ['sword_iron', 0.22], ['sword_hive', 0.05], ['stamina_surge', 0.6]],
+  blue: [['pack_blue', 14], ['stamina_surge', 9], ['armor', 14], ['sword', 8], ['sword_iron', 3], ['sword_hive', 0.7], ['knife', 8], ['stamina_tonic', 12], ['swift_boots', 9], ['stamina_charm', 8], ['steady_charm', 6], ['battery', 5], ['ammo', 4], ['potion', 3], ['matches', 3]],
+  red: [['pack_red', 17], ['sword', 16], ['sword_iron', 8], ['sword_hive', 2], ['armor', 16], ['stamina_surge', 14], ['stamina_charm', 12], ['steady_charm', 9], ['swift_boots', 6], ['knife', 5], ['stamina_tonic', 5], ['battery', 4], ['ammo', 3], ['potion', 2], ['matches', 1]],
+  armory: [['sword', 24], ['sword_iron', 16], ['sword_hive', 5], ['armor', 24], ['knife', 20], ['stamina_surge', 9], ['stamina_tonic', 8], ['swift_boots', 5], ['stamina_charm', 4], ['steady_charm', 4], ['pack_blue', 2]],
 };
 function canReceiveLoot(id) {
   if (id === 'pack_blue' || id === 'pack_red') return bag.capacity < bag.maxCapacity;
@@ -1474,7 +1495,8 @@ function grantChestLoot(id) {
   else if (id === 'swift_boots') toast('Found swift boots: sprint faster, but make more noise');
   else if (id === 'stamina_charm') toast('Found a skull ring: stamina capacity rises and movement grows quieter');
   else if (id === 'steady_charm') toast('Found a steady ring: melee weapons hit a little harder');
-  else if (id === 'armor') toast('Found bone armor. It reduces damage while carried');
+  else if (id === 'armor') toast('Found bone armor. Select its inventory slot when you want to equip it');
+  else if (ITEM_DEFS[id].maxDurability) toast(`Found ${ITEM_DEFS[id].name}: damage ${ITEM_DEFS[id].damage}, durability ${ITEM_DEFS[id].maxDurability}. Select its slot to equip`);
   else toast(`Found a ${ITEM_DEFS[id].name}. Select its inventory slot to equip it`);
   return true;
 }
@@ -1483,7 +1505,7 @@ function openChest(c) {
   if (isChoirRound()) choir.noise(camera.position.x, camera.position.z, 0.72, 'chest');
   if (!c.loot) c.loot = chestLootRolls.get(c.id) || null;
   if (!c.loot) {
-    if (isCollectiveRound()) c.loot = 'matches';
+    if (isCollectiveRound() && (c.tier || 'common') === 'common') c.loot = 'matches';
     else if (!radar.acquired && (isChoirRound() || (isObserverRound() && (round.t >= 90 || lootRng() < 0.16)))) c.loot = 'radar';
     else if (!inv.gun) c.loot = 'pistol';
     else if ((c.tier || 'common') === 'common' && lootRng() < 0.12 && lore.dropAt('world', camera.position.x, camera.position.z)) c.loot = 'lore';
@@ -1528,6 +1550,9 @@ document.addEventListener('mouseup', (e) => {
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 function updateItems(dt, bobX, bobY, inControl, raised) {
+  if (inControl && swordSwing.t < swordSwing.duration) swordSwing.t += dt;
+  const swordProgress = Math.min(1, swordSwing.t / swordSwing.duration);
+  const swordArc = swordSwing.t < swordSwing.duration ? Math.sin(swordProgress * Math.PI) : 0;
   // battery drains only while the beam is actually on
   if (inControl && (raised || radar.equipped) && flashlight.battery > 0) {
     flashlight.battery = Math.max(0, flashlight.battery - dt / CFG.batterySeconds);
@@ -1538,8 +1563,9 @@ function updateItems(dt, bobX, bobY, inControl, raised) {
   }
   flashlight.nextFlicker = Math.min(flashlight.nextFlicker, flickerGap(1));
 
-  // flashlight moves to the left hand once the pistol takes the right
-  handSide += ((inv.gun ? -1 : 1) - handSide) * Math.min(1, dt * 8);
+  // A pistol or sword occupies the right hand, leaving the flashlight in the left.
+  const rightHandOccupied = (inv.gun && bag.activeWeapon === 'gun') || bag.activeWeapon.startsWith('sword');
+  handSide += ((rightHandOccupied ? -1 : 1) - handSide) * Math.min(1, dt * 8);
   held.position.x = handSide * HELD_UP.x + bobX;
   held.scale.x = handSide < 0 ? -1 : 1;
   spot.position.x = halo.position.x = 0.22 * handSide;
@@ -1560,11 +1586,13 @@ function updateItems(dt, bobX, bobY, inControl, raised) {
   // pistol: raise, recoil, reload dip. Holding aim brings the sights up to the reticle.
   gunMesh.visible = inv.gun && !radar.equipped && bag.activeWeapon === 'gun';
   knifeMesh.visible = !radar.equipped && bag.activeWeapon === 'knife';
-  swordMesh.visible = !radar.equipped && bag.activeWeapon === 'sword';
+  swordMesh.visible = !radar.equipped && bag.activeWeapon.startsWith('sword');
   knifeMesh.position.set(handSide * 0.34 + bobX, -0.27 + bobY * 0.6, -0.58);
-  swordMesh.position.set(handSide * 0.34 + bobX, -0.27 + bobY * 0.6, -0.58);
+  // Swords share the pistol's right-hand position while the flashlight stays in the left.
+  swordMesh.position.set(0.36 + bobX - swordArc * 0.4, -0.31 + bobY * 0.6 + swordArc * 0.1, -0.6 + swordArc * 0.18);
   knifeMesh.rotation.z = -0.32 + Math.sin(uTime.value * 1.7) * 0.012;
-  swordMesh.rotation.z = -0.24 + Math.sin(uTime.value * 1.7) * 0.012;
+  swordMesh.rotation.z = -0.24 + Math.sin(uTime.value * 1.7) * 0.012 - swordArc * 1.35;
+  swordMesh.material.color.setHex(ITEM_DEFS[bag.activeWeapon]?.color ?? 0xffffff);
   radarMesh.visible = radar.equipped;
   radarMesh.position.set(0.29 + bobX, -0.34 + bobY * 0.6, -0.62);
   radarMesh.rotation.z = -0.08 + Math.sin(uTime.value * 1.7) * 0.015;
@@ -1633,7 +1661,7 @@ function updateItems(dt, bobX, bobY, inControl, raised) {
   ui.reticle.hidden = !inControl || radar.equipped || bag.activeWeapon !== 'gun' || gun.ads < 0.35;
   renderInventoryHud(inControl);
   nearLore = lore.update(dt, inControl, yaw);
-  const chestPrompt = nearChest ? `[E] Open ${nearChest.tier === 'common' ? 'chest' : `${nearChest.tier} supply chest`}` : '';
+  const chestPrompt = nearChest ? `[E] Open ${nearChest.tier === 'armory' ? 'armory cache' : nearChest.tier === 'common' ? 'chest' : `${nearChest.tier} supply chest`}` : '';
   setText(ui.prompt, swim.in ? (mapAction ? mapAction.label : '') : nearLore ? (nearLore.kind === 'item' ? '[E] Pick it up' : '[E] Pick up the paper') : nearChest ? chestPrompt : mapAction ? mapAction.label : '');
   ui.battFill.style.transform = `scaleX(${flashlight.battery})`;
   ui.batt.classList.toggle('low', flashlight.battery < 0.25);

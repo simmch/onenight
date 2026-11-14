@@ -114,35 +114,40 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
     mesh.scale.set(role === 'crawler' ? 1.45 : 1, height / 1.9, 1);
     if (role === 'crawler') mesh.rotation.z = Math.PI * 0.48;
     const a = rng() * Math.PI * 2;
-    const radius = 5 + rng() * 7;
+    // Most singers stay packed around the hive; a few roam wide patrol rings.
+    const radius = role === 'roamer' ? 15 + rng() * 19 : 3.5 + rng() * 8;
     return {
       mesh, x, z, y: 0, role, alive: true,
       hp: C.round >= 4 && rng() < Math.min(0.8, 0.28 + (C.round - 4) * 0.1) ? 2 : 1,
       suspicion: 0, targetX: x, targetZ: z, searchT: 0, attackT: 1 + rng(),
-      guardA: a, guardR: radius, orbit: (rng() - 0.5) * 0.12,
+      guardA: a, guardR: radius,
+      orbit: (rng() < 0.5 ? -1 : 1) * (role === 'roamer' ? 0.07 + rng() * 0.12 : 0.025 + rng() * 0.075),
       phase: rng() * Math.PI * 2, roleDelay: 0, speedFactor: 0.78 + rng() * 0.48,
     };
   }
 
   const requiredGrunts = () => Math.min(3, 1 + Math.floor((C.round - 1) / 3));
+  const singerCap = () => Math.min(30, Math.floor(7 + C.round * 2.3));
   const livingGrunts = () => singers.reduce((n, s) => n + (s.alive && s.role === 'grunt' ? 1 : 0), 0);
   function spawnWave(initial = false, reinforcement = false) {
     if (!C.hive || C.hive.dead) return;
     C.wave++;
     const missingGrunts = Math.max(0, requiredGrunts() - livingGrunts());
-    if (aliveSingers() + missingGrunts > 14) {
-      for (let i = singers.length - 1; i >= 0 && aliveSingers() + missingGrunts > 14; i--) {
+    if (aliveSingers() + missingGrunts > 30) {
+      for (let i = singers.length - 1; i >= 0 && aliveSingers() + missingGrunts > 30; i--) {
         if (singers[i].role === 'grunt') continue;
         scene.remove(singers[i].mesh); singers.splice(i, 1);
       }
     }
-    const cap = Math.min(14, Math.max(Math.floor(3 + C.round * 1.45), aliveSingers() + missingGrunts));
-    const amount = Math.min(Math.max(0, cap - aliveSingers()), reinforcement ? missingGrunts : Math.max(Math.ceil(2 + C.round * 0.72), missingGrunts));
+    const cap = Math.min(30, Math.max(singerCap(), aliveSingers() + missingGrunts));
+    const amount = Math.min(Math.max(0, cap - aliveSingers()), reinforcement ? missingGrunts : Math.max(Math.ceil(4 + C.round * 1.1), missingGrunts));
     const rng = makeRand(((C.round * 0x45d9f3b) ^ (C.wave * 0x119de1f3) ^ Math.floor(C.t * 1000)) | 0);
-    const roles = ['singer', 'crawler', 'backstep', 'echo', 'still'];
+    const roles = ['singer', 'crawler', 'backstep', 'echo', 'roamer', 'roamer', 'still'];
     for (let i = 0; i < amount; i++) {
-      const [x, z] = placePoint(C.hive.x, C.hive.z, 7 + rng() * 7, rng);
-      const role = livingGrunts() < requiredGrunts() ? 'grunt' : roles[(i + C.wave - 1) % roles.length];
+      const role = livingGrunts() < requiredGrunts() ? 'grunt' : roles[(rng() * roles.length) | 0];
+      // Dense ring around the hive, with roaming patrols reaching farther through the map.
+      const patrol = role === 'roamer' || (!initial && rng() < 0.12);
+      const [x, z] = placePoint(C.hive.x, C.hive.z, patrol ? 14 + rng() * 17 : 4 + rng() * 8, rng);
       const s = makeSinger(x, z, rng, role);
       if (initial && Math.hypot(x - camera.position.x, z - camera.position.z) < 11) {
         const [sx, sz] = placePoint(C.hive.x, C.hive.z, 13, rng); s.x = sx; s.z = sz;
@@ -198,14 +203,14 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
   function noise(x, z, volume = 0.4, kind = 'noise') {
     if (!C.active || !C.hive || C.hive.dead) return false;
     volume *= C.noiseScale;
-    const hearing = (25 + C.round * 1.9) * Math.max(0.15, volume);
+    const hearing = (36 + C.round * 2.2) * Math.sqrt(Math.max(0.08, volume));
     let heard = 0;
     for (const s of singers) {
       if (!s.alive) continue;
       const d = Math.hypot(x - s.x, z - s.z);
       if (d > hearing) continue;
       const wall = world.losBlocked?.(s.x, s.z, x, z) ? 0.58 : 1;
-      const signal = Math.max(0, volume * wall - d / hearing * 0.6);
+      const signal = Math.max(0, volume * wall - d / hearing * 0.55);
       if (signal < 0.055) continue;
       heard++;
       const spread = (1 - signal) * (1.8 + C.round * 0.12);
@@ -215,8 +220,8 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
         if (delayed) { tx = delayed.x; tz = delayed.z; }
       }
       s.targetX = tx; s.targetZ = tz;
-      s.searchT = Math.max(s.searchT, 5 + signal * 8);
-      s.suspicion = Math.min(1, Math.max(s.suspicion, 0.18 + signal * 0.92));
+      s.searchT = Math.max(s.searchT, 7 + signal * 9);
+      s.suspicion = Math.min(1, Math.max(s.suspicion, 0.22 + signal * 0.78));
       if (signal > 0.45) C.alert = Math.max(C.alert, Math.min(1, signal + (volume > 0.8 ? 0.5 : 0.12)));
     }
     if (heard) {
@@ -314,8 +319,8 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
       if (s.suspicion > 0.08 && (s.searchT > 0 || C.soundAge < 4.5) && C.lastSound) {
         tx = s.targetX; tz = s.targetZ;
         const d = Math.hypot(tx - s.x, tz - s.z);
-        speed = (1.4 + Math.min(1.2, (C.round - 1) * 0.15) + C.alert * 0.45) * s.speedFactor;
-        if (C.state === 'FRENZY') speed += 0.55;
+        speed = (1.8 + Math.min(1.5, (C.round - 1) * 0.18) + C.alert * 0.65) * s.speedFactor;
+        if (C.state === 'FRENZY') speed += 0.8;
         if (d < 2.1 && s.suspicion > 0.35) { tx = px; tz = pz; speed += 0.25; }
       } else {
         s.guardA += dt * s.orbit * (1 + C.round * 0.025);
@@ -352,7 +357,7 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
 
     C.alive = aliveSingers();
     if (livingGrunts() < requiredGrunts()) spawnWave(false, true);
-    else if (C.alive < Math.min(14, 3 + C.round * 1.45) && C.t >= C.nextWave) spawnWave();
+    else if (C.alive < singerCap() && C.t >= C.nextWave) spawnWave();
 
     if (C.hive && !C.hive.dead) {
       C.hive.pulse += dt;

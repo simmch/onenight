@@ -45,7 +45,8 @@ export function createMap(name, env) {
   function chestTier(cx, cz) {
     if (isSpawnChunk(cx, cz)) return 'common';
     const roll = rngFor(cx, cz, 11)();
-    return roll < 0.045 ? 'red' : roll < 0.22 ? 'blue' : 'common';
+    if (roll < 0.03) return 'armory';
+    return roll < 0.075 ? 'red' : roll < 0.25 ? 'blue' : 'common';
   }
   function openChest(cx, cz) {
     if (isSpawnChunk(cx, cz)) return { x: spawnChest.x, z: spawnChest.z, id: key(cx, cz), tier: 'common' };
