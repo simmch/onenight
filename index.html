@@ -49,10 +49,17 @@
   .lid { height: 0; display: none; box-shadow: 0 0 40px 30px #000; }
   #lidTop { top: 0; } #lidBot { bottom: 0; }
   #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-             background: rgba(0,0,0,.88); text-align: center; cursor: pointer; }
-  #overlay h1 { font-size: 34px; letter-spacing: 10px; font-weight: normal; color: #d8d2c0; margin: 0 0 18px; }
+             background: rgba(0,0,0,.88); text-align: center; cursor: pointer; overflow: auto; }
+  #overlay h1 { font-size: 34px; letter-spacing: 10px; font-weight: normal; color: #d8d2c0; margin: 18px 0; }
   #overlay p { margin: 4px 0; font-size: 14px; line-height: 1.6; }
   #overlay .go { margin-top: 22px; color: #fff; }
+  #board { width: min(440px, 92vw); margin: 8px 0 18px; pointer-events: auto; cursor: default; text-align: left; }
+  #board label { display: flex; gap: 10px; align-items: center; justify-content: center; letter-spacing: 2px; font-size: 12px; }
+  #playerName { width: 180px; padding: 4px 8px; background: #000; color: #d8d2c0; border: 1px solid rgba(185,179,163,.45); font: 14px "Courier New", monospace; letter-spacing: 1px; }
+  #saveScore { display: block; margin: 10px auto 0; background: transparent; color: #fff; border: 1px solid #d8d2c0; font: 12px "Courier New", monospace; letter-spacing: 2px; padding: 6px 12px; cursor: pointer; }
+  #boardNote { min-height: 1.2em; margin: 6px 0 0; text-align: center; font-size: 12px; letter-spacing: 1px; color: #d8d2c0; }
+  #boardList { list-style: none; padding: 0; margin: 8px 0 0; max-height: 168px; overflow: auto; font-size: 12px; letter-spacing: 1px; }
+  #boardList li { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; padding: 3px 0; border-bottom: 1px solid rgba(185,179,163,.15); }
   #reticle { position: fixed; left: 50%; top: 50%; width: 0; height: 0; pointer-events: none; }
   #reticle span { position: absolute; background: #d8d2c0; opacity: .85; }
   #reticle span:nth-child(1) { left: -12px; top: -1px; width: 7px; height: 2px; }
@@ -84,6 +91,12 @@
   <p>E use (chests, doors, climb out) &middot; Click attack / shoot &middot; Right mouse aim &middot; R reload &middot; B swap battery &middot; M match &middot; Q potion &middot; J journal</p>
   <p>1–9 select/use inventory &middot; X drop selected item &middot; Better packs add slots</p>
   <p class="go" id="go">Click to begin</p>
+  <div id="board">
+    <label>NAME <input id="playerName" maxlength="20" autocomplete="nickname" spellcheck="false"></label>
+    <button id="saveScore" type="button" hidden>Save this run</button>
+    <p id="boardNote"></p>
+    <ol id="boardList"></ol>
+  </div>
 </div>
 <script type="module" src="./src/main.js"></script>
 </body>

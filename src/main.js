@@ -7,6 +7,7 @@ import { createChoirRound } from './choir/ChoirRound.js';
 import { createConsumerRound } from './consumer/ConsumerRound.js';
 import { createJournal } from './lore/journal.js';
 import { createLorePickups } from './lore/pickups.js';
+import { mountLeaderboard, offerScore } from './leaderboard.js';
 
 // ───────────────────────── config ─────────────────────────
 const CFG = {
@@ -151,6 +152,7 @@ const visionUniforms = {
   uAspect: { value: 1 },
   uCore: { value: 0.18 },
   uSoft: { value: 0.2 },
+  uStain: { value: 0 },
 };
 const visionMat = new THREE.ShaderMaterial({
   uniforms: visionUniforms,
@@ -164,6 +166,7 @@ const visionMat = new THREE.ShaderMaterial({
     uniform float uAspect;
     uniform float uCore;
     uniform float uSoft;
+    uniform float uStain;
     varying vec2 vUv;
     vec3 tap(vec2 o){ return texture2D(tDiffuse, vUv + o).rgb; }
     void main(){
@@ -177,7 +180,12 @@ const visionMat = new THREE.ShaderMaterial({
       blur /= 8.18;
       float d = length((vUv - vec2(0.5, 0.46)) * vec2(uAspect, 1.0));
       float fringe = smoothstep(uCore, uCore + uSoft, d);
-      gl_FragColor = vec4(mix(sharp, blur, fringe), 1.0);
+      vec3 color = mix(sharp, blur, fringe);
+      float lift = clamp(uStain, 0.0, 1.0);
+      color.r = mix(color.r, min(1.0, color.r * 0.45 + 0.62), lift);
+      color.g = mix(color.g, color.g * 0.38, lift);
+      color.b = mix(color.b, color.b * 0.28, lift);
+      gl_FragColor = vec4(color, 1.0);
     }`,
 });
 const visionScene = new THREE.Scene();
@@ -698,6 +706,8 @@ const [collectiveLoud, collectiveWhisper, collectiveHug] = await Promise.all([
 ].map((file) => loadClip(file, '../sound_effects/kids/')));
 const collectiveThank = await loadClip('thank_you_toddler_girl_saying__#4-1794671332348.mp3');
 const collectiveStop = await loadClip('stop-moving_toddler.mp3');
+const collectiveWalk = await loadClip('toddler_girl_saying__#3-1794671590205.mp3');
+const collectiveHome = await loadClip('GO HOME toddler_girl_saying__#1-1794671460847.mp3');
 const kidClips = await Promise.all([
   'scary_kids_giggling_#1-1794542970900.mp3',
   'scary_kids_giggling_#2-1794542970900.mp3',
@@ -726,6 +736,19 @@ const LAB_LEVEL = 0.85;
 const labGain = audioCtx.createGain();
 labGain.gain.value = 0;
 labGain.connect(ambienceGain);
+// From round 2 on, this score loops under everything: quiet until you run, then it comes up.
+const tailBuffer = await loadClip('Long Quiet Tail.mp3', '../music/');
+const TAIL_LOW = 0.2;
+const TAIL_RUN = 0.55;
+const tailGain = audioCtx.createGain();
+tailGain.gain.value = 0;
+tailGain.connect(audioCtx.destination);
+// From round 4 the score changes: this one loops in place of the earlier track.
+const lingerBuffer = await loadClip('Lingering Quiet.mp3', '../music/');
+const LINGER_LEVEL = 0.22;
+const lingerGain = audioCtx.createGain();
+lingerGain.gain.value = 0;
+lingerGain.connect(audioCtx.destination);
 const WEATHER_DIR = '../weather sounds/';
 const RAIN_FILES = ['heavy_rain_and_thund_#3-1794584535804.mp3', 'heavy_rain_and_thund_#2-1794584537360.mp3'];
 const weatherFiles = forestStorm ? RAIN_FILES : ({
@@ -850,6 +873,59 @@ function syncLabyrinth(on) {
   src.start();
   labSource = src;
   labGain.gain.linearRampToValueAtTime(LAB_LEVEL, t + 1.4);
+}
+
+let tailSource = null;
+let tailRun = null;
+function syncTail(on, running) {
+  if (!tailBuffer) return;
+  if (on !== !!tailSource) {
+    const t = audioCtx.currentTime;
+    tailGain.gain.cancelScheduledValues(t);
+    tailGain.gain.setValueAtTime(tailGain.gain.value, t);
+    tailRun = null;
+    if (!on) {
+      tailGain.gain.linearRampToValueAtTime(0, t + 0.6);
+      try { tailSource.stop(t + 0.65); } catch (e) { /* already stopped */ }
+      tailSource = null;
+      return;
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const src = audioCtx.createBufferSource();
+    src.buffer = tailBuffer;
+    src.loop = true;
+    src.connect(tailGain);
+    src.start();
+    tailSource = src;
+  }
+  if (!tailSource || running === tailRun) return;
+  tailRun = running;
+  const t = audioCtx.currentTime;
+  tailGain.gain.cancelScheduledValues(t);
+  tailGain.gain.setValueAtTime(tailGain.gain.value, t);
+  tailGain.gain.linearRampToValueAtTime(running ? TAIL_RUN : TAIL_LOW, t + (tailGain.gain.value < 0.02 ? 1.4 : 0.45));
+}
+
+let lingerSource = null;
+function syncLinger(on) {
+  if (!lingerBuffer || on === !!lingerSource) return;
+  const t = audioCtx.currentTime;
+  lingerGain.gain.cancelScheduledValues(t);
+  lingerGain.gain.setValueAtTime(lingerGain.gain.value, t);
+  if (!on) {
+    lingerGain.gain.linearRampToValueAtTime(0, t + 0.6);
+    try { lingerSource.stop(t + 0.65); } catch (e) { /* already stopped */ }
+    lingerSource = null;
+    return;
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createBufferSource();
+  src.buffer = lingerBuffer;
+  src.loop = true;
+  src.connect(lingerGain);
+  src.start();
+  lingerSource = src;
+  lingerGain.gain.linearRampToValueAtTime(LINGER_LEVEL, t + 1.4);
 }
 
 let weatherOn = false;
@@ -1060,7 +1136,7 @@ if (intro.active) { hudEl.style.visibility = 'hidden'; applyIntro(); }
 // ───────────────────────── items: chests, battery, matches, gun ─────────────────────────
 // Chest positions and tiers are deterministic per seed. The first chest before the pistol is found guarantees it.
 const GUN = { mag: 6, reload: 2.0, cooldown: 0.3 };   // reload matches the 2 s reload clip
-const inv = { gun: false, mag: 0, reserve: 0, batteries: 0, matches: CFG.startMatches, potions: 0, health: 100 };
+const inv = { gun: false, mag: 0, reserve: 0, batteries: 0, matches: CFG.startMatches, potions: 0, health: 100, maxHealth: 100, innocents: 0 };
 const ITEM_DEFS = {
   knife: { name: 'Knife', icon: './assets/items/combat_knife.png', kind: 'weapon', damage: 1, reach: 1.9, cooldown: 0.48, noise: 0.28 },
   sword: { name: 'Worn Sword', icon: './assets/items/longsword.png', kind: 'weapon', damage: 2, reach: 2.55, cooldown: 0.78, noise: 0.52, maxDurability: 18, color: 0xc5b9a6 },
@@ -1322,7 +1398,7 @@ function batteryDim() { return flashlight.battery >= 0.25 ? 1 : 0.3 + 0.7 * (fla
 
 function onFlashlightToggle() {
   if (!flashlight.equipped) {
-    if (isCollectiveRound() && collective.active) playClip(collectiveThank, 1);
+    if (isCollectiveRound() && collective.active) collective.speak(collectiveThank, 1);
     return;
   }
   match.t = 0;
@@ -1460,14 +1536,14 @@ function strikeMatch() {
   const lightWasOn = flashlight.equipped;
   if (flashlight.equipped && isCollectiveRound() && collective.encounter) toast('Match lit. Your flashlight is off.');
   flashlight.equipped = false;
-  if (lightWasOn && isCollectiveRound() && collective.active) playClip(collectiveThank, 1);
+  if (lightWasOn && isCollectiveRound() && collective.active) collective.speak(collectiveThank, 1);
   sfx.strike();
   maybeScare();
 }
 function drinkPotion() {
   if (inv.potions <= 0) { toast('No potions'); return; }
-  if (inv.health >= 100) { toast("You're not hurt"); return; }
-  inv.potions--; inv.health = Math.min(100, inv.health + 50);
+  if (inv.health >= inv.maxHealth) { toast("You're not hurt"); return; }
+  inv.potions--; inv.health = Math.min(inv.maxHealth, inv.health + 50);
   sfx.drink(); toast('Drank a potion');
 }
 function startReload() {
@@ -1952,6 +2028,38 @@ if (WEATHER) {
   scene.add(lines);
   weather = { uniforms, dir: new THREE.Vector3() };
 }
+// The Consumer can call down a moving storm even on maps that normally have no weather.
+const consumerRainGeometry = new THREE.BufferGeometry();
+const consumerRainSeeds = new Float32Array(1800 * 3);
+for (let i = 0; i < 1800; i++) consumerRainSeeds.set([Math.random(), Math.random(), Math.random()], i * 3);
+consumerRainGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(1800 * 3), 3));
+consumerRainGeometry.setAttribute('aSeed', new THREE.BufferAttribute(consumerRainSeeds, 3));
+const consumerRainUniforms = {
+  uCam: { value: new THREE.Vector3() }, uTime, uIntensity: { value: 0 },
+  uSheltered: { value: META.ceiling ? 1 : 0 },
+  uRoof: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uRoofY: { value: MAP.wallH + 0.3 },
+};
+const consumerRainMaterial = new THREE.ShaderMaterial({
+  uniforms: consumerRainUniforms, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  vertexShader: `
+    attribute vec3 aSeed; uniform vec3 uCam; uniform float uTime, uIntensity, uRoofY, uSheltered; uniform vec4 uRoof[4]; varying float vRain;
+    void main() {
+      vec3 p = aSeed * vec3(36.0, 20.0, 36.0) + vec3(-3.8, -24.0, 1.2) * uTime;
+      p.x = mod(p.x - uCam.x + 18.0, 36.0) - 18.0 + uCam.x;
+      p.y = mod(p.y - uCam.y + 10.0, 20.0) - 10.0 + uCam.y;
+      p.z = mod(p.z - uCam.z + 18.0, 36.0) - 18.0 + uCam.z;
+      float hidden = uSheltered;
+      for (int i = 0; i < 4; i++) { vec4 r = uRoof[i]; if (p.x > r.x && p.x < r.z && p.z > r.y && p.z < r.w && p.y < uRoofY) hidden = 1.0; }
+      vec4 mv = modelViewMatrix * vec4(p, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = clamp((2.0 + 2.8 * uIntensity) * (300.0 / max(1.0, -mv.z)), 1.0, 7.0);
+      vRain = (1.0 - hidden) * uIntensity * (0.55 + 0.45 * sin(uTime * 6.0 + aSeed.x * 80.0));
+    }`,
+  fragmentShader: `varying float vRain; void main() { if (gl_PointCoord.x > 0.3 || gl_PointCoord.y > 0.9) discard; gl_FragColor = vec4(0.39, 0.31, 0.46, vRain * 0.52); }`,
+});
+const consumerRain = new THREE.Points(consumerRainGeometry, consumerRainMaterial);
+consumerRain.frustumCulled = false; scene.add(consumerRain);
+const consumerStorm = { intensity: 0, base: null, warned: false, hazardIn: 8, strikeIn: 7, flashT: 0, flashPower: 0 };
 // lightning: the whole sky flashes, silhouetting whatever is out there, and thunder follows
 const flashLight = new THREE.AmbientLight(0xbfd0ff, 0);
 scene.add(flashLight);
@@ -2146,6 +2254,15 @@ function updateWorld(dt, inControl) {
     flashLight.intensity = flash * (indoors ? 0.5 : 2.4);
     scene.background.copy(bolt.sky).lerp(BOLT_SKY, flash);
   }
+  if (consumerStorm.flashT > 0) {
+    const age = 0.48 - consumerStorm.flashT;
+    consumerStorm.flashT = Math.max(0, consumerStorm.flashT - dt);
+    const pulse = age < 0.07 ? 1 : age < 0.15 ? 0.18 : age < 0.23 ? 0.82 : Math.max(0, 1 - (age - 0.23) / 0.25);
+    const consumerFlash = pulse * consumerStorm.flashPower;
+    flash = Math.max(flash, consumerFlash);
+    flashLight.intensity = Math.max(flashLight.intensity, consumerFlash * (indoors ? 0.45 : 2.1));
+    if (scene.background?.isColor) scene.background.lerp(new THREE.Color(0xb7a0bd), consumerFlash * 0.28);
+  } else if (META.weather !== 'rain' && !debugAmbient) flashLight.intensity = 0;
 
   if (debugAmbient) flashLight.intensity = debugAmbient;
   if (weather) {
@@ -2406,6 +2523,14 @@ function endGame(won) {
   document.getElementById('go').textContent = 'Click to play again';
   overlay.style.display = 'flex';
   if (document.pointerLockElement) document.exitPointerLock();
+  const ending = won ? 'dawn' : deathCause === 'collective' ? `collective ${collective.S.reason || ''}`.trim() : deathCause;
+  offerScore({
+    won,
+    round: Math.max(1, Math.min(20, round.n || 1)),
+    seconds: Math.max(0, Math.min(86400, Math.round(elapsed))),
+    map: (META.label || MAP_NAME || '').slice(0, 40),
+    ending: ending.slice(0, 40),
+  });
 }
 function roundWon(cleared, line) {
   if (choir.active) choir.stop();
@@ -2414,6 +2539,14 @@ function roundWon(cleared, line) {
   banner(`ROUND ${round.n} SURVIVED`, line || (cleared ? 'Every ghost is gone' : 'You outlasted them'));
   round.rest = ROUND.rest;
   for (const g of ghosts) if (g.state !== 'die') { g.state = 'flee'; g.timer = 0; }
+}
+const STAIN_HEALTH = 12, STAIN_MAX = 220, STAIN_RED = 0.1, STAIN_RED_CAP = 0.8;
+function stainFromInnocent() {
+  inv.innocents++;
+  inv.maxHealth = Math.min(STAIN_MAX, inv.maxHealth + STAIN_HEALTH);
+  inv.health = Math.min(inv.maxHealth, inv.health + STAIN_HEALTH);
+  visionUniforms.uStain.value = Math.min(STAIN_RED_CAP, inv.innocents * STAIN_RED);
+  toast(`The blood stays in you. Maximum health ${inv.maxHealth}.`);
 }
 function damagePlayer(amount, cause = 'ghost') {
   if (finished) return;
@@ -2598,10 +2731,12 @@ function updateMonsters(dt, inControl, beamOn) {
     g.mesh.rotation.y = Math.atan2(px - g.x, pz - g.z);
   }
   // HUD
-  hpFill.style.transform = `scaleX(${inv.health / 100})`;
-  hpFill.parentElement.classList.toggle('low', inv.health <= 25);
+  hpFill.parentElement.style.width = `${Math.min(220, 110 * inv.maxHealth / 100)}px`;
+  hpFill.style.transform = `scaleX(${inv.health / inv.maxHealth})`;
+  hpFill.parentElement.classList.toggle('low', inv.health / inv.maxHealth <= 0.25);
   hurtFlash = Math.max(0, hurtFlash - dt * 1.4);
-  hurtEl.style.opacity = hurtFlash * 0.8 + (inv.health <= 25 && !finished ? 0.18 : 0);
+  const blood = Math.min(0.62, inv.innocents * 0.07);
+  hurtEl.style.opacity = Math.min(0.95, hurtFlash * 0.8 + (inv.health / inv.maxHealth <= 0.25 && !finished ? 0.18 : 0) + blood);
   if (bannerTimer > 0) { bannerTimer -= dt; if (bannerTimer <= 0) bannerEl.style.opacity = 0; }
 }
 
@@ -2740,7 +2875,7 @@ function updateObserver(dt, inControl) {
 // Thirty of them. src/collective/ holds the creatures and their rules; here they get the map, the sound and the death.
 const collective = createCollective({
   scene, camera, world: creatureWorld,
-  audio: { ctx: audioCtx, dest: audioCtx.destination, walk: walkBuffer, run: runBuffer, loud: collectiveLoud, whisper: collectiveWhisper, hug: collectiveHug, stopMoving: collectiveStop },
+  audio: { ctx: audioCtx, dest: audioCtx.destination, walk: walkBuffer, run: runBuffer, loud: collectiveLoud, whisper: collectiveWhisper, hug: collectiveHug, stopMoving: collectiveStop, walkAway: collectiveWalk, goHome: collectiveHome },
   hooks: {
     say: (text) => toast(text),
     mark() { document.getElementById('collectiveMark')?.classList.add('on'); },
@@ -2821,6 +2956,7 @@ function updateChoir(dt, inControl) {
   });
 }
 
+const consumerViewShake = { value: 0 };
 const consumer = createConsumerRound({
   scene, camera, world: creatureWorld,
   audio: {
@@ -2831,8 +2967,89 @@ const consumer = createConsumerRound({
   hooks: {
     say: (text) => toast(text),
     damage: (amount, cause) => damagePlayer(amount, cause),
+    stomp(x, z, size) {
+      const distance = Math.hypot(camera.position.x - x, camera.position.z - z), volume = Math.max(0, 1 - distance / 34);
+      if (volume > 0.01) { noise1(0.28, 'lowpass', 150, 48, 0.55 * volume); thump(58, 32, 0.32, 0.44 * volume); }
+      consumerViewShake.value = Math.max(consumerViewShake.value, Math.max(0, 1 - distance / 15) * Math.min(0.42, size * 0.14));
+    },
+    bump(x, z, size) {
+      const distance = Math.hypot(camera.position.x - x, camera.position.z - z), volume = Math.max(0, 1 - distance / 16);
+      if (volume > 0.02) thump(100, 42, 0.15, 0.4 * volume);
+      consumerViewShake.value = Math.max(consumerViewShake.value, Math.max(0, 1 - distance / 10) * Math.min(0.5, size * 0.18));
+    },
+    civilianDeath(outcome) {
+      if (outcome !== 'killed') return;
+      playClip(dyingBuffer, 0.7);
+      stainFromInnocent();
+    },
   },
 });
+const consumerWarpColor = new THREE.Color(0x24101c);
+function updateConsumerAtmosphere(dt, inControl) {
+  const active = consumer.active && !consumer.dead;
+  if (active && !consumerStorm.base) {
+    consumerStorm.base = {
+      fog: scene.fog?.color?.clone(), density: scene.fog?.density,
+      background: scene.background?.isColor ? scene.background.clone() : null,
+    };
+    consumerStorm.hazardIn = 8; consumerStorm.strikeIn = 6 + Math.random() * 4; consumerStorm.warned = false;
+  }
+  const target = active ? THREE.MathUtils.clamp((consumer.sizeScale - 1) / 0.95, 0, 1) : 0;
+  consumerStorm.intensity += (target - consumerStorm.intensity) * Math.min(1, dt * (target > consumerStorm.intensity ? 0.75 : 1.7));
+  consumerRainUniforms.uIntensity.value = consumerStorm.intensity;
+  consumerRain.visible = consumerStorm.intensity > 0.01;
+  consumerRainUniforms.uCam.value.copy(camera.position);
+  if (!active && !consumerStorm.base && consumerStorm.intensity < 0.01) {
+    consumerStorm.intensity = 0; consumerRainUniforms.uIntensity.value = 0; consumerRain.visible = false; return;
+  }
+  const roofs = near.houses, ordered = [];
+  for (let i = 0; i < roofs.length; i += 4) ordered.push([((roofs[i] + roofs[i + 2]) / 2 - camera.position.x) ** 2 + ((roofs[i + 1] + roofs[i + 3]) / 2 - camera.position.z) ** 2, i]);
+  ordered.sort((a, b) => a[0] - b[0]);
+  for (let n = 0; n < 4; n++) {
+    const r = consumerRainUniforms.uRoof.value[n];
+    if (n < ordered.length) { const i = ordered[n][1]; r.set(roofs[i] - 0.7, roofs[i + 1] - 0.7, roofs[i + 2] + 0.7, roofs[i + 3] + 0.7); }
+    else r.set(0, 0, 0, 0);
+  }
+
+  if (!active) {
+    consumerStorm.flashT = 0;
+    if (consumerStorm.base) {
+      if (scene.fog && consumerStorm.base.fog) { scene.fog.color.copy(consumerStorm.base.fog); scene.fog.density = consumerStorm.base.density; }
+      if (scene.background?.isColor && consumerStorm.base.background) scene.background.copy(consumerStorm.base.background);
+      consumerStorm.base = null; consumerStorm.warned = false;
+    }
+    return;
+  }
+  if (consumerStorm.base) {
+    const strength = consumerStorm.intensity;
+    if (scene.fog && consumerStorm.base.fog) {
+      scene.fog.color.copy(consumerStorm.base.fog).lerp(consumerWarpColor, strength * 0.62);
+      scene.fog.density = consumerStorm.base.density * (1 + strength * 0.7) + strength * 0.002;
+    }
+    if (scene.background?.isColor && consumerStorm.base.background) scene.background.copy(consumerStorm.base.background).lerp(consumerWarpColor, strength * 0.34);
+  }
+  if (!consumerStorm.warned && target >= 0.38) {
+    consumerStorm.warned = true;
+    toast('The Consumer is warping the weather. The storm burns anyone caught outside; seek a roof.');
+  }
+  if (!inControl) return;
+  if (target >= 0.55) {
+    consumerStorm.strikeIn -= dt;
+    if (consumerStorm.strikeIn <= 0) {
+      consumerStorm.strikeIn = 8 + Math.random() * 8;
+      consumerStorm.flashT = 0.48; consumerStorm.flashPower = 0.35 + target * 0.65;
+      thunder(consumerStorm.flashPower, 0.18 + (1 - target) * 1.2);
+    }
+    if (!indoors && !META.ceiling) {
+      consumerStorm.hazardIn -= dt;
+      if (consumerStorm.hazardIn <= 0) {
+        damagePlayer(4 + Math.floor(target * 4) + Math.floor(round.n / 3), 'consumer');
+        consumerStorm.hazardIn = 8 + Math.random() * 4;
+        if (!consumer.active) return;
+      }
+    }
+  }
+}
 function startConsumerRound() {
   flashlight.equipped = true;
   if (flashlight.battery <= 0.1 && inv.batteries <= 0) inv.batteries = 1;
@@ -2844,10 +3061,10 @@ function startConsumerRound() {
 }
 function announceConsumer() {
   banner('THE CONSUMER', 'Dozens of civilians are loose. Stop the feeding, save who you can, and kill the thing before it grows.');
-  toast('Hold E beside a civilian for 4.2 seconds without moving to guide them to safety. Gunshots kill civilians too.');
+  toast('Hold E beside a civilian for 4.2 seconds to rescue them. Its growth turns the weather against you; seek a roof when the air darkens.');
 }
 function updateConsumer(dt, inControl) {
-  if (!consumer.active) return;
+  if (!consumer.active) { updateConsumerAtmosphere(dt, inControl); return; }
   const runningNow = (keys.ShiftLeft || keys.ShiftRight) && stamina > 0 && !needRecover && playerSpeedNow > 0;
   consumer.update(dt, {
     inControl: inControl && playing,
@@ -2855,6 +3072,7 @@ function updateConsumer(dt, inControl) {
     moving: playerSpeedNow > 0, running: runningNow, holdingBreath,
     interacting: !!keys.KeyE,
   });
+  updateConsumerAtmosphere(dt, inControl && playing);
 }
 
 function updateClock() {
@@ -2931,6 +3149,8 @@ function frame(now) {
   syncAmbience(started ? 'outside' : null);
   syncWood(started && !finished && MAP_NAME === 'forest');
   syncLabyrinth(started && !finished && MAP_NAME === 'labyrinth');
+  syncTail(started && !finished && round.n >= 2 && round.n < 4, running && inControl);
+  syncLinger(started && !finished && round.n >= 4);
   syncWeather(started && !finished);
   duckAmbience(moving);
 
@@ -2942,7 +3162,9 @@ function frame(now) {
   const rk = runShake.k, strike = Math.pow(1 - Math.abs(Math.sin(bob)), 6);       // spikes as each foot lands
   const judder = Math.sin(uTime.value * 31) * Math.sin(uTime.value * 13.7);
   const runY = rk * (Math.abs(Math.sin(bob)) * 0.075 - 0.04 - strike * 0.03);
-  camera.position.y = MAP.groundY(camera.position.x, camera.position.z) + CFG.eye + bobY + runY + cut.y - swim.sink * 1.15;
+  consumerViewShake.value = Math.max(0, consumerViewShake.value - dt * 2.8);
+  const consumerJolt = Math.sin(uTime.value * 51) * consumerViewShake.value * 0.055;
+  camera.position.y = MAP.groundY(camera.position.x, camera.position.z) + CFG.eye + bobY + runY + cut.y - swim.sink * 1.15 + consumerJolt;
   let sx = rk * (-0.025 - strike * 0.03 + judder * 0.008), sy = rk * Math.cos(bob) * 0.028, sr = rk * (Math.sin(bob) * 0.045 + judder * 0.01);
   if (holdingBreath && holdTime >= 10) {
     const k = Math.min(1, (holdTime - 10) / 1.5);
@@ -2950,7 +3172,7 @@ function frame(now) {
     sy += Math.sin(uTime.value * 21) * 0.018 * k;
     sr += Math.sin(uTime.value * 17) * 0.014 * k;
   }
-  camera.rotation.set(pitch + cut.pitch + sx, yaw + cut.yaw + sy, cut.roll + sr);
+  camera.rotation.set(pitch + cut.pitch + sx, yaw + cut.yaw + sy, cut.roll + sr + consumerViewShake.value * 0.018);
 
   // flashlight raise / lower, with a faint wobble and occasional hard flicker
   flashlight.raise += ((flashlight.equipped ? 1 : 0) - flashlight.raise) * Math.min(1, dt * 9);
@@ -3084,6 +3306,7 @@ function updateLabyrinth(inControl) {
   if (inControl && !finished && !labLeaving && LAB.outside(px, pz)) leaveLabyrinth();
 }
 if (LAB) buildLabDead();
+mountLeaderboard();
 
 // small debug handle for the console
 window.game = { labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { playing = true; started = true; overlay.style.display = 'none'; }, CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };

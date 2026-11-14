@@ -35,10 +35,10 @@ export function createCollective(ctx) {
   const companionShade = new THREE.Color(0x45484a);
   const S = { phase: 'idle', t: 0, center: { x: 0, z: 0 }, warnT: 0, dark: 0, sinceOff: 0, nextLeave: 0, last: null, lastT: 0,
               aggroT: 0, reason: '', captureT: -1, escaped: false, whisper: null, whisperStage: 0, loudPlayed: false, warned: false, syncPhase: 0, field: null, fieldT: 0,
-              formation: 'ring', gapAngle: null, gapClosed: false, gapCommit: 0, burstClock: Math.random() * 1.8, lookAwayT: 7, distanceEcho: null, distanceEchoT: 0, distanceEchoNext: 9, companion: null, currentRound: 0, aimX: 0, aimY: 0, lastFlashlight: null, wasMoving: false, wasSurrounded: false };
+              formation: 'ring', gapAngle: null, gapClosed: false, gapCommit: 0, burstClock: Math.random() * 1.8, lookAwayT: 7, distanceEcho: null, distanceEchoT: 0, distanceEchoNext: 9, companion: null, currentRound: 0, aimX: 0, aimY: 0, lastFlashlight: null, wasMoving: false, wasSurrounded: false, wasRunning: false, wasWalkingAway: false, walkAwayGap: 0, homeSaid: false, runWarned: false, runClearAt: 0, speechUntil: 0 };
 
-  // ── sound: the player's own footstep loops, carried by up to six of them at a time ──
-  const voices = Array.from({ length: 6 }, () => {
+  // ── sound: two of them echo the player's footsteps. Spoken lines use one voice so they never pile up. ──
+  const voices = Array.from({ length: 2 }, () => {
     const gain = ac.createGain(), pan = ac.createStereoPanner(); gain.gain.value = 0;
     gain.connect(pan).connect(ctx.audio.dest);
     return { gain, pan, src: null, buf: null };
@@ -60,7 +60,47 @@ export function createCollective(ctx) {
     const t = ac.currentTime; h.g.gain.cancelScheduledValues(t); h.g.gain.setValueAtTime(h.g.gain.value, t); h.g.gain.linearRampToValueAtTime(0, t + fade);
     try { h.s.stop(t + fade + 0.05); } catch (e) { /* stopped */ }
   }
-  function once(buf, vol, delay = 0) { const g = ac.createGain(), s = ac.createBufferSource(); g.gain.value = vol; s.buffer = buf; s.connect(g).connect(ctx.audio.dest); s.start(ac.currentTime + delay); }
+  let speech = null, speechNext = null;
+  function cutSpeech() {
+    speechNext = null;
+    if (speech) {
+      const src = speech;
+      speech = null;
+      src.onended = null;
+      try { src.stop(); } catch (e) { /* already stopped */ }
+      try { src.disconnect(); } catch (e) { /* already stopped */ }
+    }
+    S.speechUntil = 0;
+  }
+  function beginSpeech(buf, vol) {
+    const g = ac.createGain(), s = ac.createBufferSource();
+    g.gain.value = vol; s.buffer = buf; s.connect(g).connect(ctx.audio.dest); s.start();
+    speech = s;
+    S.speechUntil = ac.currentTime + buf.duration;
+    s.onended = () => {
+      if (speech !== s) return;
+      speech = null;
+      const next = speechNext;
+      speechNext = null;
+      if (next) beginSpeech(next.buf, next.vol);
+      else S.speechUntil = 0;
+    };
+  }
+  // One line at a time. A second line waits, and a newer one replaces that wait so they don't queue up.
+  function once(buf, vol = 1, delay = 0, force = false) {
+    if (!buf) return;
+    if (force) { speechNext = null; if (speech) cutSpeech(); beginSpeech(buf, vol); return; }
+    if (speech) { speechNext = { buf, vol }; return; }
+    beginSpeech(buf, vol);
+  }
+  function speak(buf, vol = 1) { once(buf, vol); }
+  // The first run plays the warning. Running is only fatal once that line has finished.
+  function warnStopRunning() {
+    if (!ctx.audio.stopMoving || S.runWarned) return;
+    once(ctx.audio.stopMoving, 1.1, 0, true);
+    S.runWarned = true;
+    S.runClearAt = ac.currentTime + ctx.audio.stopMoving.duration;
+  }
 
   const P = () => camera.position;
   const distTo = (k) => Math.hypot(k.x - P().x, k.z - P().z);
@@ -75,13 +115,14 @@ export function createCollective(ctx) {
   function start() {
     clear();
     S.phase = 'gather'; S.t = 0; S.escaped = false; S.captureT = -1; S.reason = '';
-    S.warnT = 0; S.whisperStage = 0; S.loudPlayed = false; S.warned = false; S.gapClosed = false; S.gapCommit = 0; S.gapAngle = null; S.expected = C.count; S.burstClock = Math.random() * 1.8; S.lookAwayT = 5 + Math.random() * 4; S.distanceEchoNext = 7 + Math.random() * 8; S.lastFlashlight = null; S.wasMoving = false; S.wasSurrounded = false;
+    S.warnT = 0; S.whisperStage = 0; S.loudPlayed = false; S.warned = false; S.gapClosed = false; S.gapCommit = 0; S.gapAngle = null; S.expected = C.count; S.burstClock = Math.random() * 1.8; S.lookAwayT = 5 + Math.random() * 4; S.distanceEchoNext = 7 + Math.random() * 8; S.lastFlashlight = null; S.wasMoving = false; S.wasSurrounded = false; S.wasRunning = false; S.wasWalkingAway = false; S.walkAwayGap = 0; S.homeSaid = false; S.runWarned = false; S.runClearAt = 0;
   }
   function clear() {
     for (const k of kids) { k.c.root.removeFromParent(); k.afterImage?.removeFromParent(); k.lagImage?.removeFromParent(); }
     kids.length = 0;
     S.distanceEcho?.removeFromParent(); S.distanceEcho = null; S.distanceEchoT = 0;
     stopLoop(S.whisper); S.whisper = null;
+    cutSpeech();
     for (const v of voices) { voiceFor(v, null); v.gain.gain.value = 0; }
   }
   // uneven places around the player: random angles and distances, with just enough gap that they don't stack
@@ -192,7 +233,7 @@ export function createCollective(ctx) {
     if (S.phase === 'aggro' || S.phase === 'captured' || S.phase === 'idle' || S.phase === 'gather' || S.phase === 'done') return;
     S.phase = 'aggro'; S.aggroT = 0; S.reason = reason;
     stopLoop(S.whisper, 0.15); S.whisper = null;
-    once(ctx.audio.hug, 1.0);                             // and then they come
+    once(ctx.audio.hug, 1.0, 0, true);                    // and then they come
     for (const k of kids) {                               // every one of them, even those already gone, turns back
       if (k.gone) { k.gone = false; k.c.root.visible = true; }
       k.mode = 'aggro';
@@ -339,7 +380,7 @@ export function createCollective(ctx) {
   // info: { inControl, yaw, flashlightOn, matchLit, running, moving, clock }
   function update(dt, info) {
     if (S.phase === 'idle' || S.phase === 'done') return;
-    if (!info.inControl) { for (const v of voices) v.gain.gain.setTargetAtTime(0, ac.currentTime, 0.05); return; }
+    if (!info.inControl) { for (const v of voices) v.gain.gain.setTargetAtTime(0, ac.currentTime, 0.05); S.wasRunning = !!(info.running && info.moving); return; }
     S.t += dt; S.burstClock += dt; S.currentRound = info.round || S.currentRound;
     const p = P(), ph = S.phase;
     if (S.distanceEchoT > 0 && (S.distanceEchoT -= dt) <= 0) { S.distanceEcho?.removeFromParent(); S.distanceEcho = null; }
@@ -365,7 +406,12 @@ export function createCollective(ctx) {
         k.mode = 'decoyHidden'; k.decoyT = 0.55; k.c.root.visible = false;
       }
     }
-    if (ph === 'gather') { appear(info); return; }       // they come as soon as the round begins
+    if (ph === 'gather') {       // they come as soon as the round begins
+      appear(info);
+      if (info.running && info.moving && !S.wasRunning) warnStopRunning();
+      S.wasRunning = !!(info.running && info.moving);
+      return;
+    }
 
     // ── the rules (once they have you surrounded) ──
     const live = kids.filter((k) => !k.gone);
@@ -373,7 +419,9 @@ export function createCollective(ctx) {
     for (const k of live) if (k.mode !== 'leave' && k.mode !== 'vanish') nearest = Math.min(nearest, distTo(k));
     const ruled = ph === 'dispersal' || ph === 'last';     // during the first 20 seconds only a shot sets them off
     if (ruled) {
-      if (info.running && info.moving) provoke('ran');
+      const running = !!(info.running && info.moving);
+      const runPunish = S.runWarned && ac.currentTime >= S.runClearAt;
+      if (running && runPunish) provoke('ran');
       else if ((ph === 'last' || S.sinceOff > C.separate) && nearest < (ph === 'last' ? C.lastNear : C.approach)) provoke('approached');   // the 10 seconds are for getting clear of them
       else if ((ph === 'dispersal' || ph === 'last') && info.flashlightOn) provoke('light');
     }
@@ -406,11 +454,23 @@ export function createCollective(ctx) {
       }
     } else S.gapCommit = 0;
 
-    // Surrounded, light still on: starting to move, or still moving as they close in, gets a warning to stop.
+    // Starting to run gets told to stop. Surrounded with the light still on, starting to walk does too.
+    const startedRunning = !!(info.running && info.moving) && !S.wasRunning;
     const surrounded = ph === 'warning' || ph === 'surround';
-    if (surrounded && info.flashlightOn && info.moving && (!S.wasMoving || !S.wasSurrounded) && ctx.audio.stopMoving) once(ctx.audio.stopMoving, 1.1);
+    if (startedRunning) warnStopRunning();
+    else if (surrounded && info.flashlightOn && info.moving && !info.running && (!S.wasMoving || !S.wasSurrounded) && ctx.audio.stopMoving) once(ctx.audio.stopMoving, 1.1);
     S.wasMoving = !!info.moving;
     S.wasSurrounded = surrounded;
+    S.wasRunning = !!(info.running && info.moving);
+    // Walking, not running, and heading away from where they closed in: the quiet line, once per stretch.
+    const ox = p.x - S.center.x, oz = p.z - S.center.z;
+    const leaving = S.phase === 'dispersal' || S.phase === 'last';
+    const walkingAway = leaving && info.moving && !info.running && (ox * (info.moveX || 0) + oz * (info.moveZ || 0)) > 0;
+    if (walkingAway) {
+      if (!S.wasWalkingAway && ctx.audio.walkAway) once(ctx.audio.walkAway, 1);
+      S.wasWalkingAway = true;
+      S.walkAwayGap = 0.45;
+    } else if ((S.walkAwayGap -= dt) <= 0) S.wasWalkingAway = false;
 
     if (ph === 'warning') {
       S.warnT += dt;
@@ -461,7 +521,11 @@ export function createCollective(ctx) {
         if (S.nextLeave <= 0) {
           const stay = kids.filter((k) => k.mode === 'stand' || k.mode === 'arrive');
           const pick = stay.filter((k) => k !== S.last);
-          if (pick.length) { const k = pick[(Math.random() * pick.length) | 0]; k.mode = 'leave'; k.turnT = 0.45 + (k.index % 4) * 0.12; k.leaveDir = S.leaveHeading + (Math.random() - 0.5) * 0.12; }
+          if (pick.length) {
+            const k = pick[(Math.random() * pick.length) | 0];
+            k.mode = 'leave'; k.turnT = 0.45 + (k.index % 4) * 0.12; k.leaveDir = S.leaveHeading + (Math.random() - 0.5) * 0.12;
+            if (!S.homeSaid && ctx.audio.goHome) { once(ctx.audio.goHome, 1); S.homeSaid = true; }
+          }
           S.nextLeave = rand(C.leaveEvery);
         }
         if (kids.every((k) => k === S.last || k.gone || (k.mode === 'leave' && distTo(k) > 16))) { S.phase = 'last'; S.lastT = 0; S.last.mode = 'watch'; }
@@ -566,7 +630,8 @@ export function createCollective(ctx) {
       const [d, k] = m, rel = wrap(Math.atan2(-(k.x - p.x), -(k.z - p.z)) - info.yaw);
       voiceFor(v, k.speed > 2.5 ? ctx.audio.run : ctx.audio.walk);
       const fall = Math.max(0, 1 - d / 34);
-      v.gain.gain.setTargetAtTime(0.5 * fall * fall, ac.currentTime, 0.08);
+      const bed = S.speechUntil > ac.currentTime ? 0 : 0.22 * fall * fall;
+      v.gain.gain.setTargetAtTime(bed, ac.currentTime, 0.08);
       v.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, -Math.sin(rel))), ac.currentTime, 0.08);
     });
   }
@@ -588,7 +653,7 @@ export function createCollective(ctx) {
   }
 
   return {
-    start, update, updateFollower, shot, provoke, clear,
+    start, update, updateFollower, shot, provoke, clear, speak,
     get phase() { return S.phase; },
     get active() { return S.phase !== 'idle'; },
     get encounter() { return S.phase !== 'idle' && S.phase !== 'gather' && S.phase !== 'done'; },
