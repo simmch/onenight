@@ -1,8 +1,12 @@
 import * as THREE from 'three';
 import { createMap, MAP_NAMES, MAP_META, LIQUID, FLOOR, SECRET } from './maps.js';
 import { createObserverRound, OBS_ROUND, bodiesFor } from './observer/ObserverRound.js';
+import { createObserverModel } from './observer/ObserverModel.js';
+import { ObserverAnimator } from './observer/ObserverAnimator.js';
+import { createObserverAudio } from './observer/ObserverAudio.js';
 import { buildCorpse, poseCorpse } from './observer/DeadBodies.js';
 import { createCollective, COLLECTIVE } from './collective/CollectiveRound.js';
+import { buildChild, poseChild, createCollectiveMaterials } from './collective/CollectiveModel.js';
 import { createChoirRound } from './choir/ChoirRound.js';
 import { createConsumerRound } from './consumer/ConsumerRound.js';
 import { createJournal } from './lore/journal.js';
@@ -687,6 +691,9 @@ const [walkBuffer, runBuffer, outsideAmbience, switchBuffer, idleBreath, walkBre
   loadClip('bones_crackle_moveme_#4-1794596756264.mp3'),
   loadClip('radar_sound_#3-1794597997638.mp3'),
 ]);
+// The Observer's jump scares. Optional: if a file is missing the synthesised sounds play instead.
+const [obsScreechBuffer, obsShriekBuffer] = await Promise.all(['obs_screech.mp3', 'obs_shriek.mp3'].map((f) => loadClip(f).catch(() => null)));
+const OBS_CLIPS = { screech: obsScreechBuffer, shriek: obsShriekBuffer };
 // Plain clip player for one-shots and simple loops. Returns a handle for stopClip.
 function playClip(buffer, volume = 1, loop = false) {
   if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -1003,8 +1010,11 @@ let needRecover = false;
 let holdTime = 0;
 let zoomFov = 70;
 const SANITY_MAX = 100;
-const SANITY_LOOK = 16; // per second while a ghost, the Observer, the Collective, or the Consumer is in view
-const sanity = { value: SANITY_MAX, visionIn: 0, visionT: 0, visionLife: 0, visionSide: 'left', warned: false };
+const SANITY_LOOK = 16; // per second while the flashlight beam is on a ghost or the Observer
+const SANITY_LOOK_COLLECTIVE = 12; // the Collective wears at the mind a little more slowly
+const SANITY_POTION = 68; // a mind still above the break can be cleared by a potion
+const SANITY_EMPTY = 45; // seconds at zero before the night ends
+const sanity = { value: SANITY_MAX, warned: false, empty: 0 };
 
 function rampParam(param, value, seconds) {
   const t = audioCtx.currentTime;
@@ -1557,9 +1567,14 @@ function strikeMatch() {
 }
 function drinkPotion() {
   if (inv.potions <= 0) { toast('No potions'); return; }
-  if (inv.health >= inv.maxHealth) { toast("You're not hurt"); return; }
-  inv.potions--; inv.health = Math.min(inv.maxHealth, inv.health + 50);
-  sfx.drink(); toast('Drank a potion');
+  const canCleanse = sanity.value > SANITY_POTION && sanity.value < SANITY_MAX;
+  const hurt = inv.health < inv.maxHealth;
+  if (!canCleanse && !hurt) { toast(sanity.value <= SANITY_POTION ? 'Your mind is too far gone' : "You're not hurt"); return; }
+  inv.potions--;
+  if (hurt) inv.health = Math.min(inv.maxHealth, inv.health + 50);
+  if (canCleanse) { sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; }
+  sfx.drink();
+  toast(canCleanse && hurt ? 'The potion mends you and clears your mind' : canCleanse ? 'The potion clears your mind' : 'Drank a potion');
 }
 function startReload() {
   if (!inv.gun || radar.equipped || bag.activeWeapon !== 'gun' || gun.reloadT >= 0 || inv.mag >= GUN.mag) return;
@@ -2767,7 +2782,7 @@ function endGame(won) {
   syncTick(false);
   if (!won) playClip(dyingBuffer, 0.9);
   document.getElementById('title').textContent = won ? 'DAWN' : deathCause === 'time' ? 'TOO LATE' : 'YOU DIED';
-  document.getElementById('sub').textContent = won ? `You made it through all ${ROUND.count} rounds.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.` }[deathCause] || `The dead took you in round ${round.n}.`);
+  document.getElementById('sub').textContent = won ? `You made it through all ${ROUND.count} rounds.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.`, sanity: 'Your mind was empty for too long.' }[deathCause] || `The dead took you in round ${round.n}.`);
   document.getElementById('go').textContent = TOUCH ? 'Tap to play again' : 'Click to play again';
   overlay.style.display = 'flex';
   if (document.pointerLockElement) document.exitPointerLock();
@@ -3044,7 +3059,7 @@ const ashDropped = new Set();
 const obsRound = createObserverRound({
   scene, camera, world: creatureWorld, rng: mulberry(CFG.seed ^ 0x0b5e),
   ambientScale: MAP_NAME === 'hell' ? 0.12 : 1,
-  audio: { ctx: audioCtx, dest: audioCtx.destination, noise: longNoise, bones: boneBuffer },
+  audio: { ctx: audioCtx, dest: audioCtx.destination, noise: longNoise, bones: boneBuffer, clips: OBS_CLIPS },
   glowAdd: (...a) => glowLayer.add(...a), lightPush: (...a) => extraLights.push(...a),
   fireCells: atlas.sprites.fire, smallCells: atlas.sprites.smallfire || atlas.sprites.fire,
   inv, toast, clearZones, circles: extraCircles, refresh: () => refreshChunks(true),
@@ -3360,37 +3375,234 @@ function nearestHostileDistance() {
   return nearest;
 }
 
-function horrorInSight() {
+function flashlightOnHorror() {
+  if (!(flashlight.equipped && flashlight.raise > 0.6 && flashlight.battery > 0 && spot.intensity > 1)) return false;
   const px = camera.position.x, py = camera.position.y, pz = camera.position.z;
-  const cp = Math.cos(pitch), sp = Math.sin(pitch);
-  const fx = -Math.sin(yaw) * cp, fy = -sp, fz = -Math.cos(yaw) * cp;
-  const flat = Math.hypot(fx, fz) || 1;
-  const aimPitch = Math.atan2(fy, flat);
-  const vHalf = camera.fov * Math.PI / 360 * 0.92;
-  const hHalf = Math.atan(Math.tan(vHalf) * Math.max(0.6, camera.aspect));
-  const seen = (x, y, z) => {
+  camera.getWorldDirection(aim);
+  const lit = (x, y, z) => {
     const dx = x - px, dy = y - py, dz = z - pz;
-    const horiz = Math.hypot(dx, dz), dist = Math.hypot(horiz, dy);
-    if (dist > 48) return false;
-    if (dist < 1.2) return true;
-    if (dx * fx + dy * fy + dz * fz <= 0) return false;
-    const hAng = Math.acos(THREE.MathUtils.clamp((dx * fx + dz * fz) / ((horiz || 1) * flat), -1, 1));
-    const vAng = Math.abs(Math.atan2(dy, horiz) - aimPitch);
-    if (hAng > hHalf || vAng > vHalf) return false;
+    const horiz = Math.hypot(dx, dz), len = Math.hypot(horiz, dy);
+    if (horiz > GHOST.beamRange || len < 1e-4) return false;
+    const ang = Math.acos(THREE.MathUtils.clamp((dx * aim.x + dy * aim.y + dz * aim.z) / len, -1, 1));
+    if (ang >= GHOST.beamAngle) return false;
     return !creatureWorld.losBlocked(px, pz, x, z);
   };
   for (const g of ghosts) {
     if (g.state === 'die') continue;
-    if (seen(g.x, g.mesh.position.y || MAP.groundY(g.x, g.z) + 1.2, g.z)) return true;
+    if (lit(g.x, g.mesh.position.y || MAP.groundY(g.x, g.z) + 1.2, g.z)) return 'ghost';
   }
   if (obsRound.active) for (const o of obsRound.observers) {
-    if (o.active && seen(o.position.x, MAP.groundY(o.position.x, o.position.z) + 1.6, o.position.z)) return true;
+    if (o.active && lit(o.position.x, MAP.groundY(o.position.x, o.position.z) + 1.6, o.position.z)) return 'observer';
   }
   if (collective.active) for (const k of collective.kids) {
-    if (!k.gone && seen(k.x, MAP.groundY(k.x, k.z) + 0.9, k.z)) return true;
+    if (!k.gone && lit(k.x, MAP.groundY(k.x, k.z) + 0.9, k.z)) return 'collective';
   }
-  if (consumer.active && !consumer.dead && seen(consumer.x, MAP.groundY(consumer.x, consumer.z) + 1.7, consumer.z)) return true;
-  return false;
+  return '';
+}
+
+// A breaking mind puts figures in the world. Children appear and run, and the Observer stands in the
+// flashlight beam, then is gone. None of them are real: they do not hunt or harm.
+const mindMats = createCollectiveMaterials();
+const mindKids = Array.from({ length: 4 }, () => {
+  const c = buildChild(mindMats, Math.random);
+  c.root.visible = false;
+  scene.add(c.root);
+  return { c, on: false, x: 0, z: 0, heading: 0, speed: 0, life: 0, delay: 0, gait: 0 };
+});
+const mindObserverModel = createObserverModel();
+mindObserverModel.root.visible = false;
+scene.add(mindObserverModel.root);
+const mindObserverAnim = new ObserverAnimator(mindObserverModel);
+const mindObserver = { on: false, mode: 'stare', x: 0, z: 0, heading: 0, life: 0, speed: 0, stepped: false };
+const mindStats = { kids: 0, observer: 0, kidRun: 0, ahead: 0, fronts: 0, charges: 0, lastMode: '' };
+let mindKidIn = 1.1, mindObsIn = 1.6;
+const beamLive = () => flashlight.equipped && flashlight.battery > 0.05 && flashlight.raise > 0.6 && spot.intensity > 2;
+const matchLive = () => match.t > 0.25 && matchLight.intensity > 0.4;
+const lightLive = () => beamLive() || matchLive();
+const mindAudio = createObserverAudio(audioCtx, audioCtx.destination, longNoise, boneBuffer, OBS_CLIPS);
+
+function hideMindKid(k) { k.on = false; k.c.root.visible = false; }
+function hideMindObserver() {
+  if (mindObserver.on) mindAudio.stop();
+  mindObserver.on = false;
+  mindObserverModel.root.visible = false;
+}
+function mindRel(x, z) {
+  let rel = Math.atan2(-(x - camera.position.x), -(z - camera.position.z)) - yaw;
+  while (rel > Math.PI) rel -= Math.PI * 2;
+  while (rel < -Math.PI) rel += Math.PI * 2;
+  return rel;
+}
+mindObserverAnim.onStep = () => {
+  const o = mindObserver;
+  if (!o.on || !mindObserverModel.root.visible) return;
+  mindAudio.step(mindRel(o.x, o.z), Math.hypot(camera.position.x - o.x, camera.position.z - o.z), o.mode === 'charge' ? 1.15 : 0.55, o.mode === 'charge' ? 1.25 : 1);
+};
+function clearMind() {
+  for (const k of mindKids) hideMindKid(k);
+  hideMindObserver();
+}
+function placeInView(minD, maxD, spread) {
+  const px = camera.position.x, pz = camera.position.z;
+  for (let i = 0; i < 16; i++) {
+    const a = yaw + (Math.random() - 0.5) * 2 * spread;
+    const d = minD + Math.random() * (maxD - minD);
+    const x = px - Math.sin(a) * d, z = pz - Math.cos(a) * d;
+    if (!creatureWorld.walkable(x, z, 0.35) || creatureWorld.losBlocked(px, pz, x, z)) continue;
+    return { x, z, y: MAP.groundY(x, z) };
+  }
+  return null;
+}
+function headingWithRoom(x, z, preferred) {
+  for (const h of [preferred, preferred + Math.PI, yaw + Math.PI, yaw]) {
+    const nx = x + Math.sin(h) * 0.9, nz = z + Math.cos(h) * 0.9;
+    if (creatureWorld.walkable(nx, nz, 0.28)) return h;
+  }
+  return preferred;
+}
+function spawnMindKid() {
+  const slot = mindKids.find((k) => !k.on);
+  const spotAt = placeInView(2.2, beamLive() ? 6.2 : 10, beamLive() ? L.angle * 0.65 : 1.05);
+  if (!slot || !spotAt) return false;
+  const across = yaw + (Math.random() < 0.5 ? 1 : -1) * (0.55 + Math.random() * 1.05);
+  slot.on = true;
+  slot.x = spotAt.x; slot.z = spotAt.z;
+  slot.heading = headingWithRoom(spotAt.x, spotAt.z, across);
+  slot.speed = 2.4 + Math.random() * 2.2;
+  slot.life = 0.85 + Math.random() * 1.7;
+  slot.delay = Math.random() < 0.4 ? 0.12 + Math.random() * 0.28 : 0;
+  slot.gait = Math.random() * 6.28;
+  slot.c.root.visible = true;
+  slot.c.root.position.set(spotAt.x, spotAt.y, spotAt.z);
+  slot.c.root.rotation.y = slot.heading;
+  slot.bornX = spotAt.x; slot.bornZ = spotAt.z;
+  poseChild(slot.c, 'idle', slot.gait, uTime.value);
+  mindStats.kids++;
+  return true;
+}
+function observerLook(o) {
+  const dx = camera.position.x - o.x, dz = camera.position.z - o.z;
+  const face = Math.atan2(dx, dz);
+  let lookYaw = face - o.heading;
+  while (lookYaw > Math.PI) lookYaw -= Math.PI * 2;
+  while (lookYaw < -Math.PI) lookYaw += Math.PI * 2;
+  const lookPitch = Math.atan2(camera.position.y - (MAP.groundY(o.x, o.z) + 2.15), Math.hypot(dx, dz));
+  return { speed: o.speed, lookYaw, lookPitch };
+}
+function spawnMindObserver() {
+  if (mindObserver.on || !lightLive()) return false;
+  const charging = Math.random() < 0.45;
+  const spread = charging ? (beamLive() ? L.angle * 0.9 : 0.5) : (beamLive() ? L.angle * 0.2 : 0.26);
+  const spotAt = placeInView(charging ? 6.2 : 1.8, charging ? (beamLive() ? 12 : 8.2) : 4.2, spread);
+  if (!spotAt) return false;
+  const roll = Math.random();
+  const o = mindObserver;
+  o.on = true;
+  o.mode = charging ? 'charge' : roll < 0.5 ? 'stare' : roll < 0.75 ? 'blink' : 'step';
+  o.x = spotAt.x; o.z = spotAt.z; o.stepped = false;
+  o.life = o.mode === 'charge' ? 2.6 : o.mode === 'blink' ? 0.9 : 0.7 + Math.random() * 0.6;
+  o.speed = o.mode === 'charge' ? 6.4 : o.mode === 'step' ? 0.85 : 0;
+  o.heading = Math.atan2(camera.position.x - spotAt.x, camera.position.z - spotAt.z);
+  mindObserverModel.root.visible = true;
+  mindObserverModel.root.position.set(spotAt.x, spotAt.y, spotAt.z);
+  mindObserverModel.root.rotation.y = o.heading;
+  mindObserverAnim.setState(o.mode === 'charge' ? 'hunt' : o.mode === 'step' ? 'stalk' : 'idle');
+  const look = observerLook(o);
+  mindObserverAnim.update(0.5, look);
+  mindObserverAnim.update(0.5, look);
+  const dx = spotAt.x - camera.position.x, dz = spotAt.z - camera.position.z, dist = Math.hypot(dx, dz) || 1;
+  mindStats.ahead = Math.max(mindStats.ahead, (dx * -Math.sin(yaw) + dz * -Math.cos(yaw)) / dist);
+  mindStats.observer++;
+  mindStats.lastMode = o.mode;
+  if (o.mode === 'charge') mindStats.charges++; else mindStats.fronts++;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const rel = mindRel(o.x, o.z);
+  if (o.mode === 'charge') mindAudio.screech(rel, dist);
+  else mindAudio.exhale(rel, Math.min(dist, 4));
+  return true;
+}
+function updateMind(dt, value) {
+  if (value > 68) {
+    clearMind();
+    mindKidIn = 2.5;
+    mindObsIn = 4;
+    return;
+  }
+  const broken = (68 - value) / 68;
+  for (const k of mindKids) {
+    if (!k.on) continue;
+    k.life -= dt;
+    if (k.life <= 0) { hideMindKid(k); continue; }
+    const moving = k.delay <= 0;
+    if (!moving) k.delay -= dt;
+    k.gait += dt * (moving ? k.speed : 0.4) * 6.5;
+    if (moving) {
+      const nx = k.x + Math.sin(k.heading) * k.speed * dt, nz = k.z + Math.cos(k.heading) * k.speed * dt;
+      if (!creatureWorld.walkable(nx, nz, 0.28)) { hideMindKid(k); continue; }
+      k.x = nx; k.z = nz;
+    }
+    k.c.root.position.set(k.x, MAP.groundY(k.x, k.z), k.z);
+    k.c.root.rotation.y = k.heading;
+    poseChild(k.c, moving ? (k.speed > 3.2 ? 'run' : 'walk') : 'idle', k.gait, uTime.value);
+    if (Math.hypot(k.x - camera.position.x, k.z - camera.position.z) > 16) hideMindKid(k);
+    else mindStats.kidRun = Math.max(mindStats.kidRun, Math.hypot(k.x - k.bornX, k.z - k.bornZ));
+  }
+  if (mindObserver.on) {
+    const o = mindObserver;
+    const distNow = Math.hypot(camera.position.x - o.x, camera.position.z - o.z);
+    if (o.mode === 'charge' && distNow < 1.45) { mindAudio.shriek(); hideMindObserver(); }     // it reaches you, and is gone
+    else if (!lightLive()) hideMindObserver();
+    else {
+      o.life -= dt;
+      if (o.life <= 0) hideMindObserver();
+      else {
+        if (o.mode === 'blink') {
+          mindObserverModel.root.visible = o.life > 0.55 || o.life < 0.36;
+          if (o.life < 0.36 && !o.stepped) {
+            const px = camera.position.x, pz = camera.position.z;
+            const dx = px - o.x, dz = pz - o.z, dist = Math.hypot(dx, dz) || 1;
+            const nx = o.x + dx / dist * 1.15, nz = o.z + dz / dist * 1.15;
+            if (Math.hypot(nx - px, nz - pz) > 1.7 && creatureWorld.walkable(nx, nz, 0.4) && !creatureWorld.losBlocked(px, pz, nx, nz)) {
+              o.x = nx; o.z = nz;
+            }
+            o.stepped = true;
+          }
+        }
+        if (o.mode !== 'cross') o.heading = Math.atan2(camera.position.x - o.x, camera.position.z - o.z);
+        if (o.speed > 0 && mindObserverModel.root.visible) {
+          const nx = o.x + Math.sin(o.heading) * o.speed * dt, nz = o.z + Math.cos(o.heading) * o.speed * dt;
+          const px = camera.position.x, pz = camera.position.z;
+          const room = o.mode === 'charge' ? 1.35 : 1.6;
+          if (Math.hypot(nx - px, nz - pz) > room && creatureWorld.walkable(nx, nz, 0.4)) { o.x = nx; o.z = nz; }
+          else if (o.mode === 'charge') { if (Math.hypot(o.x - px, o.z - pz) < 2.4) mindAudio.shriek(); hideMindObserver(); }   // shriek only if it got to you, not if a wall stopped it
+        }
+        if (mindObserver.on) {
+          mindObserverModel.root.position.set(o.x, MAP.groundY(o.x, o.z), o.z);
+          mindObserverModel.root.rotation.y = o.heading;
+          const dist = Math.hypot(camera.position.x - o.x, camera.position.z - o.z);
+          mindObserverModel.sizeEyes(dist, (camera.fov * Math.PI / 180) / CFG.renderHeight);
+          mindObserverModel.mats.setEyeGlow(o.mode === 'charge' ? 0.9 : 0.62);
+          const look = observerLook(o);
+          mindObserverAnim.update(dt, look);
+          if (mindObserverModel.root.visible) {
+            mindAudio.breath(dt, mindRel(o.x, o.z), dist, o.mode === 'charge' ? 1 : 0.72, o.mode === 'charge' ? 28 : 18);
+            mindAudio.bones(o.speed > 0.4, mindRel(o.x, o.z), dist);
+          }
+        }
+      }
+    }
+  }
+  const cap = 1 + Math.floor(broken * 3);
+  mindKidIn -= dt;
+  if (mindKidIn <= 0 && mindKids.filter((k) => k.on).length < cap) {
+    mindKidIn = spawnMindKid() ? 1.2 + Math.random() * 2.1 + (1 - broken) * 7 : 0.35;
+  }
+  if (!mindObserver.on && lightLive()) {
+    mindObsIn -= dt * (0.55 + broken);
+    if (mindObsIn <= 0) {
+      mindObsIn = spawnMindObserver() ? 3.2 + Math.random() * 4.5 + (1 - broken) * 12 : 0.8;
+    }
+  }
 }
 
 function updateSanity(dt, inControl, running) {
@@ -3398,6 +3610,7 @@ function updateSanity(dt, inControl, running) {
   if (!inControl) {
     sanityVisionEl.style.opacity = '0';
     sanityHazeEl.style.opacity = '0';
+    clearMind();
     return;
   }
 
@@ -3422,11 +3635,20 @@ function updateSanity(dt, inControl, running) {
     const stress = 0.018 + darkness + danger * 0.31 + (running ? 0.045 : 0);
     sanity.value -= dt * stress * (holdingBreath ? 0.72 : 1);
   }
-  if (horrorInSight()) {
-    sanity.value -= dt * SANITY_LOOK;
+  const horror = flashlightOnHorror();
+  if (horror) {
+    sanity.value -= dt * (horror === 'collective' ? SANITY_LOOK_COLLECTIVE : SANITY_LOOK);
     recovering = false;
   }
   sanity.value = THREE.MathUtils.clamp(sanity.value, 0, SANITY_MAX);
+  if (sanity.value <= 0) {
+    sanity.empty += dt;
+    if (sanity.empty >= SANITY_EMPTY) {
+      deathCause = 'sanity';
+      endGame(false);
+      return;
+    }
+  } else sanity.empty = 0;
 
   if (sanity.value <= 62 && !sanity.warned) {
     sanity.warned = true;
@@ -3443,29 +3665,8 @@ function updateSanity(dt, inControl, running) {
     ? 'Sanity is recovering. Shelter restores it; holding Space while still restores it faster.'
     : 'Hold Space while still and away from danger, or get indoors, to recover sanity.';
   sanityHazeEl.style.opacity = String(stress * 0.22);
-
-  if (value > 68) {
-    sanity.visionT = 0;
-    sanity.visionIn = Math.max(sanity.visionIn, 5);
-    sanityVisionEl.style.opacity = '0';
-  } else {
-    sanity.visionIn -= dt;
-    if (sanity.visionIn <= 0 && sanity.visionT <= 0) {
-      sanity.visionLife = 1.25;
-      sanity.visionT = sanity.visionLife;
-      sanity.visionSide = Math.random() < 0.5 ? 'left' : 'right';
-      sanity.visionIn = value <= 25 ? 6 + Math.random() * 6 : value <= 45 ? 11 + Math.random() * 8 : 19 + Math.random() * 12;
-    }
-    if (sanity.visionT > 0) {
-      sanity.visionT = Math.max(0, sanity.visionT - dt);
-      const age = sanity.visionLife - sanity.visionT;
-      const fadeIn = THREE.MathUtils.clamp(age / 0.22, 0, 1);
-      const fadeOut = THREE.MathUtils.clamp(sanity.visionT / 0.55, 0, 1);
-      const strength = value <= 25 ? 0.78 : value <= 45 ? 0.62 : 0.42;
-      sanityVisionEl.classList.toggle('right', sanity.visionSide === 'right');
-      sanityVisionEl.style.opacity = String(Math.min(fadeIn, fadeOut) * strength);
-    } else sanityVisionEl.style.opacity = '0';
-  }
+  sanityVisionEl.style.opacity = '0';
+  updateMind(dt, value);
 }
 
 function frame(now) {
@@ -3691,4 +3892,4 @@ if (LAB) buildLabDead();
 mountLeaderboard();
 
 // small debug handle for the console
-window.game = { labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { playing = true; started = true; overlay.style.display = 'none'; }, CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };
+window.game = { labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };

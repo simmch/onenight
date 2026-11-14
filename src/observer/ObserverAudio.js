@@ -1,7 +1,15 @@
 // Synthesised, positional sound for the Observer: footsteps, breathing, the hunt, and the small
 // disturbances it causes. rel is the sound's bearing from where the player faces (+ = to the left), in radians.
-export function createObserverAudio(ac, dest, noiseBuffer, bonesBuffer) {
+// clips (optional): recorded jump-scare sounds, { screech, shriek } AudioBuffers. Missing ones fall back to synthesis.
+export function createObserverAudio(ac, dest, noiseBuffer, bonesBuffer, clips = {}) {
   const out = ac.createGain(); out.connect(dest);
+  let screeching = null;
+  function playBuffer(buffer, node, vol) {
+    const src = ac.createBufferSource(), g = ac.createGain();
+    src.buffer = buffer; g.gain.value = vol;
+    src.connect(g).connect(node); src.start();
+    return { src, g };
+  }
   function place(rel, dist, maxDist, vol) {
     const gain = ac.createGain(), pan = ac.createStereoPanner(), lp = ac.createBiquadFilter();
     const k = Math.max(0, 1 - dist / maxDist);
@@ -84,7 +92,19 @@ export function createObserverAudio(ac, dest, noiseBuffer, bonesBuffer) {
     hiss(rel, dist) { burst(place(rel, dist, 40, 1.2), 'highpass', 2800, 1400, 0.9, 0.6); tone(place(rel, dist, 40, 0.8), 'sawtooth', 120, 70, 0.7, 0.2); },
     // everything stops, and something very low drops out from under it
     sting() { tone(out, 'sine', 70, 28, 2.6, 0.9); burst(out, 'lowpass', 300, 40, 2.2, 0.5); tone(out, 'triangle', 1900, 1500, 1.1, 0.05, 0.1); },
-    capture() { burst(out, 'bandpass', 1400, 300, 0.7, 2.2); tone(out, 'sawtooth', 90, 30, 0.8, 0.8); },
+    // it comes for you: a screech from where it is, loud enough to be heard a long way off
+    screech(rel, dist) {
+      if (!clips.screech) { this.howl(rel, dist); return; }
+      if (screeching) { try { screeching.src.stop(); } catch (e) { /* done */ } }
+      screeching = playBuffer(clips.screech, place(rel, Math.min(dist, 12), 90, 1.6), 1);
+    },
+    // it is on you: the shriek, full volume, dead centre. Cuts off the screech.
+    shriek() {
+      if (screeching) { const t = ac.currentTime; screeching.g.gain.setTargetAtTime(0, t, 0.03); try { screeching.src.stop(t + 0.2); } catch (e) { /* done */ } screeching = null; }
+      if (clips.shriek) playBuffer(clips.shriek, out, 1.4);
+      else { burst(out, 'bandpass', 1400, 300, 0.7, 2.2); tone(out, 'sawtooth', 90, 30, 0.8, 0.8); }
+    },
+    capture() { this.shriek(); },
     stop() { bG.gain.setTargetAtTime(0, ac.currentTime, 0.05); if (boneGain) boneGain.gain.setTargetAtTime(0, ac.currentTime, 0.05); },
   };
 }

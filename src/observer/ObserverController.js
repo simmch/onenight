@@ -40,7 +40,7 @@ export function createObserver(ctx) {
   const anim = new ObserverAnimator(model);
   const move = new ObserverMovement(world, OBSERVER.radius);
   const vis = createVisibility();
-  const audio = createObserverAudio(ctx.audio.ctx, ctx.audio.dest, ctx.audio.noise, ctx.audio.bones);
+  const audio = createObserverAudio(ctx.audio.ctx, ctx.audio.dest, ctx.audio.noise, ctx.audio.bones, ctx.audio.clips);
   const A = OBSERVER.attention, SP = OBSERVER.speed, HU = OBSERVER.hunt, ST = OBSERVER.stare, MI = OBSERVER.mimic, GU = OBSERVER.guard, AL = OBSERVER.alert;
   // only the first Observer of a round does the imitation; its light exists from the start so no shader rebuild mid-round
   let mLight = null, mLens = null;
