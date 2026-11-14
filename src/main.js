@@ -1338,6 +1338,7 @@ function swapBattery() {
 }
 function drawRadarMap() {
   const g = radarCtx, w = radar.map.width, h = radar.map.height;
+  let displayRange = 32;
   g.clearRect(0, 0, w, h);
   g.fillStyle = '#201d19'; g.fillRect(0, 0, w, h);
   g.strokeStyle = '#726d58'; g.lineWidth = 3; g.strokeRect(2, 2, w - 4, h - 4);
@@ -1353,22 +1354,40 @@ function drawRadarMap() {
   if (choirMode) {
     const phase = (choir.t + (choir.round * 7.3) % 24) % 24;
     const jammed = phase < 4.5;
+    // Holding breath quiets the Choir's sound hunting and lets the listener resolve more of its signal.
+    const listening = holdingBreath ? THREE.MathUtils.clamp((holdTime - 1.5) / 3.5, 0, 1) : 0;
+    const choirRange = range + listening * 24;
+    displayRange = choirRange;
     const hive = choir.hive;
     const hiveDistance = hive ? Math.hypot(hive.x - px, hive.z - pz) : Infinity;
-    const closeSignal = hiveDistance <= 18;
+    const closeSignal = hiveDistance <= 18 + listening * 26;
     g.fillStyle = jammed ? '#e49b69' : closeSignal ? '#9ad7a4' : '#938c78';
     g.font = 'bold 9px monospace';
-    g.fillText(jammed ? 'FEEDBACK: VOICES' : closeSignal ? 'CORE SIGNAL NEAR' : 'SIGNAL SEEKING', w / 2, 37);
+    g.fillText(jammed ? (listening > 0.45 ? 'VOICES THROUGH FEEDBACK' : 'FEEDBACK: VOICES') : listening > 0 ? 'BREATH LOCK: SIGNAL CLEARING' : closeSignal ? 'CORE SIGNAL NEAR' : 'SIGNAL SEEKING', w / 2, 37);
+    const drawSinger = (s, opacity = 1) => {
+      const dx = s.x - px, dz = s.z - pz, d = Math.hypot(dx, dz);
+      const x = cx + THREE.MathUtils.clamp(dx / choirRange, -1, 1) * radius;
+      const y = cy + THREE.MathUtils.clamp(dz / choirRange, -1, 1) * radius;
+      const pulse = 0.5 + 0.5 * Math.sin(now * 7 + s.phase);
+      g.fillStyle = `rgba(255,188,119,${opacity * (0.55 + pulse * 0.4)})`;
+      g.beginPath(); g.arc(x, y, d > choirRange ? 2.5 : 4 + pulse, 0, Math.PI * 2); g.fill();
+    };
+    const drawHive = () => {
+      const dx = hive.x - px, dz = hive.z - pz;
+      const x = cx + THREE.MathUtils.clamp(dx / choirRange, -1, 1) * radius;
+      const y = cy + THREE.MathUtils.clamp(dz / choirRange, -1, 1) * radius;
+      const pulse = 0.5 + 0.5 * Math.sin(now * 5);
+      g.fillStyle = choir.exposed ? '#ff655b' : '#d7e98f';
+      g.beginPath(); g.arc(x, y, 4 + pulse * 2, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = `rgba(215,233,143,${(jammed ? 0.4 : 0.7) * (1 - pulse)})`; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(x, y, 7 + pulse * 8, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = '#d7e98f'; g.font = '8px monospace'; g.fillText(`${Math.round(hiveDistance)}m`, x, y - 9);
+    };
     if (jammed) {
       // During feedback the core disappears; the listener locks onto the bodies bound to it.
       for (const singer of choir.singers) {
         if (!singer.alive) continue;
-        const dx = singer.x - px, dz = singer.z - pz, d = Math.hypot(dx, dz);
-        const x = cx + THREE.MathUtils.clamp(dx / range, -1, 1) * radius;
-        const y = cy + THREE.MathUtils.clamp(dz / range, -1, 1) * radius;
-        const pulse = 0.5 + 0.5 * Math.sin(now * 7 + singer.phase);
-        g.fillStyle = `rgba(255,188,119,${0.55 + pulse * 0.4})`;
-        g.beginPath(); g.arc(x, y, d > range ? 2.5 : 4 + pulse, 0, Math.PI * 2); g.fill();
+        drawSinger(singer);
       }
       for (let i = 0; i < 85; i++) {
         g.fillStyle = `rgba(216,169,117,${0.08 + Math.random() * 0.2})`;
@@ -1378,22 +1397,30 @@ function drawRadarMap() {
         g.fillStyle = 'rgba(222,156,110,.14)';
         g.fillRect(12, 48 + Math.random() * (h - 60), w - 24, 3 + Math.random() * 7);
       }
+      // A long, held breath can cut a faint Hive echo through the static when it is close enough.
+      if (closeSignal && listening > 0.45 && Math.random() < listening) drawHive();
     } else if (closeSignal && hive) {
-      const dx = hive.x - px, dz = hive.z - pz, d = hiveDistance;
-      const x = cx + THREE.MathUtils.clamp(dx / range, -1, 1) * radius;
-      const y = cy + THREE.MathUtils.clamp(dz / range, -1, 1) * radius;
-      const pulse = 0.5 + 0.5 * Math.sin(now * 5);
-      g.fillStyle = choir.exposed ? '#ff655b' : '#d7e98f';
-      g.beginPath(); g.arc(x, y, 4 + pulse * 2, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = `rgba(215,233,143,${0.7 * (1 - pulse)})`; g.lineWidth = 1.5;
-      g.beginPath(); g.arc(x, y, 7 + pulse * 8, 0, Math.PI * 2); g.stroke();
-      g.fillStyle = '#d7e98f'; g.font = '8px monospace'; g.fillText(`${Math.round(d)}m`, x, y - 9);
+      if (listening > 0) {
+        const contacts = choir.singers.filter((s) => s.alive)
+          .map((s) => ({ s, d: Math.hypot(s.x - px, s.z - pz) }))
+          .sort((a, b) => a.d - b.d);
+        const count = Math.max(1, Math.ceil(contacts.length * listening));
+        for (const contact of contacts.slice(0, count)) drawSinger(contact.s, 0.3 + listening * 0.7);
+      }
+      drawHive();
     } else {
       // At range the instrument only gives a hunting sweep, so it guides without giving away the nest.
       const sweep = now * 1.3;
       g.strokeStyle = 'rgba(198,191,154,.26)'; g.lineWidth = 2;
       g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, radius, sweep - 0.34, sweep + 0.34); g.closePath(); g.stroke();
-      g.fillStyle = 'rgba(201,194,160,.5)'; g.font = '8px monospace'; g.fillText('NO FIX', cx, cy - radius - 5);
+      if (listening > 0) {
+        const contacts = choir.singers.filter((s) => s.alive)
+          .map((s) => ({ s, d: Math.hypot(s.x - px, s.z - pz) }))
+          .sort((a, b) => a.d - b.d);
+        const count = Math.ceil(contacts.length * listening);
+        for (const contact of contacts.slice(0, count)) drawSinger(contact.s, 0.3 + listening * 0.7);
+      }
+      g.fillStyle = 'rgba(201,194,160,.5)'; g.font = '8px monospace'; g.fillText(listening > 0 ? 'SINGER RETURNS' : 'NO FIX', cx, cy - radius - 5);
     }
   } else if (hunt) {                                    // while it hunts the radar is unreliable: static, tearing, dropouts
     for (let i = 0; i < 170; i++) { g.fillStyle = `rgba(${150 + Math.random() * 100 | 0},${190 + Math.random() * 60 | 0},150,${0.15 + Math.random() * 0.45})`; g.fillRect(12 + Math.random() * (w - 24), 25 + Math.random() * (h - 38), 2, 2); }
@@ -1421,7 +1448,7 @@ function drawRadarMap() {
   g.translate(cx, cy); g.rotate(-yaw);
   g.fillStyle = '#e5e1cc'; g.beginPath(); g.moveTo(0, -8); g.lineTo(-5, 6); g.lineTo(0, 3); g.lineTo(5, 6); g.closePath(); g.fill();
   g.restore();
-  g.fillStyle = '#a9bf9f'; g.font = '10px monospace'; g.fillText('32 m', w / 2, h - 8);
+  g.fillStyle = '#a9bf9f'; g.font = '10px monospace'; g.fillText(`${Math.round(displayRange)} m`, w / 2, h - 8);
   radarTexture.needsUpdate = true;
 }
 function strikeMatch() {
