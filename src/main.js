@@ -591,6 +591,8 @@ const creatureWorld = {
 const keys = {};
 const overlay = document.getElementById('overlay');
 let yaw = 0, pitch = 0, playing = false, finished = false, started = false;
+// Phones and tablets only. A mouse-driven desktop never takes this path.
+const TOUCH = matchMedia('(hover: none) and (pointer: coarse)').matches;
 
 // Title-screen loop. Stops once the night actually begins (not on the pause screen).
 const INTRO_SONG_VOLUME = 0.5;
@@ -1385,6 +1387,7 @@ function renderInventoryHud(inControl) {
     } else {
       const label = document.createElement('span'); label.textContent = 'empty'; cell.append(label);
     }
+    if (TOUCH) cell.addEventListener('click', (e) => { e.stopPropagation(); useInventorySlot(i); });
     ui.inventorySlots.append(cell);
   }
 }
@@ -1866,6 +1869,7 @@ addEventListener('keyup', (e) => {
 });
 addEventListener('blur', () => { holdingBreath = false; gun.aiming = false; });
 overlay.addEventListener('click', () => {
+  if (TOUCH) { beginTouch(); return; }
   if (finished) { location.reload(); return; }
   if (audioCtx.state === 'suspended') audioCtx.resume();
   // Autoplay is often blocked until a gesture. That first click starts the
@@ -1891,6 +1895,106 @@ addEventListener('mousemove', (e) => {
   yaw -= e.movementX * sens;
   pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * sens));
 });
+
+function pressKey(code) { window.dispatchEvent(new KeyboardEvent('keydown', { code, bubbles: true })); }
+function releaseKey(code) { window.dispatchEvent(new KeyboardEvent('keyup', { code, bubbles: true })); }
+function beginTouch() {
+  if (innerWidth <= innerHeight) return;
+  if (finished) { location.reload(); return; }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (!started && introSong.paused && introSongNeedsGesture) {
+    introSongNeedsGesture = false;
+    playIntroSong();
+    return;
+  }
+  playing = true;
+  started = true;
+  stopIntroSong();
+  overlay.style.display = 'none';
+}
+function pauseTouch() {
+  playing = false;
+  overlay.style.display = 'flex';
+  holdingBreath = false;
+  gun.aiming = false;
+  keys.KeyW = keys.KeyA = keys.KeyS = keys.KeyD = keys.ShiftLeft = false;
+  document.getElementById('go').textContent = started ? 'Tap to resume' : 'Tap to begin';
+}
+if (TOUCH) {
+  document.body.classList.add('touch');
+  const view = document.querySelector('meta[name=viewport]');
+  if (view) view.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+  document.getElementById('go').textContent = 'Tap to begin';
+  document.getElementById('inventoryHelp').textContent = 'TAP A SLOT · DROP TO THROW';
+  const stick = document.getElementById('stick'), knob = document.getElementById('stickKnob'), pad = document.getElementById('pad');
+  let stickId = null, lookId = null, lookX = 0, lookY = 0;
+  const held = new Map();
+  function moveStick(e) {
+    const r = stick.getBoundingClientRect();
+    const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+    const len = Math.hypot(dx, dy) || 1, reach = Math.min(34, len);
+    knob.style.transform = `translate(${dx / len * reach}px, ${dy / len * reach}px)`;
+    const x = dx / len * (reach / 34), y = dy / len * (reach / 34);
+    keys.KeyW = y < -0.28; keys.KeyS = y > 0.28; keys.KeyA = x < -0.28; keys.KeyD = x > 0.28;
+  }
+  function releaseStick() {
+    stickId = null;
+    knob.style.transform = '';
+    keys.KeyW = keys.KeyA = keys.KeyS = keys.KeyD = false;
+  }
+  stick.addEventListener('pointerdown', (e) => {
+    if (!playing || intro.active) return;
+    stickId = e.pointerId;
+    try { stick.setPointerCapture(e.pointerId); } catch (err) {}
+    moveStick(e);
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  stick.addEventListener('pointermove', (e) => { if (e.pointerId === stickId) moveStick(e); });
+  stick.addEventListener('pointerup', (e) => { if (e.pointerId === stickId) releaseStick(); });
+  stick.addEventListener('pointercancel', (e) => { if (e.pointerId === stickId) releaseStick(); });
+  function endPad(e) {
+    const code = held.get(e.pointerId);
+    if (code === 'aim') gun.aiming = false;
+    else if (code) releaseKey(code);
+    held.delete(e.pointerId);
+    const btn = e.target.closest?.('button');
+    if (btn) btn.classList.remove('on');
+  }
+  pad.addEventListener('pointerdown', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn || !playing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try { btn.setPointerCapture(e.pointerId); } catch (err) {}
+    btn.classList.add('on');
+    if (btn.dataset.hold) { pressKey(btn.dataset.hold); held.set(e.pointerId, btn.dataset.hold); }
+    else if (btn.dataset.tap) { pressKey(btn.dataset.tap); releaseKey(btn.dataset.tap); btn.classList.remove('on'); }
+    else if (btn.dataset.act === 'fire') { shoot(); btn.classList.remove('on'); }
+    else if (btn.dataset.act === 'aim') { gun.aiming = true; held.set(e.pointerId, 'aim'); }
+    else if (btn.dataset.act === 'pause') { pauseTouch(); btn.classList.remove('on'); }
+  });
+  pad.addEventListener('pointerup', endPad);
+  pad.addEventListener('pointercancel', endPad);
+  document.addEventListener('pointerdown', (e) => {
+    if (!playing || intro.active || lookId != null) return;
+    if (e.target.closest && e.target.closest('#touch, #inventorySlots, #overlay, #turn, #board')) return;
+    lookId = e.pointerId;
+    lookX = e.clientX; lookY = e.clientY;
+  });
+  document.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== lookId) return;
+    const dx = e.clientX - lookX, dy = e.clientY - lookY;
+    lookX = e.clientX; lookY = e.clientY;
+    if (!playing || intro.active) return;
+    const sens = 0.0045 * (1 - gun.ads * 0.4);
+    yaw -= dx * sens;
+    pitch = Math.max(-1.45, Math.min(1.45, pitch - dy * sens));
+  });
+  document.addEventListener('pointerup', (e) => { if (e.pointerId === lookId) lookId = null; });
+  document.addEventListener('pointercancel', (e) => { if (e.pointerId === lookId) lookId = null; });
+  document.addEventListener('touchmove', (e) => { if (!e.target.closest('#board, #playerName')) e.preventDefault(); }, { passive: false });
+}
 
 // ───────────────────────── loop ─────────────────────────
 const clockEl = document.getElementById('clock');
@@ -2520,7 +2624,7 @@ function endGame(won) {
   if (!won) playClip(dyingBuffer, 0.9);
   document.getElementById('title').textContent = won ? 'DAWN' : deathCause === 'time' ? 'TOO LATE' : 'YOU DIED';
   document.getElementById('sub').textContent = won ? `You made it through all ${ROUND.count} rounds.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.` }[deathCause] || `The dead took you in round ${round.n}.`);
-  document.getElementById('go').textContent = 'Click to play again';
+  document.getElementById('go').textContent = TOUCH ? 'Tap to play again' : 'Click to play again';
   overlay.style.display = 'flex';
   if (document.pointerLockElement) document.exitPointerLock();
   const ending = won ? 'dawn' : deathCause === 'collective' ? `collective ${collective.S.reason || ''}`.trim() : deathCause;
@@ -2763,7 +2867,11 @@ let journalWasPlaying = false;
 const journal = createJournal({
   onOpen() { journalWasPlaying = playing; playing = false; holdingBreath = false; gun.aiming = false; syncFootsteps(null); if (document.pointerLockElement) document.exitPointerLock(); overlay.style.display = 'none'; },
   onClose() {
-    if (journalWasPlaying && !finished) { playing = true; const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => { playing = false; overlay.style.display = 'flex'; }); }
+    if (journalWasPlaying && !finished) {
+      playing = true;
+      if (TOUCH) overlay.style.display = 'none';
+      else { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => { playing = false; overlay.style.display = 'flex'; }); }
+    }
     else overlay.style.display = 'flex';
   },
 });
@@ -3095,6 +3203,8 @@ function updateClock() {
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (TOUCH && playing && innerWidth <= innerHeight) pauseTouch();
+  if (TOUCH) document.body.classList.toggle('playing', playing && innerWidth > innerHeight);
   uTime.value += dt;
 
   let speed = 0, running = false;
