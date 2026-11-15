@@ -1011,7 +1011,8 @@ let holdTime = 0;
 let zoomFov = 70;
 const SANITY_MAX = 100;
 const SANITY_LOOK = 16; // per second while the flashlight beam is on a ghost or the Observer
-const SANITY_LOOK_COLLECTIVE = 12; // the Collective wears at the mind a little more slowly
+const SANITY_LOOK_COLLECTIVE = 3.5; // the Collective wears at the mind much more slowly
+const SANITY_BREATH_COLLECTIVE = 3.2; // holding Space while still brings it back, even with them close
 const SANITY_POTION = 68; // a mind still above the break can be cleared by a potion
 const SANITY_EMPTY = 45; // seconds at zero before the night ends
 const sanity = { value: SANITY_MAX, warned: false, empty: 0 };
@@ -3645,10 +3646,16 @@ function updateSanity(dt, inControl, running) {
   const danger = round.rest > 0 ? 0 : THREE.MathUtils.clamp(1 - nearest / 36, 0, 1);
   const safeToRecover = !swim.in && !burn.in && nearest > 14;
   const sheltered = indoors && safeToRecover;
-  const breathCalm = holdingBreath && !running && playerSpeedNow < 0.08 && safeToRecover;
+  const stillBreath = holdingBreath && !running && playerSpeedNow < 0.08 && !swim.in && !burn.in;
+  // The Collective stands close enough that the usual "away from danger" rule never lets a breath land.
+  const collectiveBreath = stillBreath && isCollectiveRound() && collective.encounter;
+  const breathCalm = stillBreath && safeToRecover;
   let recovering = false;
   if (round.rest > 0) {
     sanity.value += dt * 1.6;
+    recovering = true;
+  } else if (collectiveBreath) {
+    sanity.value += dt * SANITY_BREATH_COLLECTIVE;
     recovering = true;
   } else if (sheltered) {
     sanity.value += dt * (holdingBreath && playerSpeedNow < 0.08 ? 1.15 : 0.55);
@@ -3663,7 +3670,7 @@ function updateSanity(dt, inControl, running) {
     sanity.value -= dt * stress * (holdingBreath ? 0.72 : 1);
   }
   const horror = flashlightOnHorror();
-  if (horror) {
+  if (horror && !(horror === 'collective' && collectiveBreath)) {
     sanity.value -= dt * (horror === 'collective' ? SANITY_LOOK_COLLECTIVE : SANITY_LOOK);
     recovering = false;
   }
@@ -3679,7 +3686,9 @@ function updateSanity(dt, inControl, running) {
 
   if (sanity.value <= 62 && !sanity.warned) {
     sanity.warned = true;
-    toast('Your mind is fraying. Hold Space while still, or reach shelter to recover sanity.');
+    toast(collectiveBreath || (isCollectiveRound() && collective.encounter)
+      ? 'Your mind is fraying. Hold Space while still to bring it back.'
+      : 'Your mind is fraying. Hold Space while still, or reach shelter to recover sanity.');
   } else if (sanity.value >= 82) sanity.warned = false;
 
   const value = sanity.value;
@@ -3689,8 +3698,10 @@ function updateSanity(dt, inControl, running) {
   sanityEl.classList.toggle('critical', value <= 30);
   sanityStateEl.textContent = recovering ? 'RECOVERING' : value > 75 ? 'CLEAR' : value > 50 ? 'UNSTEADY' : value > 25 ? 'FRACTURED' : 'BREAKING';
   sanityEl.title = recovering
-    ? 'Sanity is recovering. Shelter restores it; holding Space while still restores it faster.'
-    : 'Hold Space while still and away from danger, or get indoors, to recover sanity.';
+    ? (collectiveBreath
+      ? 'Holding Space is restoring your sanity.'
+      : 'Sanity is recovering. Shelter restores it; holding Space while still restores it faster.')
+    : 'Hold Space while still to recover sanity. During the Collective that works even while they are close. Shelter helps too.';
   sanityHazeEl.style.opacity = String(stress * 0.22);
   sanityVisionEl.style.opacity = '0';
   updateMind(dt, value);
