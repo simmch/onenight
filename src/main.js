@@ -1381,7 +1381,16 @@ const $ = (id) => document.getElementById(id);
 const ui = { status: $('status'), battFill: $('battFill'), batt: $('batt'), spare: $('spare'), matches: $('matches'), potions: $('potions'), reticle: $('reticle'),
              ammo: $('ammo'), ammoText: $('ammoText'), prompt: $('prompt'), toast: $('toast'), inventory: $('inventoryPanel'), inventoryMeta: $('inventoryMeta'), inventorySlots: $('inventorySlots') };
 let toastTimer = 0;
-function toast(text) { ui.toast.textContent = text; ui.toast.style.opacity = 1; toastTimer = 3; }
+function useWords(text) {
+  if (!TOUCH || text == null) return text;
+  return String(text)
+    .replace(/\[Hold E\]\s*/g, 'Press and hold to ')
+    .replace(/\[E\]\s*/g, 'Press and hold to ')
+    .replace(/press E to/gi, 'press and hold to')
+    .replace(/\bHold E\b/g, 'Press and hold')
+    .replace(/Press and hold to ([A-Z])/g, (_, c) => 'Press and hold to ' + c.toLowerCase());
+}
+function toast(text) { ui.toast.textContent = useWords(text); ui.toast.style.opacity = 1; toastTimer = 3; }
 function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
 let inventoryHudSignature = '';
 function renderInventoryHud(inControl) {
@@ -1857,7 +1866,7 @@ function updateItems(dt, bobX, bobY, inControl, raised) {
   renderInventoryHud(inControl);
   nearLore = lore.update(dt, inControl, yaw);
   const chestPrompt = nearChest ? `[E] Open ${nearChest.tier === 'armory' ? 'armory cache' : nearChest.tier === 'common' ? 'chest' : `${nearChest.tier} supply chest`}` : '';
-  setText(ui.prompt, swim.in ? (mapAction ? mapAction.label : '') : nearLore ? (nearLore.kind === 'item' ? '[E] Pick it up' : '[E] Pick up the paper') : nearChest ? chestPrompt : mapAction ? mapAction.label : '');
+  setText(ui.prompt, useWords(swim.in ? (mapAction ? mapAction.label : '') : nearLore ? (nearLore.kind === 'item' ? '[E] Pick it up' : '[E] Pick up the paper') : nearChest ? chestPrompt : mapAction ? mapAction.label : ''));
   ui.battFill.style.transform = `scaleX(${flashlight.battery})`;
   ui.batt.classList.toggle('low', flashlight.battery < 0.25);
   setText(ui.spare, '+' + inv.batteries);
@@ -2010,9 +2019,17 @@ if (TOUCH) {
     canvas.style.height = box.h + 'px';
     resize();
   }
+  function touchCanUse() {
+    const label = mapAction && mapAction.label;
+    if (swim.in) return !!(label && label.includes('[E]'));
+    if (nearLore || nearChest) return true;
+    return !!(label && (label.includes('[E]') || label.includes('Hold E')));
+  }
+  function endUse() { if (look && look.using) { look.using = false; releaseKey('KeyE'); } }
   releaseTouch = () => {
     hideStick();
     endBreath();
+    endUse();
     gun.aiming = false;
     clearTimeout(pendingFire);
     if (look) clearTimeout(look.holdTimer);
@@ -2053,6 +2070,15 @@ if (TOUCH) {
   function endPointer(e) {
     const gone = fingers.get(e.pointerId);
     fingers.delete(e.pointerId);
+    if (look && e.pointerId === look.id && look.using) {
+      clearTimeout(look.holdTimer);
+      endUse();
+      look = null;
+      clearTimeout(pendingFire);
+      lastTap = 0;
+      if (e.pointerId === stickId) hideStick();
+      return;
+    }
     if (e.pointerId === stickId) hideStick();
     const rights = rightFingers();
     const wasBreath = breathOn;
@@ -2112,7 +2138,7 @@ if (TOUCH) {
     }
     const rights = rightFingers();
     if (rights.length >= 2) {
-      if (look) { clearTimeout(look.holdTimer); if (look.aiming) gun.aiming = false; look = null; }
+      if (look) { clearTimeout(look.holdTimer); if (look.aiming) gun.aiming = false; endUse(); look = null; }
       clearTimeout(pendingFire);
       pair = { t: performance.now(), sy: rights.reduce((sum, f) => sum + f.sy, 0) / rights.length, moved: 0, opened: false, timer: 0 };
       pair.timer = setTimeout(() => {
@@ -2125,6 +2151,7 @@ if (TOUCH) {
       look = { id: e.pointerId, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: rec.t, dragged: false, aiming: false, holdTimer: 0 };
       look.holdTimer = setTimeout(() => {
         if (!look || look.id !== e.pointerId || look.dragged || rightFingers().length >= 2) return;
+        if (touchCanUse()) { look.using = true; clearTimeout(pendingFire); lastTap = 0; pressKey('KeyE'); return; }
         look.aiming = true; gun.aiming = true;
       }, 280);
     }
