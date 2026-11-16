@@ -14,7 +14,7 @@ import { createLorePickups } from './lore/pickups.js';
 import { mountLeaderboard, offerScore } from './leaderboard.js';
 import { createTitleScreen } from './cinema/TitleScreen.js';
 import { createCutscenes } from './cinema/Cutscenes.js';
-import { GUN_TIERS, LIGHT_TIERS, RADAR_TIERS, COSTS, PARTS_IN_CHEST, SPRITES, createWorkbench } from './gear/upgrades.js';
+import { GUN_TIERS, LIGHT_TIERS, RADAR_TIERS, COSTS, PARTS_IN_CHEST, SPRITES, createWorkbench, createPicker } from './gear/upgrades.js';
 
 // ───────────────────────── config ─────────────────────────
 const CFG = {
@@ -2010,12 +2010,12 @@ overlay.addEventListener('click', () => {
 document.addEventListener('pointerlockchange', () => {
   playing = document.pointerLockElement === renderer.domElement;
   if (!playing && cutscenes.dying) cutscenes.skipDeath();          // Esc while dying: straight to the death screen
-  overlay.style.display = playing || journal.isOpen || bench.isOpen || cutscenes.dying ? 'none' : 'flex';
+  overlay.style.display = playing || journal.isOpen || bench.isOpen || picker.isOpen || cutscenes.dying ? 'none' : 'flex';
   if (playing) { started = true; stopIntroSong(); }
   else { holdingBreath = false; gun.aiming = false; syncFootsteps(null); }
   if (!playing && !finished) document.getElementById('go').textContent = started ? 'Paused. Click to resume' : 'Click to begin';
 });
-document.addEventListener('pointerlockerror', () => { if (!journal.isOpen && !bench.isOpen && !finished) { playing = false; overlay.style.display = 'flex'; } });
+document.addEventListener('pointerlockerror', () => { if (!journal.isOpen && !bench.isOpen && !picker.isOpen && !finished) { playing = false; overlay.style.display = 'flex'; } });
 addEventListener('mousemove', (e) => {
   if (!playing || intro.active) return;
   const sens = 0.0022 * (1 - gun.ads * 0.4);
@@ -2618,6 +2618,8 @@ function updateWorld(dt, inControl) {
   if (bodyAction && (!mapAction || bodyAction.label.startsWith('[E]'))) mapAction = bodyAction;
   const civilianAction = inControl && consumer.active ? consumer.worldAction(px, pz, yaw) : null;
   if (civilianAction) mapAction = civilianAction;
+  updateSalvage(dt, inControl, px, pz, -Math.sin(yaw), -Math.cos(yaw));
+  updateDrops(dt, inControl, px, pz);
   glowLayer.commit();
 
   // hand the pooled lights to the nearest torches, lava and jets
@@ -2963,7 +2965,7 @@ function roundWon(cleared, line) {
   if (round.n >= ROUND.count) { endGame(true); return; }
   banner(`ROUND ${round.n} SURVIVED`, line || (cleared ? 'Every ghost is gone' : 'You outlasted them'));
   addParts(3); toast(`Salvaged 3 parts (${inv.parts}). C opens the workbench`);
-  round.rest = ROUND.rest;
+  round.rest = ROUND.rest; round.pickIn = 1.6;          // and in a moment, the survivor's pick
   for (const g of ghosts) if (g.state !== 'die') { g.state = 'flee'; g.timer = 0; }
 }
 const STAIN_HEALTH = 12, STAIN_MAX = 220, STAIN_RED = 0.1, STAIN_RED_CAP = 0.8;
@@ -3013,7 +3015,8 @@ function hurtGhost(g, damage) {
   if (g.hp <= 0) {
     g.state = 'die'; setAnim(g, 'die'); playGhostDeath(g);
     if (Math.random() < 0.45) dropLore('request', g.x, g.z, 'It leaves something behind.');
-    if (Math.random() < (g.brute ? 1 : 0.4)) addParts(g.brute ? 2 : 1);
+    // what it was carrying falls where it died: a brute always leaves a proper bundle, the rest sometimes leave a part or two
+    if (g.brute) dropBundle(g.x, g.z, 2, 'blue'); else if (Math.random() < 0.45) dropBundle(g.x, g.z, 1 + ((Math.random() * 2) | 0), Math.random() < 0.12 ? 'common' : null);
   } else { g.state = 'hurt'; g.timer = 0.5; g.anim = ''; setAnim(g, 'hurt'); playGhostShot(g); }
 }
 
@@ -3028,6 +3031,7 @@ function updateMonsters(dt, inControl, beamOn) {
     for (const g of ghosts) if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
   } else {
     if (!round.announced) { round.announced = true; if (isObserverRound()) announceObserver(); else if (isCollectiveRound()) announceCollective(); else if (isChoirRound()) announceChoir(); else if (isConsumerRound()) announceConsumer(); else { banner(META.label, `Round ${round.n}. ${ghosts.length} dark ghosts are out there. Keep your light off them`); if (MAP_HINT[MAP_NAME]) toast(MAP_HINT[MAP_NAME]); } }
+    if (round.pickIn > 0 && (round.pickIn -= dt) <= 0 && !finished) picker.open(pickOffers());
     if (round.rest > 0) {
       round.rest -= dt;
       if (round.rest <= 0) {                               // sometimes the next round does not simply begin
@@ -3295,6 +3299,134 @@ const bench = createWorkbench({
     }
     else overlay.style.display = 'flex';
   },
+});
+
+// ───────────────────────── other ways to come by things: salvage, drops, the survivor's pick ─────────────────────────
+// Chests are not the only place. Some of what stands about in each map can be searched (hold E), which takes a moment
+// and makes a little noise. What you kill sometimes leaves a bundle where it fell, and you have to go and get it.
+// And each round you live through, the night leaves three things and you take one.
+
+// 1. Salvage. kind: [what to call it, seconds to search, parts lo..hi, chance of an item as well, chance one has anything (else SALVAGE_CHANCE)]
+const SALVAGE = {
+  car: ['car', 2.4, 2, 4, 0.35], dumpster: ['dumpster', 2.2, 2, 4, 0.3], cabinet: ['cabinet', 1.8, 1, 3, 0.3], shelf: ['shelves', 1.6, 1, 2, 0.2],
+  crate: ['crate', 1.4, 1, 3, 0.2], barrel: ['barrel', 1.3, 1, 2, 0.12], trashcan: ['bin', 1.2, 1, 2, 0.1], mailbox: ['mailbox', 1.0, 1, 1, 0.15], wheelbarrow: ['wheelbarrow', 1.2, 1, 2, 0.1],
+  minecart: ['mine cart', 2.0, 2, 4, 0.3], pickaxe: ['miner\'s kit', 1.2, 1, 2, 0.1], skeleton: ['bones', 1.5, 1, 2, 0.22], coffin: ['coffin', 2.4, 2, 4, 0.4], cage: ['cage', 1.6, 1, 3, 0.2],
+  cauldron: ['cauldron', 1.5, 1, 2, 0.2], throne: ['throne', 2.4, 3, 5, 0.5], snowmobile: ['snowmobile', 2.4, 2, 4, 0.35], sled: ['sled', 1.2, 1, 2, 0.12], igloo: ['igloo', 2.2, 2, 3, 0.35],
+  stump: ['hollow stump', 1.3, 1, 2, 0.12, 0.22], well: ['well', 2.0, 1, 3, 0.25], crystal: ['crystal seam', 1.6, 1, 2, 0.06, 0.5],
+};
+const SALVAGE_CHANCE = 0.6;                               // not everything has something in it
+const salvageKind = new Map();                            // atlas cell -> kind
+for (const kind in SALVAGE) for (const cell of atlas.sprites[kind] || []) if (!salvageKind.has(cell)) salvageKind.set(cell, kind);
+const salvage = { at: null, t: 0, scan: 0 };
+function salvageIn(c) {                                   // what could be searched in a chunk, worked out once
+  if (c.salvage) return c.salvage;
+  c.salvage = [];
+  for (let i = 0; i < c.props.length; i += 7) {
+    const kind = salvageKind.get(c.props[i + 4]); if (!kind) continue;
+    const x = c.props[i], z = c.props[i + 1];
+    if (hash2(Math.round(x * 4), Math.round(z * 4), 77) < (SALVAGE[kind][5] ?? SALVAGE_CHANCE)) c.salvage.push({ x, z, kind, id: `sv${Math.round(x * 4)},${Math.round(z * 4)}` });
+  }
+  return c.salvage;
+}
+// every frame, in the world update: the nearest thing worth searching, and the search itself while E is held on it
+function updateSalvage(dt, inControl, px, pz, fx, fz) {
+  let best = null;
+  if (inControl && !mapAction && !nearChest && !nearLore && !swim.in) {
+    const cx = Math.floor(px / CFG.chunk), cz = Math.floor(pz / CFG.chunk);
+    let bd = 2.3;
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      const c = chunks.get(key(cx + dx, cz + dz)); if (!c) continue;
+      for (const s of salvageIn(c)) {
+        if (opened.has(s.id)) continue;
+        const ex = s.x - px, ez = s.z - pz, d = Math.hypot(ex, ez);
+        if (d < bd && (d < 0.9 || (ex * fx + ez * fz) / d > 0.35)) { bd = d; best = s; }
+      }
+    }
+  }
+  if (!best || best !== salvage.at) { salvage.at = best; salvage.t = 0; }
+  if (!best) return;
+  const [name, secs, lo, hi, itemChance] = SALVAGE[best.kind];
+  if (keys.KeyE) {
+    if (salvage.t === 0) { noise1(0.25, 'bandpass', 900, 400, 0.3); if (isChoirRound()) choir.noise(px, pz, 0.5, 'searching'); if (isConsumerRound()) consumer.noise(px, pz, 0.5, 'searching'); }
+    salvage.t += dt;
+    if ((salvage.scan -= dt) <= 0) { salvage.scan = 0.4; noise1(0.12, 'bandpass', 700 + Math.random() * 500, 300, 0.2); }      // rummaging
+  } else salvage.t = Math.max(0, salvage.t - dt * 2);
+  const k = Math.min(1, salvage.t / secs), bar = '▮'.repeat(Math.round(k * 6)).padEnd(6, '▯');
+  mapAction = { label: `[Hold E] search the ${name}${salvage.t > 0 ? ` ${bar}` : ''}`, run() {} };
+  if (k < 1) return;
+  opened.add(best.id); salvage.at = null; salvage.t = 0;
+  const n = lo + ((lootRng() * (hi - lo + 1)) | 0), item = lootRng() < itemChance ? rollChestLoot('common') : null;
+  sfx.chest();
+  if (!(item && grantChestLoot(item))) toast(`You search the ${name}`);
+  addParts(n, true);
+}
+
+// 2. Drops. A bundle lies where the thing fell until you walk onto it (it comes the last little way to you), or a minute and a half passes.
+const drops = [];
+const dropGeo = new THREE.BoxGeometry(0.36, 0.28, 0.28);
+function dropBundle(x, z, parts, tier = null) {
+  const mat = new THREE.MeshBasicMaterial({ color: tier ? 0x9fc79a : 0xc8a25a }), mesh = new THREE.Mesh(dropGeo, mat);
+  scene.add(mesh);
+  drops.push({ x, z, parts, tier, mesh, mat, t: 0, phase: Math.random() * 6 });
+}
+function updateDrops(dt, inControl, px, pz) {
+  for (let i = drops.length - 1; i >= 0; i--) {
+    const d = drops[i];
+    if (inControl) d.t += dt;
+    const ex = px - d.x, ez = pz - d.z, dist = Math.hypot(ex, ez) || 1;
+    if (inControl && dist < 3.6) { const pull = Math.min(dist, dt * (2 + (3.6 - dist) * 2.5)); d.x += ex / dist * pull; d.z += ez / dist * pull; }
+    const pulse = 0.55 + 0.45 * Math.sin(uTime.value * 4 + d.phase);
+    d.mat.color.setHex(d.tier ? 0x9fc79a : 0xc8a25a).multiplyScalar(0.45 + 0.55 * pulse * Math.min(1, (90 - d.t) / 8));
+    d.mesh.position.set(d.x, MAP.groundY(d.x, d.z) + 0.7 + Math.sin(uTime.value * 2 + d.phase) * 0.09, d.z);      // held up clear of the grass
+    d.mesh.rotation.y += dt * 1.6;
+    const got = inControl && dist < 0.95;
+    if (!got && d.t < 90) continue;
+    scene.remove(d.mesh); d.mat.dispose(); drops.splice(i, 1);
+    if (!got) continue;
+    const item = d.tier ? rollChestLoot(d.tier) : null;
+    sfx.chest();
+    if (!(item && grantChestLoot(item))) toast(d.tier ? 'A bundle, mostly ruined' : 'Something it was carrying');
+    addParts(d.parts + (d.tier && !item ? 2 : 0), true);
+  }
+}
+function clearDrops() { for (const d of drops) { scene.remove(d.mesh); d.mat.dispose(); } drops.length = 0; }
+
+// 3. The survivor's pick: three offers drawn from what would be of use to you now.
+function pickOffers() {
+  const pool = [
+    { w: 3, name: '8 parts', note: 'For the workbench', take: () => { inv.parts += 8; partsFlash = 1.2; return 'You take the parts'; } },
+    { w: 3, ok: () => inv.gun && canReceiveLoot('ammo'), name: `${GUN.mag * 2} bullets`, note: `Two magazines for the ${GUN.name.toLowerCase()}`, take: () => { inv.reserve += GUN.mag * 2; return 'You take the bullets'; } },
+    { w: 3, ok: () => canReceiveLoot('battery'), name: '2 batteries', note: `You carry ${inv.batteries}`, take: () => { inv.batteries += 2; return 'You take the batteries'; } },
+    { w: 2, ok: () => canReceiveLoot('matches'), name: '4 matches', note: `You carry ${inv.matches}`, take: () => { inv.matches += 4; return 'You take the matches'; } },
+    { w: 2, ok: () => canReceiveLoot('potion'), name: 'A potion', note: `You carry ${inv.potions}`, take: () => { inv.potions++; return 'You take the potion'; } },
+    { w: 2, ok: () => canReceiveLoot('grenade'), name: '2 grenades', note: `You carry ${inv.grenades}`, take: () => { inv.grenades += 2; return 'You take the grenades'; } },
+    { w: 2, ok: () => inv.health < inv.maxHealth * 0.7 || sanity.value < SANITY_MAX * 0.7, name: 'A moment of rest', note: 'Your wounds close and your head clears', take: () => { inv.health = inv.maxHealth; sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; return 'You rest. It helps'; } },
+    { w: 1.4, ok: () => round.n >= 2 && canReceiveLoot('gun_kit'), name: 'A weapon kit', note: `Rebuilds the ${GUN.name.toLowerCase()} as ${inv.gunTier < GUN_TIERS.length - 1 ? GUN_TIERS[inv.gunTier + 1].name.toLowerCase() : ''}`, take: () => applyKit('gun_kit') },
+    { w: 1.4, ok: () => canReceiveLoot('light_kit'), name: 'A lens kit', note: inv.lightTier < LIGHT_TIERS.length - 1 ? LIGHT_TIERS[inv.lightTier + 1].note : '', take: () => applyKit('light_kit') },
+    { w: 1.2, ok: () => canReceiveLoot('radar_kit'), name: 'An antenna kit', note: inv.radarTier < RADAR_TIERS.length - 1 ? RADAR_TIERS[inv.radarTier + 1].note : '', take: () => applyKit('radar_kit') },
+    { w: 1, ok: () => bag.capacity < bag.maxCapacity, name: 'A bigger pack', note: 'One more inventory slot', take: () => { bag.capacity++; return `Your pack now holds ${bag.capacity}`; } },
+  ].filter((o) => !o.ok || o.ok());
+  const out = [];
+  while (out.length < 3 && pool.length) {
+    let pick = Math.random() * pool.reduce((sum, o) => sum + o.w, 0), i = 0;
+    for (; i < pool.length - 1; i++) { pick -= pool[i].w; if (pick <= 0) break; }
+    out.push(pool.splice(i, 1)[0]);
+  }
+  return out;
+}
+let pickWasPlaying = false;
+const picker = createPicker({
+  touch: TOUCH,
+  onOpen() { pickWasPlaying = playing; playing = false; releaseTouch(); for (const k in keys) keys[k] = false; holdingBreath = false; gun.aiming = false; gun.trigger = false; gun.burst = 0; syncFootsteps(null); if (document.pointerLockElement) document.exitPointerLock(); overlay.style.display = 'none'; },
+  onClose() {
+    if (pickWasPlaying && !finished) {
+      playing = true;
+      if (TOUCH) overlay.style.display = 'none';
+      else { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => { playing = false; overlay.style.display = 'flex'; }); }
+    }
+    else overlay.style.display = 'flex';
+  },
+  onTake(line) { if (line) toast(line); sfx.upgrade(); },
 });
 
 // Grenades. Thrown, one bounces and rolls and goes off when its fuse runs out. From the launcher tube it flies flat and
@@ -3570,7 +3702,7 @@ function updateChoir(dt, inControl) {
 }
 
 const consumerViewShake = { value: 0 };
-const consumer = createConsumerRound({
+const consumer = await createConsumerRound({
   scene, camera, world: creatureWorld,
   audio: {
     ctx: audioCtx, dest: audioCtx.destination,
@@ -3594,6 +3726,10 @@ const consumer = createConsumerRound({
       if (outcome !== 'killed') return;
       playClip(dyingBuffer, 0.7);
       stainFromInnocent();
+    },
+    rescued() {
+      addParts(4);
+      toast(`A civilian makes it to safety · +4 parts (${inv.parts}). The Consumer turns toward the sound.`);
     },
   },
 });
@@ -3674,7 +3810,7 @@ function startConsumerRound() {
 }
 function announceConsumer() {
   banner('THE CONSUMER', 'Dozens of civilians are loose. Stop the feeding, save who you can, and kill the thing before it grows.');
-  toast('Hold E beside a civilian for 4.2 seconds to rescue them. Its growth turns the weather against you; seek a roof when the air darkens.');
+  toast('Hold E beside a civilian for 4.2 seconds to rescue them. Each one saved is worth 4 parts. Its growth turns the weather against you; seek a roof when the air darkens.');
 }
 function updateConsumer(dt, inControl) {
   if (!consumer.active) { updateConsumerAtmosphere(dt, inControl); return; }
@@ -4300,7 +4436,7 @@ function buildLabDead() {
 }
 function newLabyrinth() {
   LAB.regen();
-  chunks.clear(); farChunks.clear(); lore.clear();
+  chunks.clear(); farChunks.clear(); lore.clear(); clearDrops();
   camera.position.x = 0; camera.position.z = 0;
   buildLabDead(); refreshChunks(true);
 }
@@ -4330,4 +4466,4 @@ if (LAB) buildLabDead();
 mountLeaderboard();
 
 // small debug handle for the console
-window.game = { title, cutscenes, die(cause) { deathCause = cause; endGame(false); }, bench, GUN, applyKit, addParts, throwGrenade, grenades, craftGear, gearRecipes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };
+window.game = { title, cutscenes, picker, pickOffers, drops, dropBundle, salvage, salvageIn, die(cause) { deathCause = cause; endGame(false); }, bench, GUN, applyKit, addParts, throwGrenade, grenades, craftGear, gearRecipes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };

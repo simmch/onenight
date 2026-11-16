@@ -258,3 +258,79 @@ export function createWorkbench({ onOpen, onClose, recipes, craft, parts, gear, 
   addEventListener('keyup', (e) => { if (!el.hidden) e.stopImmediatePropagation(); }, true);
   return api;
 }
+
+
+// ── the survivor's pick: live through a round and the night leaves three things; you take one ──
+const PICK_CSS = `
+#pick { position: fixed; inset: 0; z-index: 21; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; background: rgba(0,0,0,.93); font-family: "Courier New", monospace; color: #b9b3a3; }
+#pick[hidden] { display: none; }
+#pick h2 { margin: 0; font-size: 18px; letter-spacing: 8px; font-weight: normal; color: #d8d2c0; }
+#pick .psub { margin: -8px 0 0; font-size: 12px; letter-spacing: 3px; opacity: .7; }
+#pick .pcards { display: flex; gap: 16px; }
+#pick .pcard { width: min(210px, 28vw); min-height: 150px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; padding: 14px 14px 12px; border: 1px solid rgba(185,179,163,.35); background: #0c0b09; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: transform .16s, border-color .16s, background-color .16s; }
+#pick .pcard:hover, #pick .pcard.go { border-color: #d8d2c0; background: #15130f; transform: translateY(-6px); }
+#pick .pcard.drag { transition: none; }
+#pick .pcard .n { font-size: 12px; color: #c8a25a; letter-spacing: 2px; }
+#pick .pcard .nm { font-size: 15px; letter-spacing: 1.5px; color: #e6dfc8; }
+#pick .pcard .nt { font-size: 11.5px; line-height: 1.5; opacity: .75; }
+#pick .pfoot { font-size: 11px; letter-spacing: 3px; opacity: .55; }
+#pick.touch .pcard { cursor: default; touch-action: none; }
+`;
+// open(options): options are [{ name, note, take() }], three of them. One is taken; onTake gets what take() returned.
+export function createPicker({ onOpen, onClose, onTake, touch = false }) {
+  const style = document.createElement('style'); style.textContent = PICK_CSS; document.head.append(style);
+  const el = document.createElement('div'); el.id = 'pick'; el.hidden = true; if (touch) el.classList.add('touch');
+  el.innerHTML = `<h2>YOU LIVED</h2><p class="psub">The night leaves three things. Take one.</p><div class="pcards"></div><div class="pfoot">${touch ? 'SLIDE A CARD UP TO TAKE IT' : '1 · 2 · 3 TO TAKE ONE'}</div>`;
+  document.body.append(el);
+  const cards = el.querySelector('.pcards');
+  let options = [];
+  function choose(i) {
+    const o = options[i]; if (!o || el.hidden) return;
+    el.hidden = true; options = [];
+    const line = o.take();
+    if (onClose) onClose();
+    if (onTake) onTake(line);
+  }
+  const api = {
+    get isOpen() { return !el.hidden; },
+    open(list) {
+      if (!el.hidden || !list.length) return;
+      options = list; cards.replaceChildren();
+      list.forEach((o, i) => {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'pcard'; b.dataset.i = String(i);
+        const n = document.createElement('span'); n.className = 'n'; n.textContent = touch ? '︿' : String(i + 1);
+        const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = o.name;
+        const nt = document.createElement('span'); nt.className = 'nt'; nt.textContent = o.note;
+        b.append(n, nm, nt);
+        if (!touch) b.addEventListener('click', () => choose(i));
+        cards.append(b);
+      });
+      el.hidden = false; if (onOpen) onOpen();
+    },
+  };
+  if (touch) {                                              // a card is taken by sliding it up, not by tapping it
+    const LIFT = 56;
+    let drag = null;
+    el.addEventListener('pointerdown', (e) => { const card = e.target.closest && e.target.closest('.pcard'); if (card) { drag = { id: e.pointerId, y: e.clientY, card, dy: 0 }; card.classList.add('drag'); } });
+    el.addEventListener('pointermove', (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      drag.dy = e.clientY - drag.y;
+      drag.card.style.transform = `translateY(${Math.max(-110, Math.min(0, drag.dy))}px)`; drag.card.classList.toggle('go', drag.dy < -LIFT);
+    });
+    const end = (e, cancelled) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const d = drag; drag = null;
+      d.card.style.transform = ''; d.card.classList.remove('drag', 'go');
+      if (!cancelled && d.dy < -LIFT) choose(Number(d.card.dataset.i));
+    };
+    el.addEventListener('pointerup', (e) => end(e, false));
+    el.addEventListener('pointercancel', (e) => end(e, true));
+  }
+  addEventListener('keydown', (e) => {
+    if (el.hidden) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    if (!e.repeat && /^(Digit|Numpad)[1-3]$/.test(e.code)) choose(Number(e.code.slice(-1)) - 1);
+  }, true);
+  addEventListener('keyup', (e) => { if (!el.hidden) e.stopImmediatePropagation(); }, true);
+  return api;
+}

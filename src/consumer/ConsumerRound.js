@@ -1,9 +1,12 @@
 import * as THREE from 'three';
+import { GLTFLoader } from '../../vendor/loaders/GLTFLoader.js';
 import { ObserverMovement } from '../observer/ObserverMovement.js';
 
 const CIVILIAN_COUNT = 26;
 const CIVILIAN_RESCUE_TIME = 4.2;
 const CIVILIAN_SPEED = [1.85, 2.55];
+const CONSUMER_MODEL = './assets/monsters/devil.glb';
+const CONSUMER_HEIGHT = 2.9; // metres from feet to crown once fitted
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
 function createCitizenFrames() {
@@ -33,104 +36,44 @@ const CITIZEN_GEO = new THREE.PlaneGeometry(0.78, 1.55);
 const SOUL_GEO = new THREE.IcosahedronGeometry(0.065, 0);
 const SOUL_MAT = new THREE.MeshStandardMaterial({ color: 0x1b0714, emissive: 0x70203c, emissiveIntensity: 1.1, roughness: 1 });
 
-function createConsumerModel() {
+async function loadConsumerModel() {
+  const gltf = await new GLTFLoader().loadAsync(CONSUMER_MODEL);
   const root = new THREE.Group();
-  const hide = new THREE.MeshStandardMaterial({ color: 0x180a13, roughness: 0.96, emissive: 0x10030a, emissiveIntensity: 0.35 });
-  const flesh = new THREE.MeshStandardMaterial({ color: 0x54202a, roughness: 0.82, emissive: 0x22040b, emissiveIntensity: 0.42 });
-  const raw = new THREE.MeshStandardMaterial({ color: 0x8c2935, roughness: 0.92, emissive: 0x38070f, emissiveIntensity: 0.48 });
-  const bone = new THREE.MeshStandardMaterial({ color: 0xbca99a, roughness: 0.78 });
-  const mouth = new THREE.MeshStandardMaterial({ color: 0x080509, roughness: 1 });
-  const eye = new THREE.MeshStandardMaterial({ color: 0xff473e, emissive: 0xc20d26, emissiveIntensity: 2.4, roughness: 0.2 });
-  const sphere = new THREE.SphereGeometry(1, 9, 7);
-  const addBlob = (parent, material, position, scale, geometry = sphere) => {
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(...position); mesh.scale.set(...scale); mesh.castShadow = true; parent.add(mesh);
-    return mesh;
-  };
-  const torso = new THREE.Group(); root.add(torso);
-  addBlob(torso, hide, [0, 1.42, 0], [0.68, 0.93, 0.56]);
-  addBlob(torso, flesh, [0, 1.98, 0.02], [0.76, 0.59, 0.62]);
-  addBlob(torso, raw, [0.08, 1.36, 0.16], [0.48, 0.59, 0.48]);
-  addBlob(torso, hide, [0, 0.78, -0.02], [0.58, 0.39, 0.5]);
-
-  // The chest is split into a long vertical maw, and the head sits off to one side of it.
-  addBlob(torso, mouth, [0.04, 1.42, 0.52], [0.55, 1.05, 0.22]);
-  for (let i = 0; i < 5; i++) {
-    const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.42, 4), bone);
-    tooth.position.set(-0.22 + i * 0.11, 1.95 - (i % 2) * 0.12, 0.78);
-    tooth.rotation.x = 2.4; torso.add(tooth);
-    const lower = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.34, 4), bone);
-    lower.position.set(-0.18 + i * 0.1, 0.95, 0.72); torso.add(lower);
-  }
-  const head = new THREE.Group(); head.position.set(0.42, 2.05, 0.34); head.scale.set(1.35, 0.7, 1.15); torso.add(head);
-  addBlob(head, flesh, [0, 0.18, 0], [0.5, 0.42, 0.46]);
-  addBlob(head, raw, [0.08, -0.16, 0.12], [0.42, 0.28, 0.36]);
-  const jaw = new THREE.Group(); jaw.position.set(0, -0.18, 0.12); head.add(jaw);
-  addBlob(jaw, mouth, [0, -0.08, 0.28], [0.34, 0.22, 0.12]);
-  addBlob(jaw, flesh, [0.04, -0.16, 0.16], [0.38, 0.16, 0.28]);
-  for (const side of [-1, 1]) {
-    const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.22, 4), bone);
-    tooth.position.set(side * 0.12, 0.02, 0.36); jaw.add(tooth);
-  }
-  addBlob(head, eye, [-0.22, 0.28, 0.38], [0.18, 0.14, 0.08]);
-  addBlob(head, eye, [0.24, -0.02, 0.4], [0.07, 0.11, 0.06]);
-  addBlob(head, eye, [0.05, -0.42, 0.3], [0.08, 0.12, 0.06]);
-  addBlob(torso, eye, [-0.48, 1.85, 0.36], [0.11, 0.14, 0.07]);
-
-  const makeArm = (side, length = 1) => {
-    const pivot = new THREE.Group(); pivot.position.set(side * 0.62, 2.04, 0.03); pivot.scale.y = length; root.add(pivot);
-    const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, 0.82, 8), flesh);
-    upper.position.y = -0.4; upper.rotation.z = side * -0.09; upper.castShadow = true; pivot.add(upper);
-    addBlob(pivot, raw, [0, -0.82, 0], [0.16, 0.17, 0.16]);
-    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.13, 0.82, 7), hide);
-    forearm.position.set(side * -0.04, -1.22, 0.04); forearm.rotation.z = side * 0.06; forearm.castShadow = true; pivot.add(forearm);
-    addBlob(pivot, raw, [side * -0.05, -1.66, 0.1], [0.14, 0.22, 0.18]);
-    for (let i = -1; i <= 1; i++) {
-      const claw = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.26, 5), bone);
-      claw.position.set(side * -0.05 + i * 0.09, -1.85, 0.2); claw.rotation.x = 0.55; pivot.add(claw);
+  const body = gltf.scene;
+  const box = new THREE.Box3().setFromObject(body);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  body.position.sub(center);
+  body.position.y += size.y * 0.5;                         // feet on the ground
+  body.scale.setScalar(CONSUMER_HEIGHT / Math.max(0.001, size.y));
+  body.traverse((o) => {
+    if (!o.isMesh) return;
+    o.castShadow = true;
+    o.frustumCulled = false;
+    if (o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (m.emissive) m.emissiveIntensity = Math.max(m.emissiveIntensity || 0, 0.35);
+        m.side = THREE.DoubleSide;
+      }
     }
-    return pivot;
-  };
-  const leftArm = makeArm(-1, 2.35), rightArm = makeArm(1, 0.55);
-  rightArm.rotation.z = 0.55;
-  const extraArm = makeArm(-1, 0.78); extraArm.position.set(-0.22, 1.72, -0.28); extraArm.rotation.z = -1.35; extraArm.rotation.x = 0.4;
-  const drag = makeArm(1, 1.15); drag.position.set(0.2, 0.95, -0.22); drag.rotation.x = 1.35; drag.rotation.z = 0.8;
-  const makeLeg = (side, offset = 0) => {
-    const pivot = new THREE.Group(); pivot.position.set(side * 0.31, 0.83 + offset, 0); root.add(pivot);
-    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.25, 0.65, 8), hide);
-    thigh.position.y = -0.31; pivot.add(thigh);
-    addBlob(pivot, flesh, [0, -0.65, 0], [0.17, 0.16, 0.17]);
-    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.14, 0.58, 7), flesh);
-    shin.position.set(side * 0.06, -0.95, 0.04); shin.rotation.z = side * 0.12; pivot.add(shin);
-    addBlob(pivot, raw, [side * 0.07, -1.25, 0.14], [0.2, 0.13, 0.31]);
-    return pivot;
-  };
-  const leftLeg = makeLeg(-1, 0.12), rightLeg = makeLeg(1, -0.34);
-  rightLeg.rotation.z = -0.55; rightLeg.scale.set(1.35, 0.72, 1.1);
-
-  // Exposed ribs, vertebrae and dangling growths break the clean humanoid outline.
-  for (let i = 0; i < 4; i++) {
-    const rib = new THREE.Mesh(new THREE.TorusGeometry(0.42 + i * 0.025, 0.035, 5, 18, Math.PI), bone);
-    rib.position.set(0, 1.3 + i * 0.23, 0.42); rib.rotation.z = Math.PI; rib.scale.x = 1.4; torso.add(rib);
-  }
-  for (let i = 0; i < 5; i++) {
-    const spike = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.42 + (i % 2) * 0.16, 5), raw);
-    spike.position.set((i - 2) * 0.22, 2.55 - (i % 2) * 0.2, -0.48); spike.rotation.x = -0.65; root.add(spike);
-  }
-  const growthSacs = [];
-  for (let i = 0; i < 7; i++) {
-    const a = i * Math.PI * 2 / 7, sac = addBlob(root, raw,
-      [Math.cos(a) * 0.48, 1.2 + (i % 3) * 0.42, Math.sin(a) * 0.43], [0.13, 0.16, 0.12]);
-    growthSacs.push(sac);
-  }
+  });
+  root.add(body);
   const distortion = new THREE.Mesh(new THREE.TorusGeometry(1, 0.035, 5, 32),
     new THREE.MeshBasicMaterial({ color: 0x751b35, transparent: true, opacity: 0, depthWrite: false }));
   distortion.rotation.x = -Math.PI / 2; distortion.position.y = 0.035; root.add(distortion);
-  return { root, parts: { torso, head, jaw, leftArm, rightArm, extraArm, drag, leftLeg, rightLeg }, growthSacs, distortion, mats: { eye, raw } };
+  // The mesh is rigid; empty joints keep the old animation hooks from throwing.
+  const joint = () => new THREE.Group();
+  return {
+    root, body, distortion, growthSacs: [],
+    parts: { torso: joint(), head: joint(), jaw: joint(), leftArm: joint(), rightArm: joint(), extraArm: joint(), drag: joint(), leftLeg: joint(), rightLeg: joint() },
+    mats: { eye: { emissiveIntensity: 1.6 }, raw: null },
+    hitT: 0,
+  };
 }
 
-export function createConsumerRound({ scene, camera, world, hooks = {}, audio = {} } = {}) {
-  const model = createConsumerModel();
+export async function createConsumerRound({ scene, camera, world, hooks = {}, audio = {} } = {}) {
+  const model = await loadConsumerModel();
   model.root.visible = false; model.root.rotation.order = 'YXZ'; scene.add(model.root);
   const mover = new ObserverMovement(world, 0.42);
   const citizens = [];
@@ -222,7 +165,11 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
     if (S.rescueId === c.id) { S.rescueId = null; S.rescueProgress = 0; }
     if (outcome !== 'rescued') hooks.civilianDeath?.(outcome, c);
     if (outcome === 'eaten') { c.consumed = true; S.eaten++; grow(); }
-    else if (outcome === 'rescued') { c.rescued = true; S.rescued++; say('A civilian makes it to safety. The Consumer turns toward the sound.'); }
+    else if (outcome === 'rescued') {
+      c.rescued = true; S.rescued++;
+      if (hooks.rescued) hooks.rescued(c);
+      else say('A civilian makes it to safety. The Consumer turns toward the sound.');
+    }
     else S.killed++;
   }
 
@@ -376,26 +323,16 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
   }
 
   function animateModel(dt, state, speed) {
-    const { torso, head, jaw, leftArm, rightArm, extraArm, drag, leftLeg, rightLeg } = model.parts;
     const gait = S.time * (state === 'hunt' || state === 'lunge' ? 9.5 : 6.2), moving = speed > 0.15 ? 1 : 0;
     const consume = state === 'consume', windup = state === 'windup', lunge = state === 'lunge';
-    torso.rotation.x = consume ? 1.25 + Math.sin(S.time * 17) * 0.16 : windup ? -0.75 : lunge ? 1.05 : 0.32 + Math.sin(gait * 2) * 0.04 * moving;
-    torso.rotation.z = 0.18 + Math.sin(S.time * 1.8) * 0.04;
-    head.rotation.x = consume ? 0.35 + Math.sin(S.time * 14) * 0.2 : windup ? -0.55 : lunge ? 0.4 : 0.05 + Math.sin(S.time * 1.4) * 0.05;
-    head.rotation.z = 0.35 + Math.sin(S.time * 2.2) * 0.08;
-    jaw.rotation.x = consume ? 1.15 + Math.sin(S.time * 22) * 0.25 : lunge ? 0.85 : windup ? 0.35 : 0.22 + Math.sin(S.time * 1.6) * 0.06;
-    leftArm.rotation.x = consume ? -1.7 + Math.sin(S.time * 17) * 0.3 : windup ? -2.2 : lunge ? 0.9 : -0.15 + Math.sin(gait) * 0.6 * moving;
-    rightArm.rotation.x = consume ? -1.2 - Math.sin(S.time * 16) * 0.35 : windup ? -1.6 : lunge ? 1.15 : 0.2 - Math.sin(gait) * 0.35 * moving;
-    extraArm.rotation.x = (consume || lunge ? -1.1 : -0.2) + Math.sin(S.time * 5.3) * 0.3;
-    drag.rotation.x = 1.25 + Math.sin(S.time * 3.1) * 0.12 + (lunge ? 0.35 : 0);
-    leftLeg.rotation.x = Math.sin(gait) * 0.5 * moving;
-    rightLeg.rotation.x = -Math.sin(gait) * 0.28 * moving;
-    model.mats.eye.emissiveIntensity = state === 'hunt' || state === 'lunge' || state === 'windup' || state === 'consume' ? 4.2 : 1.6;
+    // The devil mesh is one piece: lean and bob the whole body instead of moving limbs.
+    const lean = consume ? 0.55 + Math.sin(S.time * 17) * 0.08 : windup ? -0.35 : lunge ? 0.45 : 0.08 + Math.sin(gait * 2) * 0.04 * moving;
+    const sway = Math.sin(gait) * 0.08 * moving + Math.sin(S.time * 1.8) * 0.03;
+    const hit = Math.max(0, model.hitT); if (model.hitT > 0) model.hitT = Math.max(0, model.hitT - dt);
+    model.body.rotation.x = lean;
+    model.body.rotation.z = sway + hit * Math.sin(S.time * 40) * 0.25;
+    model.body.position.y = Math.abs(Math.sin(gait)) * 0.05 * moving;
     const growth = Math.min(1, S.eaten / 9);
-    for (let i = 0; i < model.growthSacs.length; i++) {
-      const pulse = 0.88 + 0.14 * Math.sin(S.time * 2.4 + i * 1.7);
-      model.growthSacs[i].scale.set(0.13 + growth * 0.08, (0.16 + growth * 0.11) * pulse, 0.12 + growth * 0.07);
-    }
     model.distortion.visible = S.surface === 'ground';
     model.distortion.material.opacity = growth * 0.4 * (0.82 + Math.sin(S.time * 2.3) * 0.18);
   }
@@ -464,7 +401,7 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
         S.attackHit = true;
         const hitRange = 2.6 + S.sizeScale * 0.7;
         if (playerDistance <= hitRange) {
-          hooks.damage?.(26 + S.eaten * 5 + Math.min(14, S.round * 2), 'consumer');
+          hooks.damage?.(13 + S.eaten * 2.5 + Math.min(7, S.round), 'consumer');
           hooks.bump?.(S.pos.x, S.pos.z, S.sizeScale);
           if (!S.active) return;
         }
@@ -529,7 +466,7 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
     if (targetKind === 'citizen') removeCitizen(best, 'killed');
     else {
       S.health -= damage;
-      model.parts.head.rotation.z = 0.4;
+      model.hitT = 0.35;
       if (S.health <= 0) {
         S.health = 0; S.dead = true; S.mode = 'dead'; model.root.visible = false;
         say('The Consumer collapses. The survivors scatter into the dark.');
