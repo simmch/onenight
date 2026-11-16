@@ -76,6 +76,31 @@
   #reticle span:nth-child(2) { left: 5px; top: -1px; width: 7px; height: 2px; }
   #reticle span:nth-child(3) { left: -1px; top: -12px; width: 2px; height: 7px; }
   #reticle span:nth-child(4) { left: -1px; top: 5px; width: 2px; height: 7px; }
+  #menu { position: fixed; inset: 0; z-index: 30; display: flex; background: linear-gradient(90deg, rgba(0,0,0,.86) 0%, rgba(0,0,0,.55) 30%, rgba(0,0,0,0) 62%); transition: opacity .7s; }
+  #menu.leaving { opacity: 0; pointer-events: none; }
+  #menuMain, #menuPanel { box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; padding: 0 clamp(22px, 7vw, 110px); width: min(640px, 100vw); }
+  #menu h1 { font-size: clamp(32px, 6vw, 62px); letter-spacing: .3em; font-weight: normal; color: #d8d2c0; margin: 0 0 12px; text-shadow: 0 0 28px #000; white-space: nowrap; }
+  #menu .tag { font-size: 13px; letter-spacing: 2px; line-height: 1.6; margin: 0 0 clamp(16px, 6vh, 48px); opacity: .8; max-width: 420px; }
+  #menu nav { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+  #menu button { background: none; border: 0; border-left: 2px solid transparent; color: #b9b3a3; font: 15px "Courier New", monospace; letter-spacing: 5px; padding: 10px 14px; cursor: pointer; text-align: left; transition: color .15s, border-color .15s, padding-left .15s; }
+  #menu button:hover, #menu button:focus-visible { color: #fff; border-left-color: #d8d2c0; padding-left: 24px; outline: none; }
+  #menu button[data-menu=play] { color: #fff; font-size: 19px; }
+  #menu .loadNote { display: none; font-size: 12px; letter-spacing: 4px; opacity: .6; }
+  #menu.loading { background: #000; }
+  #menu.loading nav { display: none; }
+  #menu.loading .loadNote { display: block; }
+  #menuPanel { justify-content: flex-start; padding-top: clamp(14px, 7vh, 70px); padding-bottom: 16px; overflow: auto; }
+  #menuPanel h2 { font-size: 20px; letter-spacing: 8px; font-weight: normal; color: #d8d2c0; margin: 0 0 12px; }
+  #menuHow h3 { font-size: 12px; letter-spacing: 4px; font-weight: normal; color: #d8d2c0; margin: 16px 0 6px; }
+  #menuHow p { font-size: 13px; line-height: 1.6; margin: 4px 0; }
+  #menuHow dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 16px; margin: 4px 0; font-size: 13px; }
+  #menuHow dt { color: #d8d2c0; letter-spacing: 1px; } #menuHow dd { margin: 0; }
+  #menuBoard #board { margin: 4px 0 10px; }
+  #menuPanel button[data-menu=back] { margin-top: 14px; align-self: flex-start; }
+  body.touch #menu h1 { font-size: 30px; margin-bottom: 6px; }
+  body.touch #menu .tag { margin-bottom: 10px; font-size: 12px; }
+  body.touch #menu button { padding: 7px 14px; }
+  body.touch #menuPanel { padding-top: 10px; }
   .phone { display: none; }
   #touch, #turn { display: none; }
   html.touch-root, html.touch-root body { margin: 0; overflow: hidden; background: #000; }
@@ -148,6 +173,60 @@
     <ol id="boardList"></ol>
   </div>
 </div>
+<div id="menu" class="loading" hidden>
+  <div id="menuMain">
+    <h1>ONE NIGHT</h1>
+    <p class="tag">Seven rounds of the dead, then worse things. Survive until dawn.</p>
+    <p class="loadNote">LOADING</p>
+    <nav>
+      <button type="button" data-menu="play">PLAY</button>
+      <button type="button" data-menu="board">LEADERBOARD</button>
+      <button type="button" data-menu="how">INSTRUCTIONS</button>
+    </nav>
+  </div>
+  <div id="menuPanel" hidden>
+    <h2 id="menuPanelTitle"></h2>
+    <div id="menuBoard" hidden></div>
+    <div id="menuHow" hidden>
+      <h3>THE NIGHT</h3>
+      <p>Live through seven rounds and you see the dawn. Each round sends something different, and each is survived differently. The words at the start of a round tell you what it wants.</p>
+      <dl>
+        <dt>Dark ghosts</dt><dd>Keep your light off them. Shoot them or outlast them.</dd>
+        <dt>The Observer</dt><dd>Find the bodies and burn each one with a match, before dawn.</dd>
+        <dt>The Collective</dt><dd>When they come, put your flashlight out, then get away from them. A match is allowed.</dd>
+        <dt>The Choir</dt><dd>They hunt by sound. Go quietly, find the nest, kill what sings.</dd>
+        <dt>The Consumer</dt><dd>Get the civilians out and kill it before it grows.</dd>
+        <dt>The Labyrinth</dt><dd>Finding the way out wins the round, whatever is in there with you.</dd>
+      </dl>
+      <h3>BETWEEN ROUNDS</h3>
+      <p>Some rounds do not end quietly. If a key appears on the screen, do what it says at once: press it, hammer it, hold it, or touch nothing at all. Getting it wrong ends the night.</p>
+      <h3>YOUR MIND</h3>
+      <p>Light on a horror wears your sanity down. Hold your breath while standing still to get it back. A potion clears a mind that has not broken yet.</p>
+      <h3>CONTROLS</h3>
+      <dl class="desk">
+        <dt>W A S D</dt><dd>Move</dd>
+        <dt>Mouse</dt><dd>Look</dd>
+        <dt>Shift</dt><dd>Run</dd>
+        <dt>F</dt><dd>Flashlight</dd>
+        <dt>Space</dt><dd>Hold your breath</dd>
+        <dt>E</dt><dd>Use: chests, doors, notes, climbing out</dd>
+        <dt>Click</dt><dd>Attack or shoot. Right mouse aims</dd>
+        <dt>R &middot; B</dt><dd>Reload &middot; swap battery</dd>
+        <dt>M &middot; Q</dt><dd>Light a match &middot; drink a potion</dd>
+        <dt>G &middot; J</dt><dd>Radar &middot; journal</dd>
+        <dt>1&ndash;9 &middot; X</dt><dd>Select or use an item &middot; drop it</dd>
+        <dt>Esc</dt><dd>Pause</dd>
+      </dl>
+      <div class="phone">
+        <p>Turn the phone sideways. The left finger moves, and pushing farther runs. The right finger looks.</p>
+        <p>Tap shoots. Hold aims. Press and hold uses. Tap a chest to open it. Two fingers: tap for the light, swipe up for gear.</p>
+        <p>Tap an item to use it or swap to it. Hold the breath button to hold your breath.</p>
+      </div>
+    </div>
+    <button type="button" data-menu="back">BACK</button>
+  </div>
+</div>
+<script>if (!/[?&](nointro|notitle)\b/.test(location.search)) { document.getElementById('overlay').style.display = 'none'; document.getElementById('menu').hidden = false; }</script>
 <div id="touch">
   <button type="button" id="breath" aria-pressed="false">BREATH</button>
   <div id="stick" aria-hidden="true"><div id="stickKnob"></div></div>

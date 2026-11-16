@@ -12,6 +12,8 @@ import { createConsumerRound } from './consumer/ConsumerRound.js';
 import { createJournal } from './lore/journal.js';
 import { createLorePickups } from './lore/pickups.js';
 import { mountLeaderboard, offerScore } from './leaderboard.js';
+import { createTitleScreen } from './cinema/TitleScreen.js';
+import { createCutscenes } from './cinema/Cutscenes.js';
 
 // ───────────────────────── config ─────────────────────────
 const CFG = {
@@ -2699,7 +2701,7 @@ const ghosts = [];
 const round = { n: 0, t: 0, rest: 0, announced: false, type: 'ghosts' };
 const MAP_HINT = { labyrinth: 'Find the way out and the round is won', rural: 'Houses can be entered. E opens doors', cave: 'Watch your step near the water', hell: 'Keep out of the lava and clear of the vents' };
 const bannerEl = document.getElementById('banner'), hurtEl = document.getElementById('hurt'), hpFill = document.getElementById('hpFill');
-let bannerTimer = 0, hurtFlash = 0;
+let bannerTimer = 0, hurtFlash = 0, cutsceneLine = '';
 function banner(title, sub) {
   bannerEl.innerHTML = '';
   const h = document.createElement('div'); h.className = 'big'; h.textContent = title;
@@ -2859,7 +2861,7 @@ function endGame(won) {
   syncTick(false);
   if (!won) playClip(dyingBuffer, 0.9);
   document.getElementById('title').textContent = won ? 'DAWN' : deathCause === 'time' ? 'TOO LATE' : 'YOU DIED';
-  document.getElementById('sub').textContent = won ? `You made it through all ${ROUND.count} rounds.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.`, sanity: 'Your mind was empty for too long.' }[deathCause] || `The dead took you in round ${round.n}.`);
+  document.getElementById('sub').textContent = won ? `You made it through all ${ROUND.count} rounds.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.`, sanity: 'Your mind was empty for too long.', cutscene: cutsceneLine }[deathCause] || `The dead took you in round ${round.n}.`);
   document.getElementById('go').textContent = TOUCH ? 'Tap to play again' : 'Click to play again';
   overlay.style.display = 'flex';
   if (document.pointerLockElement) document.exitPointerLock();
@@ -2934,7 +2936,13 @@ function updateMonsters(dt, inControl, beamOn) {
     for (const g of ghosts) if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
   } else {
     if (!round.announced) { round.announced = true; if (isObserverRound()) announceObserver(); else if (isCollectiveRound()) announceCollective(); else if (isChoirRound()) announceChoir(); else if (isConsumerRound()) announceConsumer(); else { banner(META.label, `Round ${round.n}. ${ghosts.length} dark ghosts are out there. Keep your light off them`); if (MAP_HINT[MAP_NAME]) toast(MAP_HINT[MAP_NAME]); } }
-    if (round.rest > 0) { round.rest -= dt; if (round.rest <= 0) startRound(round.n + 1); }
+    if (round.rest > 0) {
+      round.rest -= dt;
+      if (round.rest <= 0) {                               // sometimes the next round does not simply begin
+        const next = round.n + 1;
+        if (!cutscenes.maybePlay(() => startRound(next), { force: CUTSCENE_PARAM })) startRound(next);
+      }
+    }
     else if (isObserverRound()) {
       round.t += dt;
       if (obsRound.total && obsRound.burned >= obsRound.total) { obsRound.stop(); setHuntSilence(false); roundWon(true, 'The dead are ash. Whatever was watching has gone.'); }
@@ -3765,6 +3773,10 @@ function frame(now) {
     document.body.classList.toggle('playing', playing && box.w > box.h);
   }
   uTime.value += dt;
+  // the landing page: nothing in the night moves until PLAY
+  if (title.active) { title.update(dt); if (title.active) { title.render(); return; } }
+  // between rounds: a scene has the camera, and the night waits for it (it stops with the rest when paused)
+  if (cutscenes.active) { if (playing) cutscenes.update(dt); if (cutscenes.active) { cutscenes.render(); return; } }
 
   let speed = 0, running = false;
   const bonuses = bagBonuses();
@@ -3909,27 +3921,94 @@ function frame(now) {
   refreshChunks(false);
   placeGround();
 
-  camera.layers.set(0);
+  renderView(scene, camera, held.visible || gunMesh.visible || matchMesh.visible);
+}
+// One picture: the world at low resolution through the vision pass, then whatever is held in the hands on top.
+// The title screen and the cutscenes that leave the map draw their own scene through the same pass.
+// sharp: no soft fringe round the middle of the picture (that is the flashlight's, in first person).
+function renderView(sc, cam, hands, sharp = false) {
+  const core = visionUniforms.uCore.value, stain = visionUniforms.uStain.value;
+  if (sharp) { visionUniforms.uCore.value = 9; visionUniforms.uStain.value = 0; }
+  cam.layers.set(0);
   renderer.setRenderTarget(visionRT);
-  renderer.render(scene, camera);
+  renderer.render(sc, cam);
   renderer.setRenderTarget(null);
   renderer.render(visionScene, visionCam);
-  if (held.visible || gunMesh.visible || matchMesh.visible) {
-    camera.layers.set(1);
-    const bg = scene.background;
-    scene.background = null;
+  if (hands) {
+    cam.layers.set(1);
+    const bg = sc.background;
+    sc.background = null;
     renderer.autoClear = false;
     renderer.clearDepth();
-    renderer.render(scene, camera);
+    renderer.render(sc, cam);
     renderer.autoClear = true;
-    scene.background = bg;
+    sc.background = bg;
   }
-  camera.layers.set(0);
+  cam.layers.set(0);
+  visionUniforms.uCore.value = core; visionUniforms.uStain.value = stain;
 }
 refreshChunks(true);
 // ?round=N starts at round N; ?monster=ghosts|observer|collective|choir|consumer forces the monster for every round
 startRound(Math.max(1, Math.min(ROUND.count, Number(new URLSearchParams(location.search).get('round')) || 1)));
 updateClock();
+// ───────────────────────── title screen ─────────────────────────
+// A landing page in front of the night: the runner in the woods, PLAY, LEADERBOARD, INSTRUCTIONS.
+// ?nointro or ?notitle goes straight past it.
+const SHOW_TITLE = !SKIP_INTRO && !new URLSearchParams(location.search).has('notitle');
+const menuEl = document.getElementById('menu'), boardEl = document.getElementById('board');
+const cinemaKit = {
+  THREE, atlas, mulberry, billboardLayer, speckleTexture, surfaceMaterial, groundPalette: MAP_META.forest.ground, buildCorpse,
+  render: (sc, cam, hands = false, sharp = false) => renderView(sc, cam, hands, sharp), aspect: () => camera.aspect, fade: fadeEl, menu: menuEl,
+  moveBoard(into) { into.append(boardEl); },
+  onPlay() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    introSongNeedsGesture = false;
+    if (TOUCH) beginTouch(); else renderer.domElement.requestPointerLock();
+  },
+  onLeft() { overlay.append(boardEl); menuEl.hidden = true; if (!playing) overlay.style.display = 'flex'; },
+};
+const title = SHOW_TITLE ? createTitleScreen(cinemaKit) : { active: false, skip() {} };
+if (title.active) {
+  overlay.style.display = 'none';
+  fadeEl.style.opacity = '0'; lidTop.style.display = lidBot.style.display = 'none';     // the opening holds these shut; not yet
+  menuEl.classList.remove('loading');
+  menuEl.addEventListener('pointerdown', (e) => {         // the first touch of the page is what lets the music start
+    if (!started && introSong.paused && !(e.target.closest && e.target.closest('[data-menu=play]'))) playIntroSong();
+  });
+} else menuEl.hidden = true;
+
+// ───────────────────────── cutscenes between rounds ─────────────────────────
+// ?cutscene=<name> plays that one after every round, ?cutscene=all always plays one, ?cutscene=none never does.
+const CUTSCENE_PARAM = new URLSearchParams(location.search).get('cutscene');
+Object.assign(cinemaKit, {
+  scene, camera, L, eye: CFG.eye, TOUCH, world: creatureWorld, groundY: (x, z) => MAP.groundY(x, z),
+  createObserverModel, ObserverAnimator, buildChild, poseChild, kidMats: mindMats, poseCorpse,
+  radPerPixel: () => (camera.fov * Math.PI / 180) / CFG.renderHeight,
+  playing: () => playing, view: () => ({ yaw, pitch }), setView(y, p) { yaw = y; pitch = p; },
+  lightOn: () => flashlight.equipped && flashlight.battery > 0,
+  // the scene's flashlight: v is 0..1 of a full beam, whatever the battery says
+  beam(v, torch) {
+    spot.intensity = L.intensity * v; halo.intensity = spot.intensity * 0.18; spot.target.position.set(0, -0.35, -10);
+    held.visible = torch; held.position.copy(HELD_UP); held.rotation.set(0, 0, 0);
+    gunMesh.visible = false; matchMesh.visible = false;
+  },
+  handsShown: () => held.visible,
+  hurt(v) { hurtEl.style.opacity = v; },
+  // keep the grass and small clutter off a patch of ground; returns the call that puts it back
+  clearGround(x, z, r) {
+    clearZones.push(x, z, r); refreshChunks(true);
+    return () => { for (let i = 0; i < clearZones.length; i += 3) if (clearZones[i] === x && clearZones[i + 1] === z && clearZones[i + 2] === r) { clearZones.splice(i, 3); break; } refreshChunks(true); };
+  },
+  lock(on) { intro.active = on; },                        // everything that ignores input during the opening ignores it now
+  quiet() { for (const k in keys) keys[k] = false; holdingBreath = false; gun.aiming = false; syncFootsteps(null); syncBodyAudio(null, false); syncTick(false); },
+  clear() { while (ghosts.length) removeGhost(ghosts[0]); clearMind(); bannerEl.style.opacity = 0; bannerTimer = 0; },
+  clearMind() { clearMind(); sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; },
+  canPlay: () => playing && !finished && !swim.in && swim.climb < 0 && !burn.in && !journal.isOpen,
+  die(line) { cutsceneLine = line; deathCause = 'cutscene'; endGame(false); },
+  audio: { play: playClip, stop: stopClip, thump, noise1, sfx, obs: mindAudio,
+           clips: { run: runBuffer, bones: boneBuffer, candle: candleBuffer, stopMoving: collectiveStop, thank: collectiveThank, hug: collectiveHug } },
+});
+const cutscenes = createCutscenes(cinemaKit);
 playIntroSong();
 requestAnimationFrame(frame);
 
@@ -3979,4 +4058,4 @@ if (LAB) buildLabDead();
 mountLeaderboard();
 
 // small debug handle for the console
-window.game = { labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };
+window.game = { title, cutscenes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };
