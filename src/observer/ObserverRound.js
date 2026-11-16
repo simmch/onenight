@@ -280,6 +280,17 @@ export function createObserverRound(ctx) {
     get marks() { return marks.length; },
     shiftBodies,
     shot: (origin, dir) => active && observers.some((o) => o.shot(origin, dir)),
+    // fire that did not come from a match (a blast): every unburned body within r catches, and they all hear it
+    burnNear(x, z, r) {
+      let n = 0;
+      for (const b of bodies) {
+        if (b.done || b.burnT >= 0 || Math.hypot(b.spec.x - x, b.spec.z - z) > r) continue;
+        b.burnT = 0; n++;
+        ctx.sfx.crackle(b.spec.x, b.spec.z);
+        for (const o of observers) if (o.active) o.alert(b.spec.x, b.spec.z);
+      }
+      return n;
+    },
     addObservers,
     get observers() { return observers; },
     get active() { return active; },

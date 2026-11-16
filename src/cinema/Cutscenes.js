@@ -16,6 +16,7 @@ const CSS = `
 #cine.on .bar { height: 9vh; }
 #cineTint { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, rgba(70,20,90,.15) 20%, rgba(40,6,60,.85) 100%); }
 #cineCap { position: absolute; left: 0; right: 0; bottom: 10.5vh; text-align: center; font-size: 15px; letter-spacing: 3px; opacity: 0; transition: opacity .5s; text-shadow: 0 0 8px #000, 0 0 2px #000; }
+#cine.asking #cineCap { bottom: auto; top: 12.5vh; }
 #qte { position: absolute; left: 50%; top: 71%; transform: translate(-50%, -50%); display: none; flex-direction: column; align-items: center; gap: 10px;
        background: none; border: 0; color: inherit; font: inherit; pointer-events: auto; touch-action: none; cursor: pointer; padding: 18px 26px; }
 #qte.show { display: flex; }
@@ -23,6 +24,12 @@ const CSS = `
 #qte .key { min-width: 64px; height: 64px; box-sizing: border-box; padding: 0 14px; display: flex; align-items: center; justify-content: center; border: 2px solid #d8d2c0; border-radius: 6px;
             background: rgba(0,0,0,.6); font-size: 26px; letter-spacing: 2px; color: #fff; animation: qtePulse .5s ease-in-out infinite alternate; }
 #qte.nokey .key { display: none; }
+#qte.gesture { pointer-events: none; cursor: default; }
+#qte.gesture .key { font-size: 30px; }
+#qte.gesture.swL .key { animation: qteL .55s ease-in infinite; } #qte.gesture.swR .key { animation: qteR .55s ease-in infinite; } #qte.gesture.swU .key { animation: qteU .55s ease-in infinite; }
+@keyframes qteL { from { transform: translateX(26px); opacity: .3; } to { transform: translateX(-26px); opacity: 1; } }
+@keyframes qteR { from { transform: translateX(-26px); opacity: .3; } to { transform: translateX(26px); opacity: 1; } }
+@keyframes qteU { from { transform: translateY(22px); opacity: .3; } to { transform: translateY(-22px); opacity: 1; } }
 #qte .what { font-size: 15px; letter-spacing: 5px; text-shadow: 0 0 8px #000, 0 0 2px #000; }
 #qte .sub { font-size: 11px; letter-spacing: 2px; opacity: .75; min-height: 1em; text-shadow: 0 0 6px #000; }
 #qte .meter { width: 190px; height: 6px; border: 1px solid rgba(216,210,192,.6); background: rgba(0,0,0,.6); }
@@ -63,13 +70,18 @@ export function createCutscenes(kit) {
   // hold: get it down within the grace and keep it down. still: touch nothing at all.
   let Q = null, qHide = 0;
   function ask(spec) {
+    down.clear();
     Q = { type: 'press', time: 1.2, need: 12, decay: 1.2, grace: 1.3, side: 0, sub: '', ...spec, t: 0, n: 0, held: false, moved: 0, state: 'live' };
-    const verb = Q.type === 'hold' ? 'HOLD' : 'TAP';
-    keyEl.textContent = kit.TOUCH ? verb : KEY_NAME[Q.key] || '';
-    whatEl.textContent = Q.text; subEl.textContent = Q.sub;
-    qteEl.className = 'show' + (Q.side < 0 ? ' left' : Q.side > 0 ? ' right' : '') + (Q.type === 'still' ? ' nokey' : '');
+    // On a phone nothing is a button: a prompt names a gesture, made anywhere on the screen.
+    // press: swipe the way the arrow points (A left, D right, Space up). mash: tap fast. hold: press and keep pressing.
+    const swipe = Q.key === 'KeyA' ? ['←', 'Swipe left', ' swL'] : Q.key === 'KeyD' ? ['→', 'Swipe right', ' swR'] : ['↑', 'Swipe up', ' swU'];
+    const touchKey = Q.type === 'press' ? swipe[0] : Q.type === 'mash' ? 'TAP' : 'HOLD';
+    const touchSub = Q.type === 'press' ? swipe[1] : Q.type === 'mash' ? 'Tap fast, anywhere' : Q.type === 'hold' ? 'Press anywhere and keep pressing' : 'Lift every finger off the screen';
+    keyEl.textContent = kit.TOUCH ? touchKey : KEY_NAME[Q.key] || '';
+    whatEl.textContent = Q.text; subEl.textContent = kit.TOUCH ? touchSub : Q.sub;
+    qteEl.className = 'show' + (Q.side < 0 ? ' left' : Q.side > 0 ? ' right' : '') + (Q.type === 'still' ? ' nokey' : '') + (kit.TOUCH ? ' gesture' + (Q.type === 'press' ? swipe[2] : '') : '');
     fillEl.style.transform = 'scaleX(' + (Q.type === 'press' ? 1 : 0) + ')';
-    qHide = 0;
+    qHide = 0; root.classList.add('asking');             // the line of text moves up out of the prompt's way
     return Q;
   }
   function settle(ok) { if (!Q || Q.state !== 'live') return; Q.state = ok ? 'ok' : 'fail'; qteEl.classList.add(ok ? 'ok' : 'bad'); qteEl.classList.remove('urgent'); qHide = 0.3; }
@@ -83,7 +95,7 @@ export function createCutscenes(kit) {
   }
   function qUp(code) { if (Q && Q.state === 'live' && Q.type === 'hold' && code === Q.key && Q.held) settle(false); }
   function tickQ(dt) {
-    if (qHide > 0 && (qHide -= dt) <= 0) qteEl.className = '';
+    if (qHide > 0 && (qHide -= dt) <= 0) { qteEl.className = ''; root.classList.remove('asking'); }
     if (!Q || Q.state !== 'live') return;
     Q.t += dt;
     let fill = 0;
@@ -105,13 +117,26 @@ export function createCutscenes(kit) {
   }, true);
   addEventListener('keyup', (e) => { if (!cur || e.code === 'Escape') return; e.stopImmediatePropagation(); if (live()) qUp(e.code); }, true);
   addEventListener('mousemove', (e) => { if (live() && Q && Q.state === 'live' && Q.type === 'still' && (Q.moved += Math.abs(e.movementX) + Math.abs(e.movementY)) > 90) settle(false); }, true);
+  let finger = null;                                      // the touch a gesture is being read from
+  const down = new Set();                                 // every finger on the glass: a hold lasts until the last one lifts
   addEventListener('pointerdown', (e) => {
     if (!live() || !Q || Q.state !== 'live') return;
     if (Q.type === 'still') { settle(false); return; }
-    if (e.target.closest && e.target.closest('#qte')) { e.preventDefault(); qDown(Q.key); }
+    if (kit.TOUCH) {
+      finger = { id: e.pointerId, x: e.clientX, y: e.clientY, used: false }; down.add(e.pointerId);
+      if (Q.type === 'mash' || Q.type === 'hold') qDown(Q.key);          // a tap anywhere; a press anywhere
+    } else if (e.target.closest && e.target.closest('#qte')) { e.preventDefault(); qDown(Q.key); }
   }, true);
-  addEventListener('pointerup', () => { if (live() && Q) qUp(Q.key); }, true);
-  addEventListener('pointercancel', () => { if (live() && Q) qUp(Q.key); }, true);
+  addEventListener('pointermove', (e) => {
+    if (!finger || e.pointerId !== finger.id || finger.used || !live() || !Q || Q.state !== 'live' || Q.type !== 'press') return;
+    const dx = e.clientX - finger.x, dy = e.clientY - finger.y;
+    if (Math.hypot(dx, dy) < 44) return;
+    finger.used = true;                                   // one swipe, one answer: the wrong way is a miss, as the wrong key is
+    if (Math.abs(dx) > Math.abs(dy)) qDown(dx < 0 ? 'KeyA' : 'KeyD'); else if (dy < 0) qDown('Space');
+  }, true);
+  const lift = (e) => { if (finger && e.pointerId === finger.id) finger = null; down.delete(e.pointerId); if (live() && Q && (!kit.TOUCH || down.size === 0)) qUp(Q.key); };
+  addEventListener('pointerup', lift, true);
+  addEventListener('pointercancel', lift, true);
 
   // ── the scene in play ──
   let cur = null, S = null, capT = 0;
@@ -183,7 +208,7 @@ export function createCutscenes(kit) {
     for (const h of S.loops) A.stop(h, 0.3);
     glow.intensity = 0; tintEl.style.opacity = '0'; caption(''); kit.hurt(0);
     if (S.zone) S.zone();
-    Q = null; qteEl.className = ''; root.classList.remove('on'); document.body.classList.remove('cine');
+    Q = null; qteEl.className = ''; root.classList.remove('on', 'asking'); document.body.classList.remove('cine');
     if (stage) stage.clearExtras();
     kit.setView(S.yaw0 + S.cam.yaw, 0);
     kit.lock(false);

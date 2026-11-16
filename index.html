@@ -97,6 +97,16 @@
   #menuHow dt { color: #d8d2c0; letter-spacing: 1px; } #menuHow dd { margin: 0; }
   #menuBoard #board { margin: 4px 0 10px; }
   #menuPanel button[data-menu=back] { margin-top: 14px; align-self: flex-start; }
+  #menuGestures p { margin: 0 0 9px; font-size: 13px; letter-spacing: 3px; color: #b9b3a3; }
+  #menuGestures p.big { font-size: 19px; letter-spacing: 6px; color: #fff; margin-bottom: 14px; animation: menuTap 1.6s ease-in-out infinite alternate; }
+  @keyframes menuTap { from { opacity: .55; } to { opacity: 1; } }
+  #menu.loading #menuGestures { display: none; }
+  #menuBackHint { font-size: 11px; letter-spacing: 3px; color: #c8a25a; margin: 0 0 10px; }
+  body.touch #menuPanel { touch-action: pan-y; }
+  body.touch #menuHow:not([hidden]) { display: flex; flex-direction: column; }
+  body.touch #menuControls { order: -1; }
+  body.touch #menuControls > h3:first-child { margin-top: 0; }
+  body.touch #menu nav, body.touch #menuPanel button[data-menu=back], body.touch #menuHow dl.desk { display: none; }
   body.touch #menu h1 { font-size: 30px; margin-bottom: 6px; }
   body.touch #menu .tag { margin-bottom: 10px; font-size: 12px; }
   body.touch #menu button { padding: 7px 14px; }
@@ -147,9 +157,10 @@
   <div class="row"><img src="./assets/items/battery.png" alt="Battery"><div id="batt"><div id="battFill"></div></div><span id="spare"></span></div>
   <div class="row"><img src="./assets/items/match.png" alt="Matches"><span id="matches"></span></div>
   <div class="row"><img src="./assets/items/potion.png" alt="Potions"><span id="potions"></span></div>
+  <div class="row" title="Parts. C opens the workbench"><img id="partsIcon" alt="Parts"><span id="parts"></span></div>
 </div>
 <div id="ammo" hidden><img src="./assets/items/bullet.png" alt="Bullets"><span id="ammoText"></span></div>
-<div id="inventoryPanel" hidden aria-label="Inventory"><div id="inventoryMeta"></div><div id="inventorySlots"></div><div id="inventoryHelp">1–9 SELECT / USE &nbsp; X DROP SELECTED</div></div>
+<div id="inventoryPanel" hidden aria-label="Inventory"><div id="inventoryMeta"></div><div id="inventorySlots"></div><div id="inventoryHelp">1–9 SELECT / USE &nbsp; X DROP &nbsp; C WORKBENCH &nbsp; T GRENADE</div></div>
 <div id="reticle" hidden><span></span><span></span><span></span><span></span></div>
 <div id="hurt"></div><div id="sanityHaze" aria-hidden="true"></div><div id="sanityVision" aria-hidden="true"><svg viewBox="0 0 48 120"><path fill="#09090d" d="M18 10c0-6 12-6 12 0v8c7 3 10 10 9 19l-2 18 7 27-7 2-10-22-2 17 7 35h-8l-6-28-6 28H4l9-38-2-18-4 24-6-2 5-34c1-8 4-14 12-17z"/><circle cx="20" cy="19" r="1.5" fill="#8e6e70"/><circle cx="28" cy="19" r="1.5" fill="#8e6e70"/></svg></div><div id="collectiveMark" aria-hidden="true"><svg viewBox="0 0 40 64" width="100%" height="100%"><path fill="#bdb5a1" d="M11 29V8a3 3 0 0 1 6 0v17V5a3 3 0 0 1 6 0v20V8a3 3 0 0 1 6 0v19l1-12a3 3 0 0 1 6 .5l-2 23c-.8 9-6.5 17-15 20l-7-2-8-15c-2-4 3-7 6-4l3 4z"/></svg></div><div id="banner"></div>
 <div id="prompt"></div><div id="toast"></div>
@@ -160,11 +171,13 @@
   <p id="sub">Seven rounds of the dead, then worse things. Survive until dawn.</p>
   <p class="desk">WASD move &middot; Mouse look &middot; Shift run &middot; F flashlight &middot; G radar &middot; Space hold breath</p>
   <p class="desk">E use (chests, doors, climb out) &middot; Click attack / shoot &middot; Right mouse aim &middot; R reload &middot; B swap battery &middot; M match &middot; Q potion &middot; J journal</p>
-  <p class="desk">1–9 select/use inventory &middot; X drop selected item &middot; Better packs add slots</p>
+  <p class="desk">1–9 select/use inventory &middot; X drop selected item &middot; Better packs add slots &middot; C workbench &middot; T grenade</p>
   <p class="desk">Sanity: hold Space while still to recover, including while the Collective is close. Shelter helps too. A potion clears a mind that has not broken yet.</p>
   <p class="phone">Turn sideways. The left finger moves — push farther to run. The right finger looks.</p>
   <p class="phone">Tap shoots. Hold aims. Press and hold uses. Tap a chest to open it. Two fingers: tap the light, swipe up for gear.</p>
   <p class="phone">Tap an item to use it or swap to it. Hold the breath button to hold your breath, and hold it while still to recover sanity.</p>
+  <p class="phone">Tap, then hold, keeps a rapid gun firing. Two fingers: swipe down for the workbench, sweep sideways to throw a grenade.</p>
+  <p class="phone">Between rounds, make the gesture the screen shows: swipe, tap fast, press and hold, or let go.</p>
   <p class="go" id="go">Click to begin</p>
   <div id="board">
     <label>NAME <input id="playerName" maxlength="20" autocomplete="nickname" spellcheck="false"></label>
@@ -178,7 +191,12 @@
     <h1>ONE NIGHT</h1>
     <p class="tag">Seven rounds of the dead, then worse things. Survive until dawn.</p>
     <p class="loadNote">LOADING</p>
-    <nav>
+    <div class="phone" id="menuGestures">
+      <p class="big">TAP TO PLAY</p>
+      <p>&larr; SWIPE LEFT &middot; INSTRUCTIONS</p>
+      <p>SWIPE RIGHT &rarr; &middot; LEADERBOARD</p>
+    </div>
+    <nav class="desk">
       <button type="button" data-menu="play">PLAY</button>
       <button type="button" data-menu="board">LEADERBOARD</button>
       <button type="button" data-menu="how">INSTRUCTIONS</button>
@@ -186,6 +204,7 @@
   </div>
   <div id="menuPanel" hidden>
     <h2 id="menuPanelTitle"></h2>
+    <p class="phone" id="menuBackHint"></p>
     <div id="menuBoard" hidden></div>
     <div id="menuHow" hidden>
       <h3>THE NIGHT</h3>
@@ -199,9 +218,14 @@
         <dt>The Labyrinth</dt><dd>Finding the way out wins the round, whatever is in there with you.</dd>
       </dl>
       <h3>BETWEEN ROUNDS</h3>
-      <p>Some rounds do not end quietly. If a key appears on the screen, do what it says at once: press it, hammer it, hold it, or touch nothing at all. Getting it wrong ends the night.</p>
+      <p class="desk">Some rounds do not end quietly. If a key appears on the screen, do what it says at once: press it, hammer it, hold it, or touch nothing at all. Getting it wrong ends the night.</p>
+      <p class="phone">Some rounds do not end quietly. The screen shows you a gesture, and you make it anywhere, at once: swipe the way the arrow points, tap as fast as you can, press and keep pressing, or lift every finger off the glass. Getting it wrong ends the night.</p>
+      <h3>YOUR GEAR</h3>
+      <p>Every chest has parts in it, some of the dead drop them, and each round you survive salvages a few. Spend them at the workbench: batteries, bullets, grenades, and rebuilds of the gun, the flashlight and the radar. The world waits while the bench is open.</p>
+      <p>Coloured chests can hold kits that fit an upgrade on the spot. The first one you open rebuilds the pistol into a gun that keeps firing for as long as you hold it.</p>
       <h3>YOUR MIND</h3>
       <p>Light on a horror wears your sanity down. Hold your breath while standing still to get it back. A potion clears a mind that has not broken yet.</p>
+      <div id="menuControls">
       <h3>CONTROLS</h3>
       <dl class="desk">
         <dt>W A S D</dt><dd>Move</dd>
@@ -214,16 +238,47 @@
         <dt>R &middot; B</dt><dd>Reload &middot; swap battery</dd>
         <dt>M &middot; Q</dt><dd>Light a match &middot; drink a potion</dd>
         <dt>G &middot; J</dt><dd>Radar &middot; journal</dd>
+        <dt>C &middot; T</dt><dd>Workbench &middot; throw a grenade</dd>
         <dt>1&ndash;9 &middot; X</dt><dd>Select or use an item &middot; drop it</dd>
         <dt>Esc</dt><dd>Pause</dd>
       </dl>
       <div class="phone">
-        <p>Turn the phone sideways. The left finger moves, and pushing farther runs. The right finger looks.</p>
-        <p>Tap shoots. Hold aims. Press and hold uses. Tap a chest to open it. Two fingers: tap for the light, swipe up for gear.</p>
-        <p>Tap an item to use it or swap to it. Hold the breath button to hold your breath.</p>
+        <p>Turn the phone sideways. Everything is a gesture. The left half of the screen moves you; the right half does the rest.</p>
+        <dl>
+          <dt>Left thumb</dt><dd>Move. Push farther to run</dd>
+          <dt>Right thumb, drag</dt><dd>Look</dd>
+          <dt>Tap</dt><dd>Shoot or strike. Tap a chest to open it, an item to use it</dd>
+          <dt>Tap, then hold</dt><dd>A rapid gun keeps firing; drag to aim it</dd>
+          <dt>Hold</dt><dd>Aim, or use what is in front of you</dd>
+          <dt>Double tap</dt><dd>Use</dd>
+          <dt>Two fingers, tap</dt><dd>Flashlight</dd>
+          <dt>Two fingers, hold</dt><dd>Hold your breath</dd>
+          <dt>Two fingers, up</dt><dd>Reload, match, potion, battery, radar, journal</dd>
+          <dt>Two fingers, down</dt><dd>Workbench</dd>
+          <dt>Two fingers, sideways</dt><dd>Throw a grenade</dd>
+        </dl>
+        <h3>AT THE WORKBENCH</h3>
+        <dl>
+          <dt>Slide a row right</dt><dd>Build it</dd>
+          <dt>Drag up or down</dt><dd>See the rest of the list</dd>
+          <dt>Swipe left</dt><dd>Put the bench away</dd>
+        </dl>
+        <h3>BETWEEN ROUNDS</h3>
+        <dl>
+          <dt>&larr; &rarr; &uarr;</dt><dd>Swipe the way the arrow points</dd>
+          <dt>TAP</dt><dd>Tap fast, anywhere</dd>
+          <dt>HOLD</dt><dd>Press anywhere and keep pressing</dd>
+          <dt>DON'T MOVE</dt><dd>Lift every finger off the screen</dd>
+        </dl>
+        <h3>ON THE TITLE</h3>
+        <dl>
+          <dt>Tap</dt><dd>Play</dd>
+          <dt>Swipe left or right</dt><dd>Instructions, leaderboard, and back again</dd>
+        </dl>
+      </div>
       </div>
     </div>
-    <button type="button" data-menu="back">BACK</button>
+    <button type="button" class="desk" data-menu="back">BACK</button>
   </div>
 </div>
 <script>if (!/[?&](nointro|notitle)\b/.test(location.search)) { document.getElementById('overlay').style.display = 'none'; document.getElementById('menu').hidden = false; }</script>

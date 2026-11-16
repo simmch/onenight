@@ -1,0 +1,260 @@
+import * as THREE from 'three';
+
+// Gear that gets better as the night goes on: the gun, the flashlight, the radar, and things that explode.
+// Parts turn up in every chest, on some of the dead, and at the end of each round survived. They are spent at the
+// workbench (C), which stops the world while it is open. Kits found in chests do the same job for nothing, on the spot.
+// This file is the tables, the pictures and the workbench itself; what an upgrade does to the game is in main.js.
+
+// ── pixel sprites, drawn here so new gear needs no new image files ──
+const PAL = { a: '#000000', b: '#27293d', c: '#2e3449', d: '#434a5c', e: '#9ba2c8', f: '#596081', g: '#1a172c', h: '#56291b', i: '#662d18', j: '#924c24', k: '#48536a',
+              l: '#4b1d13', m: '#351512', G: '#3f5a2e', H: '#5c7d3f', I: '#2a3d20', y: '#c9a94e', o: '#c9652a', s: '#8a8f9c', t: '#5b6070', r: '#b03a2e' };
+function sprite(w, text) {
+  const rows = text.split('\n').filter((r) => r.length), c = document.createElement('canvas');
+  c.width = w; c.height = rows.length;
+  const g = c.getContext('2d');
+  rows.forEach((row, y) => { for (let x = 0; x < w; x++) { const col = PAL[row[x]]; if (col) { g.fillStyle = col; g.fillRect(x, y, 1, 1); } } });
+  const tex = new THREE.CanvasTexture(c);
+  tex.magFilter = tex.minFilter = THREE.NearestFilter; tex.generateMipmaps = false; tex.colorSpace = THREE.SRGBColorSpace;
+  return { url: c.toDataURL(), tex };
+}
+// Guns point left with the grip at the lower right, like the pistol's own picture, so they sit in the hand the same way.
+export const SPRITES = {
+  smg: sprite(20, `
+....................
+....................
+....................
+....................
+....................
+............aa...aa.
+..aaaaaaaaaabbaaadda
+.aeeeeeeeeeeeeefbfga
+adddddddddddddddgdga
+.adddkdddddddddgdgda
+..aaggggggggggggggga
+....agdgaaadaahihaa.
+....agdga.adaahjjha.
+....agdga.aaaahjjha.
+....agdga....aljjia.
+....agdga....aljjha.
+....aaaaa....ammmma.
+..............aaaa..
+....................
+....................`),
+  rifle: sprite(24, `
+........................
+........................
+........................
+........................
+........................
+........................
+........aa......aa......
+.....aaabbaaaaaadda.aaaa
+aaaaaeeeeeeeeeefbfgahjja
+adddddddddddddddgdgahjja
+aaaaadkddddddddgdgdahjja
+....aggggggggggggggahjia
+.....aaagdgaadahihaaamma
+........agdga.dahjjha...
+........agdga.aahjjha...
+........agdgga.aljjia...
+.........agdga.aljjha...
+.........aaaaa.ammmma...
+................aaaa....
+........................
+........................
+........................
+........................
+........................`),
+  storm: sprite(24, `
+........................
+........................
+........................
+........................
+........................
+.......aaaa.....aa......
+...aaaabbbbaaaaadda.aaaa
+aaaaeeeeeeeeeeefbfgahjja
+arorddddddddddddgdgahjja
+aaaadkdkdkdddddgdgdahjja
+...aaggggggggggggggahjia
+...aaaaggggggaahihaaamma
+.....agddddga.ahjjha....
+.....agdssdga.ahjjha....
+.....agdssdga.aljjia....
+.....agddddga.aljjha....
+......agggga..ammmma....
+.......aaaa....aaaa.....
+........................
+........................
+........................
+........................
+........................
+........................`),
+  grenade: sprite(16, `
+................
+.......aaaa.....
+......asssta.ya.
+......attta.yay.
+.....aaaaaa..y..
+....aHHHGGGa....
+...aHHGGGGGIa...
+...aHGGaGGaIa...
+...aGGGGGGGIa...
+...aGGaGGaGIa...
+...aGGGGGGIIa...
+...aGIaIIaIIa...
+....aIIIIIIa....
+.....aaaaaa.....
+................
+................`),
+  parts: sprite(16, `
+................
+......aaaa......
+...aa.asta.aa...
+..assaasstaasta.
+..asssssssssta..
+...assstttssta..
+.aaasstaaatssaaa
+.assstaa.aatssta
+.assstaa.aatssta
+.aaasstaaatssaaa
+...asssttttsta..
+..assssssssssta.
+..astaasstaasta.
+...aa.asta.aa...
+......aaaa......
+................`),
+};
+
+// ── the gun in your right hand, one tier at a time ──
+// cooldown: seconds between shots. auto: fires for as long as the trigger is held. pitch/vol: how the one gunshot clip
+// is played for each bullet. ammoScale: how much more ammunition a find gives, since a fast gun eats it. cost: parts to build.
+export const GUN_TIERS = [
+  { id: 'pistol', name: 'Pistol', icon: './assets/items/pistol.png', sprite: null, mag: 6, reload: 2.0, cooldown: 0.3, damage: 1, auto: false, kick: 0.025, pitch: 1, vol: 1, ammoScale: 1, scale: 1, cost: 0 },
+  { id: 'smg', name: 'Machine pistol', icon: SPRITES.smg.url, sprite: 'smg', mag: 18, reload: 2.0, cooldown: 0.1, damage: 1, auto: true, kick: 0.010, pitch: 1.12, vol: 0.78, ammoScale: 2.5, scale: 1.25, cost: 8 },
+  { id: 'rifle', name: 'Assault rifle', icon: SPRITES.rifle.url, sprite: 'rifle', mag: 24, reload: 2.0, cooldown: 0.125, damage: 2, auto: true, kick: 0.013, pitch: 0.86, vol: 0.88, ammoScale: 3.2, scale: 1.5, cost: 14 },
+  { id: 'storm', name: 'Storm gun', icon: SPRITES.storm.url, sprite: 'storm', mag: 36, reload: 2.0, cooldown: 0.085, damage: 3, auto: true, kick: 0.011, pitch: 0.74, vol: 0.9, ammoScale: 4.5, scale: 1.5, cost: 22 },
+];
+// life: how many times longer a battery lasts. recharge: charge gained per second while the light is off.
+export const LIGHT_TIERS = [
+  { name: 'Flashlight', life: 1, recharge: 0, cost: 0, note: '' },
+  { name: 'Flashlight Mk II', life: 1.5, recharge: 0, cost: 6, note: 'A battery lasts half as long again' },
+  { name: 'Flashlight Mk III', life: 2, recharge: 1 / 240, cost: 10, note: 'A battery lasts twice as long, and creeps back up while the light is off' },
+];
+export const RADAR_TIERS = [
+  { name: 'Radar', range: 32, cost: 6, note: 'Finds bodies and the Choir. Only wakes in those rounds' },
+  { name: 'Tracker', range: 38, cost: 8, note: 'Works in every round, and shows whatever is moving out there' },
+  { name: 'Prospector', range: 46, cost: 10, note: 'Reaches farther, and marks every unopened chest in range' },
+];
+export const COSTS = { battery: 3, ammo: 2, matches: 2, grenade: 4, potion: 6, launcher: 10 };
+export const PARTS_IN_CHEST = { common: [1, 2], blue: [3, 4], red: [4, 6], armory: [5, 7] };
+
+// ── the workbench ──
+const CSS = `
+#bench { position: fixed; inset: 0; z-index: 21; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.88); font-family: "Courier New", monospace; color: #b9b3a3; }
+#bench[hidden] { display: none; }
+#bench .wbox { width: min(720px, 94vw); max-height: 92vh; display: flex; flex-direction: column; border: 1px solid rgba(185,179,163,.28); background: #0c0b09; }
+#bench .whead { display: flex; justify-content: space-between; align-items: center; padding: 13px 20px; border-bottom: 1px solid rgba(185,179,163,.2); letter-spacing: 6px; font-size: 14px; color: #d8d2c0; }
+#bench .wparts { display: flex; align-items: center; gap: 8px; letter-spacing: 3px; }
+#bench .wparts img, #bench .wcost img { width: 18px; height: 18px; image-rendering: pixelated; }
+#bench .wgear { padding: 9px 20px; font-size: 11px; letter-spacing: 2px; opacity: .7; border-bottom: 1px solid rgba(185,179,163,.12); }
+#bench .wlist { overflow-y: auto; padding: 6px 0; }
+#bench .wrow { display: grid; grid-template-columns: 26px 1fr auto; gap: 2px 12px; align-items: baseline; width: 100%; box-sizing: border-box; padding: 5px 20px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+#bench .wrow:hover { background: rgba(185,179,163,.08); }
+#bench .wrow .n { color: #d8d2c0; opacity: .55; font-size: 12px; }
+#bench .wrow .nm { color: #e6dfc8; font-size: 14px; letter-spacing: 1.5px; }
+#bench .wrow .nm i { font-style: normal; color: #c8a25a; font-size: 11px; letter-spacing: 3px; margin-left: 8px; }
+#bench .wrow .wcost { display: flex; align-items: center; gap: 5px; font-size: 14px; color: #d8d2c0; }
+#bench .wrow .nt { grid-column: 2 / 4; font-size: 11.5px; line-height: 1.45; opacity: .7; }
+#bench .wrow.no { cursor: default; }
+#bench .wrow.no .nm, #bench .wrow.no .wcost { color: #7a756a; }
+#bench .wrow.no .nt b { font-weight: normal; color: #b0705f; }
+#bench .wsay { min-height: 1.3em; padding: 8px 20px 0; font-size: 12.5px; letter-spacing: 1px; color: #9fc79a; }
+#bench .wfoot { padding: 10px 20px 12px; font-size: 11px; letter-spacing: 3px; opacity: .55; }
+#bench.touch .wlist { touch-action: pan-y; }
+#bench.touch .wrow { cursor: default; touch-action: pan-y; transition: transform .18s, background-color .12s; }
+#bench.touch .wrow.drag { transition: none; }
+#bench.touch .wrow .n { color: #c8a25a; opacity: .9; }
+#bench.touch .wrow.go { background: rgba(159,199,154,.2); }
+#bench.touch .wrow.go .n { color: #9fc79a; }
+`;
+// recipes(): [{ id, name, tag, cost, note, ok, why }] for what can be built right now. craft(id): the line to show, or null.
+export function createWorkbench({ onOpen, onClose, recipes, craft, parts, gear, touch = false }) {
+  const style = document.createElement('style'); style.textContent = CSS; document.head.append(style);
+  const el = document.createElement('div'); el.id = 'bench'; el.hidden = true;
+  el.innerHTML = `<div class="wbox"><div class="whead"><span>WORKBENCH</span><span class="wparts"><img alt="Parts" src="${SPRITES.parts.url}"><span class="wn"></span></span></div>` +
+    `<div class="wgear"></div><div class="wlist"></div><div class="wsay"></div><div class="wfoot">${touch ? 'SLIDE A ROW RIGHT » TO BUILD · SWIPE LEFT TO PUT THE BENCH AWAY' : '1–9 BUILD · C / ESC CLOSE'}</div></div>`;
+  if (touch) el.classList.add('touch');
+  document.body.append(el);
+  const list = el.querySelector('.wlist'), say = el.querySelector('.wsay');
+  let rows = [];
+  function draw() {
+    rows = recipes();
+    el.querySelector('.wn').textContent = `${parts()} PARTS`;
+    el.querySelector('.wgear').textContent = gear();
+    list.replaceChildren();
+    rows.forEach((r, i) => {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'wrow' + (r.ok ? '' : ' no');
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = touch ? '»' : String(i + 1);
+      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = r.name;
+      if (r.tag) { const t = document.createElement('i'); t.textContent = r.tag; nm.append(t); }
+      const cost = document.createElement('span'); cost.className = 'wcost';
+      const img = document.createElement('img'); img.src = SPRITES.parts.url; img.alt = 'parts'; cost.append(String(r.cost), img);
+      const nt = document.createElement('span'); nt.className = 'nt'; nt.textContent = r.note;
+      if (!r.ok && r.why) { const w = document.createElement('b'); w.textContent = ` · ${r.why}`; nt.append(w); }
+      b.append(n, nm, cost, nt);
+      if (!touch) b.addEventListener('click', () => build(i));
+      list.append(b);
+    });
+  }
+  function build(i) {
+    const r = rows[i]; if (!r) return;
+    if (!r.ok) { say.style.color = '#b0705f'; say.textContent = r.why ? `${r.name}: ${r.why}` : ''; return; }
+    const line = craft(r.id);
+    say.style.color = line ? '#9fc79a' : '#b0705f'; say.textContent = line || 'That did not work';
+    draw();
+  }
+  const api = {
+    get isOpen() { return !el.hidden; },
+    open() { if (!el.hidden) return; say.textContent = ''; draw(); el.hidden = false; if (onOpen) onOpen(); },
+    close() { if (el.hidden) return; el.hidden = true; if (onClose) onClose(); },
+  };
+  if (touch) {
+    // No buttons on a phone. A finger that moves sideways is a gesture: on a row, sliding it right past the mark builds it;
+    // anywhere, a swipe to the left puts the bench away. Up and down is left to the list, which scrolls.
+    const SLIDE = 72;
+    let drag = null;
+    el.addEventListener('pointerdown', (e) => {
+      const row = e.target.closest && e.target.closest('.wrow');
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, row, i: row ? [...list.children].indexOf(row) : -1, dx: 0, side: false };
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.side && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.3) { drag.side = true; if (drag.row) drag.row.classList.add('drag'); }
+      if (!drag.side) return;
+      drag.dx = dx;
+      if (drag.row) { drag.row.style.transform = `translateX(${Math.max(0, Math.min(dx, 130))}px)`; drag.row.classList.toggle('go', dx > SLIDE); }
+    });
+    const end = (e, cancelled) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const d = drag; drag = null;
+      if (d.row) { d.row.style.transform = ''; d.row.classList.remove('go', 'drag'); }
+      if (cancelled || !d.side) { if (!cancelled && d.row) { say.style.color = '#b9b3a3'; say.textContent = 'Slide it to the right to build it'; } return; }
+      if (d.dx > SLIDE && d.i >= 0) build(d.i);
+      else if (d.dx < -SLIDE) api.close();
+    };
+    el.addEventListener('pointerup', (e) => end(e, false));
+    el.addEventListener('pointercancel', (e) => end(e, true));
+  }
+  // while it is open the keyboard is the workbench's alone
+  addEventListener('keydown', (e) => {
+    if (el.hidden) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    if (e.repeat) return;
+    if (e.code === 'KeyC' || e.code === 'Escape') api.close();
+    else if (/^(Digit|Numpad)[1-9]$/.test(e.code)) build(Number(e.code.slice(-1)) - 1);
+  }, true);
+  addEventListener('keyup', (e) => { if (!el.hidden) e.stopImmediatePropagation(); }, true);
+  return api;
+}

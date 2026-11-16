@@ -99,12 +99,16 @@ export function createTitleScreen(kit) {
   // ── the menu: PLAY, LEADERBOARD, INSTRUCTIONS ──
   const menu = kit.menu, panel = menu.querySelector('#menuPanel'), main = menu.querySelector('#menuMain');
   const sections = { board: menu.querySelector('#menuBoard'), how: menu.querySelector('#menuHow') };
+  const touch = document.body.classList.contains('touch');
+  let page = null;
   function show(which) {
     main.hidden = !!which; panel.hidden = !which;
     for (const k in sections) sections[k].hidden = k !== which;
     menu.querySelector('#menuPanelTitle').textContent = which === 'board' ? 'LEADERBOARD' : 'INSTRUCTIONS';
     if (which === 'board') kit.moveBoard(sections.board);
-    (which ? panel.querySelector('[data-menu=back]') : main.querySelector('[data-menu=play]')).focus({ preventScroll: true });
+    page = which;
+    if (!touch) (which ? panel.querySelector('[data-menu=back]') : main.querySelector('[data-menu=play]')).focus({ preventScroll: true });
+    else { panel.scrollTop = 0; menu.querySelector('#menuBackHint').textContent = which === 'board' ? '← SWIPE LEFT TO GO BACK' : 'SWIPE RIGHT → TO GO BACK'; }
   }
   function play() {
     if (leaving || !state.active) return;
@@ -122,8 +126,25 @@ export function createTitleScreen(kit) {
     if (!state.active || leaving || e.target.tagName === 'INPUT') return;
     if (e.code === 'Escape' && !panel.hidden) show(null);
   });
+  if (touch) {
+    // A phone has no buttons here. The title is the middle of three pages: a tap plays, a swipe left brings the
+    // instructions in from the right, a swipe right brings the leaderboard in from the left, and the opposite swipe goes back.
+    let finger = null;
+    menu.addEventListener('pointerdown', (e) => { finger = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), field: !!(e.target.closest && e.target.closest('input, button, #board')) }; });
+    const lift = (e) => {
+      if (!finger || e.pointerId !== finger.id) return;
+      const f = finger, dx = e.clientX - f.x, dy = e.clientY - f.y; finger = null;
+      if (!state.active || leaving) return;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+        if (!page) show(dx < 0 ? 'how' : 'board');
+        else if ((page === 'how' && dx > 0) || (page === 'board' && dx < 0)) show(null);
+      } else if (!page && !f.field && Math.hypot(dx, dy) < 14 && performance.now() - f.t < 450) play();
+    };
+    menu.addEventListener('pointerup', lift);
+    menu.addEventListener('pointercancel', () => { finger = null; });
+  }
   menu.hidden = false;
-  main.querySelector('[data-menu=play]').focus({ preventScroll: true });
+  if (!touch) main.querySelector('[data-menu=play]').focus({ preventScroll: true });
 
   return Object.assign(state, {
     update,

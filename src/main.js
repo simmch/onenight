@@ -14,6 +14,7 @@ import { createLorePickups } from './lore/pickups.js';
 import { mountLeaderboard, offerScore } from './leaderboard.js';
 import { createTitleScreen } from './cinema/TitleScreen.js';
 import { createCutscenes } from './cinema/Cutscenes.js';
+import { GUN_TIERS, LIGHT_TIERS, RADAR_TIERS, COSTS, PARTS_IN_CHEST, SPRITES, createWorkbench } from './gear/upgrades.js';
 
 // ───────────────────────── config ─────────────────────────
 const CFG = {
@@ -1014,7 +1015,9 @@ let zoomFov = 70;
 const SANITY_MAX = 100;
 const SANITY_LOOK = 16; // per second while the flashlight beam is on a ghost or the Observer
 const SANITY_LOOK_COLLECTIVE = 3.5; // the Collective wears at the mind much more slowly
-const SANITY_BREATH_COLLECTIVE = 3.2; // holding Space while still brings it back, even with them close
+const SANITY_BREATH = 2.4; // holding Space while still restores the mind
+const SANITY_BREATH_SHELTER = 3.2; // indoors with a held breath is faster
+const SANITY_BREATH_COLLECTIVE = 5.0; // holding Space while still brings it back, even with them close
 const SANITY_POTION = 68; // a mind still above the break can be cleared by a potion
 const SANITY_EMPTY = 45; // seconds at zero before the night ends
 const sanity = { value: SANITY_MAX, warned: false, empty: 0 };
@@ -1162,8 +1165,12 @@ if (intro.active) { hudEl.style.visibility = 'hidden'; applyIntro(); }
 
 // ───────────────────────── items: chests, battery, matches, gun ─────────────────────────
 // Chest positions and tiers are deterministic per seed. The first chest before the pistol is found guarantees it.
-const GUN = { mag: 6, reload: 2.0, cooldown: 0.3 };   // reload matches the 2 s reload clip
-const inv = { gun: false, mag: 0, reserve: 0, batteries: 0, matches: CFG.startMatches, potions: 0, health: 100, maxHealth: 100, innocents: 0 };
+// GUN is the gun in hand right now: the pistol to begin with, rebuilt tier by tier (see gear/upgrades.js). reload matches the 2 s reload clip.
+const GUN = { ...GUN_TIERS[0] };
+// parts are spent at the workbench (C). gunTier, lightTier and radarTier count the upgrades fitted so far.
+const inv = { gun: false, mag: 0, reserve: 0, batteries: 0, matches: CFG.startMatches, potions: 0, health: 100, maxHealth: 100, innocents: 0,
+              parts: 0, grenades: 0, launcher: false, gunTier: 0, lightTier: 0, radarTier: 0, kitGiven: false };
+const radarWorks = () => inv.radarTier >= 1 || isObserverRound() || isChoirRound();
 const ITEM_DEFS = {
   knife: { name: 'Knife', icon: './assets/items/combat_knife.png', kind: 'weapon', damage: 1, reach: 1.9, cooldown: 0.48, noise: 0.28 },
   sword: { name: 'Worn Sword', icon: './assets/items/longsword.png', kind: 'weapon', damage: 2, reach: 2.55, cooldown: 0.78, noise: 0.52, maxDurability: 18, color: 0xc5b9a6 },
@@ -1179,11 +1186,12 @@ const ITEM_DEFS = {
 const bag = { capacity: 6, maxCapacity: 9, items: [], counts: {}, durability: {}, selected: 0, activeWeapon: 'gun', armorId: null, staminaUntil: 0 };
 function inventorySlots() {
   const slots = [];
-  if (inv.gun) slots.push({ id: 'pistol', label: 'Pistol', icon: './assets/items/pistol.png', kind: 'weapon', active: bag.activeWeapon === 'gun' });
+  if (inv.gun) slots.push({ id: 'pistol', label: GUN.name, icon: GUN.icon, kind: 'weapon', active: bag.activeWeapon === 'gun' });
   if (inv.gun && inv.mag + inv.reserve > 0) slots.push({ id: 'ammo', label: `Ammo ${inv.mag + inv.reserve}`, icon: './assets/items/bullet.png', kind: 'ammo' });
   if (inv.batteries > 0) slots.push({ id: 'battery', label: `Battery ×${inv.batteries}`, icon: './assets/items/battery.png', kind: 'battery' });
   if (inv.matches > 0) slots.push({ id: 'matches', label: `Matches ×${inv.matches}`, icon: './assets/items/match.png', kind: 'matches' });
   if (inv.potions > 0) slots.push({ id: 'potion', label: `Potion ×${inv.potions}`, icon: './assets/items/potion.png', kind: 'potion' });
+  if (inv.grenades > 0) slots.push({ id: 'grenade', label: `Grenade ×${inv.grenades}`, icon: SPRITES.grenade.url, kind: 'grenade' });
   if (radar.acquired) slots.push({ id: 'radar', label: 'Radar', icon: './assets/items/radar.png', kind: 'radar' });
   for (const id of bag.items) {
     const item = ITEM_DEFS[id];
@@ -1242,9 +1250,9 @@ function useInventorySlot(index) {
   const slots = inventorySlots(), slot = slots[index];
   if (!slot) { toast('That inventory slot is empty'); return; }
   bag.selected = index;
-  if (slot.id === 'pistol') { bag.activeWeapon = 'gun'; radar.equipped = false; gun.aiming = false; toast('Pistol equipped'); }
+  if (slot.id === 'pistol') { bag.activeWeapon = 'gun'; radar.equipped = false; gun.aiming = false; toast(`${GUN.name} equipped`); }
   else if (slot.id === 'radar') {
-    if (!isObserverRound() && !isChoirRound()) { toast('The radar only catches signals during Observer or Choir rounds'); return; }
+    if (!radarWorks()) { toast('The radar only catches signals during Observer or Choir rounds. A tracker upgrade (C) works in all of them'); return; }
     if (flashlight.battery <= 0) { toast('Radar battery dead. B to swap in a spare'); return; }
     radar.equipped = !radar.equipped; gun.aiming = false; playSwitchSound();
   }
@@ -1254,6 +1262,7 @@ function useInventorySlot(index) {
   else if (slot.kind === 'ammo') startReload();
   else if (slot.kind === 'matches') strikeMatch();
   else if (slot.kind === 'potion') drinkPotion();
+  else if (slot.kind === 'grenade') throwGrenade();
   else if (slot.id === 'stamina_tonic') {
     const cap = staminaMax * (bag.items.includes('stamina_charm') ? 1.18 : 1);
     if (stamina >= cap * 0.95) { toast('Stamina is already full'); return; }
@@ -1277,6 +1286,7 @@ function dropInventorySlot() {
   else if (slot.id === 'battery') inv.batteries = 0;
   else if (slot.id === 'matches') inv.matches = 0;
   else if (slot.id === 'potion') inv.potions = 0;
+  else if (slot.id === 'grenade') inv.grenades = 0;
   else {
     const at = bag.items.indexOf(slot.id);
     if (at < 0) return;
@@ -1289,7 +1299,7 @@ function dropInventorySlot() {
   toast(`Dropped ${slot.label}`);
 }
 const lootRng = mulberry(CFG.seed ^ 0x51ed);
-const gun = { raise: 0, recoil: 0, reloadT: -1, loaded: false, cooldown: 0, flash: 0, aiming: false, ads: 0 };
+const gun = { raise: 0, recoil: 0, reloadT: -1, loaded: false, cooldown: 0, flash: 0, aiming: false, ads: 0, trigger: false, burst: 0 };
 const match = { t: 0 };
 const swordSwing = { t: 1, duration: 0.36 };
 let handSide = 1;          // flashlight hand: 1 right, -1 left (when a right-hand weapon is equipped)
@@ -1304,6 +1314,13 @@ function handSprite(url, size, color) {
   return m;
 }
 const gunMesh = handSprite('./assets/items/pistol.png', 0.36, 0x8a8a8a);
+const pistolTex = gunMesh.material.map;
+// Make the gun in hand match inv.gunTier: its figures, its picture, its size.
+function fitGun() {
+  Object.assign(GUN, GUN_TIERS[inv.gunTier]);
+  gunMesh.material.map = GUN.sprite ? SPRITES[GUN.sprite].tex : pistolTex; gunMesh.material.needsUpdate = true;
+  gunMesh.scale.setScalar(GUN.scale);
+}
 const knifeMesh = handSprite('./assets/items/combat_knife.png', 0.42, 0xffffff);
 const swordMesh = handSprite('./assets/items/longsword.png', 0.48, 0xffffff);
 const matchMesh = handSprite('./assets/items/match_lit.png', 0.26, 0xffffff);
@@ -1342,7 +1359,10 @@ function playGunshot() {
   if (audioCtx.state === 'suspended') audioCtx.resume();
   const src = audioCtx.createBufferSource();
   src.buffer = gunshotBuffer;
-  src.connect(gunshotGain);
+  // every bullet is the same clip: a rapid gun plays it again for each one, a touch off-pitch so the burst is not a buzz
+  src.playbackRate.value = GUN.pitch * (GUN.auto ? 0.96 + Math.random() * 0.08 : 1);
+  const level = audioCtx.createGain(); level.gain.value = GUN.vol;
+  src.connect(level).connect(gunshotGain);
   src.start();
 }
 
@@ -1376,12 +1396,14 @@ const sfx = {
   click()  { noise1(0.04, 'highpass', 2600, 2000, 0.35); },
   strike() { noise1(0.38, 'bandpass', 2200, 4200, 0.3); },
   chest()  { thump(170, 80, 0.16, 0.5); noise1(0.12, 'lowpass', 900, 300, 0.4); },
+  upgrade() { thump(420, 620, 0.12, 0.35); noise1(0.08, 'highpass', 3000, 5200, 0.25); setTimeout(() => thump(620, 880, 0.16, 0.3), 110); },
+  boom()   { thump(95, 26, 1.0, 1.6); noise1(0.9, 'lowpass', 1400, 70, 1.5); noise1(0.25, 'bandpass', 2600, 500, 0.8); },
   drink()  { playClip(drinkBuffer, 0.85); },
 };
 
 // HUD
 const $ = (id) => document.getElementById(id);
-const ui = { status: $('status'), battFill: $('battFill'), batt: $('batt'), spare: $('spare'), matches: $('matches'), potions: $('potions'), reticle: $('reticle'),
+const ui = { status: $('status'), battFill: $('battFill'), batt: $('batt'), spare: $('spare'), matches: $('matches'), potions: $('potions'), parts: $('parts'), reticle: $('reticle'),
              ammo: $('ammo'), ammoText: $('ammoText'), prompt: $('prompt'), toast: $('toast'), inventory: $('inventoryPanel'), inventoryMeta: $('inventoryMeta'), inventorySlots: $('inventorySlots') };
 let toastTimer = 0;
 function useWords(text) {
@@ -1408,7 +1430,16 @@ function useWords(text) {
     .replace(/\bHold Space\b/g, 'Hold the breath button')
     .replace(/\bhold Space\b/g, 'hold the breath button')
     .replace(/Press F again/g, 'Tap the light again')
-    .replace(/Click to shoot, right mouse to aim, R to reload/g, 'Tap to shoot, hold to aim, tap the ammo to reload');
+    .replace(/Click to shoot, right mouse to aim, R to reload/g, 'Tap to shoot, hold to aim, tap the ammo to reload')
+    .replace(/C opens the workbench/g, 'Swipe two fingers down for the workbench')
+    .replace(/the workbench \(C\)/g, 'the workbench')
+    .replace(/T or its inventory slot to throw/g, 'Sweep two fingers sideways to throw')
+    .replace(/T to throw/g, 'Sweep two fingers sideways to throw')
+    .replace(/Hold the trigger to keep firing/g, 'Tap for a burst. Tap, then hold, to keep firing')
+    .replace(/T to fire/g, 'Sweep two fingers sideways to fire')
+    .replace(/A tracker upgrade \(C\)/g, 'A tracker upgrade')
+    .replace(/G raises it/g, 'Tap it to raise it')
+    .replace(/G to raise it/g, 'Tap it to raise it');
 }
 function toast(text) { ui.toast.textContent = useWords(text); ui.toast.style.opacity = 1; toastTimer = 3; }
 function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
@@ -1419,7 +1450,7 @@ function renderInventoryHud(inControl) {
   const slots = inventorySlots();
   bag.selected = Math.max(0, Math.min(bag.selected, Math.max(0, bag.capacity - 1)));
   const weaponDef = ITEM_DEFS[bag.activeWeapon];
-  const weapon = bag.activeWeapon === 'gun' ? 'Pistol' : weaponDef ? `${weaponDef.name}${weaponDef.maxDurability ? ` ${bag.durability[bag.activeWeapon] ?? weaponDef.maxDurability}/${weaponDef.maxDurability}` : ''}` : 'None';
+  const weapon = bag.activeWeapon === 'gun' ? GUN.name : weaponDef ? `${weaponDef.name}${weaponDef.maxDurability ? ` ${bag.durability[bag.activeWeapon] ?? weaponDef.maxDurability}/${weaponDef.maxDurability}` : ''}` : 'None';
   const armor = bag.armorId ? ITEM_DEFS[bag.armorId]?.name : 'None';
   const surge = bag.staminaUntil > uTime.value ? ` · WIND ${Math.ceil(bag.staminaUntil - uTime.value)}s` : '';
   const signature = `${bag.capacity}|${bag.selected}|${weapon}|${armor}|${slots.map((slot) => `${slot.id}:${slot.label}:${slot.active ? 1 : 0}`).join('|')}`;
@@ -1472,13 +1503,13 @@ function swapBattery() {
 }
 function drawRadarMap() {
   const g = radarCtx, w = radar.map.width, h = radar.map.height;
-  let displayRange = 32;
+  let displayRange = RADAR_TIERS[inv.radarTier].range;
   g.clearRect(0, 0, w, h);
   g.fillStyle = '#201d19'; g.fillRect(0, 0, w, h);
   g.strokeStyle = '#726d58'; g.lineWidth = 3; g.strokeRect(2, 2, w - 4, h - 4);
   g.fillStyle = '#26352b'; g.fillRect(12, 25, w - 24, h - 38);
-  g.fillStyle = '#b9b3a3'; g.font = 'bold 13px monospace'; g.textAlign = 'center'; g.fillText(isChoirRound() ? 'CHOIR LISTENER' : 'BODY RADAR', w / 2, 17);
-  const cx = w / 2, cy = 126, radius = 74, range = 32;
+  g.fillStyle = '#b9b3a3'; g.font = 'bold 13px monospace'; g.textAlign = 'center'; g.fillText(isChoirRound() ? 'CHOIR LISTENER' : isObserverRound() ? 'BODY RADAR' : RADAR_TIERS[inv.radarTier].name.toUpperCase(), w / 2, 17);
+  const cx = w / 2, cy = 126, radius = 74, range = RADAR_TIERS[inv.radarTier].range;
   g.save(); g.beginPath(); g.rect(12, 25, w - 24, h - 38); g.clip();
   g.strokeStyle = 'rgba(130,190,135,.35)'; g.lineWidth = 1;
   for (const r of [radius / 3, radius * 2 / 3, radius]) { g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke(); }
@@ -1579,6 +1610,19 @@ function drawRadarMap() {
     g.strokeStyle = `rgba(255,120,100,${0.6 * (1 - pulse)})`; g.lineWidth = 1.5;
     g.beginPath(); g.arc(x, y, 6 + pulse * 7, 0, Math.PI * 2); g.stroke();
   }
+  const blip = (x0, z0) => { const dx = x0 - px, dz = z0 - pz; return Math.hypot(dx, dz) > range * 1.12 ? null : [cx + THREE.MathUtils.clamp(dx / range, -1, 1) * radius, cy + THREE.MathUtils.clamp(dz / range, -1, 1) * radius]; };
+  if (inv.radarTier >= 2) for (const c of chunks.values()) {      // prospector: every chest still shut
+    const ch = c.chest, at = ch && !opened.has(ch.id) && blip(ch.x, ch.z);
+    if (!at) continue;
+    g.fillStyle = ch.tier === 'armory' ? '#d9b86c' : ch.tier === 'red' ? '#d27666' : ch.tier === 'blue' ? '#769dc9' : '#cfc9b4';
+    g.fillRect(at[0] - 2.5, at[1] - 2.5, 5, 5);
+  }
+  if (inv.radarTier >= 1 && !choirMode) {                         // tracker: whatever is moving
+    const dot = (x0, z0, color, r) => { const at = blip(x0, z0); if (at) { g.fillStyle = color; g.beginPath(); g.arc(at[0], at[1], r, 0, Math.PI * 2); g.fill(); } };
+    for (const gh of ghosts) if (gh.state !== 'die') dot(gh.x, gh.z, gh.brute ? '#e7a0ff' : '#bfe3ff', (gh.brute ? 4.5 : 3.2) + Math.sin(now * 6 + gh.phase));
+    if (collective.active && ['appear', 'warning', 'dispersal', 'last'].includes(collective.phase)) for (const k of collective.kids) dot(k.x, k.z, '#f0e08a', 3);
+    if (consumer.active) dot(consumer.x, consumer.z, '#ff8a5c', 6);
+  }
   g.translate(cx, cy); g.rotate(-yaw);
   g.fillStyle = '#e5e1cc'; g.beginPath(); g.moveTo(0, -8); g.lineTo(-5, 6); g.lineTo(0, 3); g.lineTo(5, 6); g.closePath(); g.fill();
   g.restore();
@@ -1625,17 +1669,19 @@ function shoot() {
   if (inv.mag <= 0) {
     sfx.click();
     if (isChoirRound()) choir.noise(camera.position.x, camera.position.z, 0.28, 'empty click');
+    gun.trigger = false; gun.burst = 0;
     if (inv.reserve > 0) startReload(); else toast('Out of bullets');
     return;
   }
   inv.mag--; gun.recoil = 1; gun.flash = 0.07;
-  pitch = Math.min(1.45, pitch + 0.025);
+  pitch = Math.min(1.45, pitch + GUN.kick);
+  if (GUN.auto) yaw += (Math.random() - 0.5) * GUN.kick * 1.5;       // a rapid gun walks about as it fires
   sfx.shot();
-  ghostHit();
+  ghostHit(45, 0.3, GUN.damage);
   if (obsRound.active) { camera.getWorldDirection(aim); obsRound.shot(camera.position, aim); }
   if (collective.active) { camera.getWorldDirection(aim); collective.shot(camera.position, aim); }
-  if (choir.active) { camera.getWorldDirection(aim); choir.shot(camera.position, aim); }
-  if (consumer.active) { camera.getWorldDirection(aim); consumer.shot(camera.position, aim, { damage: 3, noiseVolume: 1.25 }); }
+  if (choir.active) { camera.getWorldDirection(aim); choir.shot(camera.position, aim, { damage: GUN.damage }); }
+  if (consumer.active) { camera.getWorldDirection(aim); consumer.shot(camera.position, aim, { damage: 3 * GUN.damage, noiseVolume: 1.25 }); }
 }
 function meleeAttack() {
   const item = ITEM_DEFS[bag.activeWeapon], bonuses = bagBonuses();
@@ -1666,10 +1712,10 @@ function meleeAttack() {
 const openedChests = [];
 const chestLootRolls = new Map();
 const CHEST_LOOT = {
-  common: [['ammo', 22], ['battery', 20], ['matches', 18], ['potion', 10], ['stamina_tonic', 7], ['knife', 5], ['swift_boots', 4], ['stamina_charm', 3], ['steady_charm', 3], ['armor', 2], ['sword', 0.8], ['sword_iron', 0.22], ['sword_hive', 0.05], ['stamina_surge', 0.6]],
-  blue: [['pack_blue', 14], ['stamina_surge', 9], ['armor', 14], ['sword', 8], ['sword_iron', 3], ['sword_hive', 0.7], ['knife', 8], ['stamina_tonic', 12], ['swift_boots', 9], ['stamina_charm', 8], ['steady_charm', 6], ['battery', 5], ['ammo', 4], ['potion', 3], ['matches', 3]],
-  red: [['pack_red', 17], ['sword', 16], ['sword_iron', 8], ['sword_hive', 2], ['armor', 16], ['stamina_surge', 14], ['stamina_charm', 12], ['steady_charm', 9], ['swift_boots', 6], ['knife', 5], ['stamina_tonic', 5], ['battery', 4], ['ammo', 3], ['potion', 2], ['matches', 1]],
-  armory: [['sword', 24], ['sword_iron', 16], ['sword_hive', 5], ['armor', 24], ['knife', 20], ['stamina_surge', 9], ['stamina_tonic', 8], ['swift_boots', 5], ['stamina_charm', 4], ['steady_charm', 4], ['pack_blue', 2]],
+  common: [['ammo', 22], ['battery', 20], ['matches', 18], ['potion', 10], ['stamina_tonic', 7], ['knife', 5], ['swift_boots', 4], ['stamina_charm', 3], ['steady_charm', 3], ['armor', 2], ['sword', 0.8], ['sword_iron', 0.22], ['sword_hive', 0.05], ['stamina_surge', 0.6], ['grenade', 3], ['gun_kit', 1.6], ['light_kit', 1.6], ['radar_kit', 1], ['launcher_kit', 0.3]],
+  blue: [['pack_blue', 14], ['stamina_surge', 9], ['armor', 14], ['sword', 8], ['sword_iron', 3], ['sword_hive', 0.7], ['knife', 8], ['stamina_tonic', 12], ['swift_boots', 9], ['stamina_charm', 8], ['steady_charm', 6], ['battery', 5], ['ammo', 4], ['potion', 3], ['matches', 3], ['grenade', 8], ['gun_kit', 9], ['light_kit', 7], ['radar_kit', 5], ['launcher_kit', 2]],
+  red: [['pack_red', 17], ['sword', 16], ['sword_iron', 8], ['sword_hive', 2], ['armor', 16], ['stamina_surge', 14], ['stamina_charm', 12], ['steady_charm', 9], ['swift_boots', 6], ['knife', 5], ['stamina_tonic', 5], ['battery', 4], ['ammo', 3], ['potion', 2], ['matches', 1], ['grenade', 10], ['gun_kit', 12], ['light_kit', 8], ['radar_kit', 6], ['launcher_kit', 5]],
+  armory: [['sword', 24], ['sword_iron', 16], ['sword_hive', 5], ['armor', 24], ['knife', 20], ['stamina_surge', 9], ['stamina_tonic', 8], ['swift_boots', 5], ['stamina_charm', 4], ['steady_charm', 4], ['pack_blue', 2], ['grenade', 16], ['gun_kit', 22], ['launcher_kit', 10], ['light_kit', 4]],
 };
 function canReceiveLoot(id) {
   if (id === 'pack_blue' || id === 'pack_red') return bag.capacity < bag.maxCapacity;
@@ -1679,12 +1725,18 @@ function canReceiveLoot(id) {
   if (id === 'battery') return bagHasRoom('battery');
   if (id === 'matches') return bagHasRoom('matches');
   if (id === 'potion') return bagHasRoom('potion');
+  if (id === 'grenade') return bagHasRoom('grenade');
+  if (id === 'gun_kit') return inv.gun && inv.gunTier < GUN_TIERS.length - 1;
+  if (id === 'light_kit') return inv.lightTier < LIGHT_TIERS.length - 1;
+  if (id === 'radar_kit') return radar.acquired && inv.radarTier < RADAR_TIERS.length - 1;
+  if (id === 'launcher_kit') return !inv.launcher;
   if (ITEM_DEFS[id]) return (ITEM_DEFS[id].kind === 'consumable' || !bag.items.includes(id)) && bagHasRoom(id);
   return false;
 }
 function rollChestLoot(tier) {
   const entries = (CHEST_LOOT[tier] || CHEST_LOOT.common).filter(([id]) => canReceiveLoot(id)).map(([id, weight]) => {
-    if (id === 'ammo' && inv.mag + inv.reserve >= 30) weight *= 0.3;
+    if (id === 'ammo' && inv.mag + inv.reserve >= 30 * GUN.ammoScale) weight *= 0.3;
+    if (id === 'grenade' && inv.grenades >= 3) weight *= 0.35;
     if (id === 'battery' && inv.batteries >= 3) weight *= 0.35;
     if (id === 'potion' && inv.potions >= 2) weight *= 0.35;
     return [id, weight];
@@ -1712,7 +1764,9 @@ function grantChestLoot(id) {
     radar.acquired = true; radar.equipped = true; bag.activeWeapon = 'gun'; gun.aiming = false;
     playSwitchSound(); toast(isChoirRound() ? 'Found a Choir listener. G or its inventory slot swaps it with your weapon' : 'Found a body radar. G or its inventory slot swaps it with your weapon'); return true;
   }
-  if (id === 'ammo') { if (!canReceiveLoot(id)) return false; const n = 4 + ((lootRng() * 5) | 0); inv.reserve += n; toast(`Found ${n} bullets`); return true; }
+  if (id === 'ammo') { if (!canReceiveLoot(id)) return false; const n = Math.round((4 + ((lootRng() * 5) | 0)) * GUN.ammoScale); inv.reserve += n; toast(`Found ${n} bullets`); return true; }
+  if (id === 'grenade') { if (!canReceiveLoot(id)) return false; const n = 1 + ((lootRng() * 2) | 0); inv.grenades += n; toast(`Found ${n > 1 ? `${n} grenades` : 'a grenade'}. T or its inventory slot to throw. Stand well back`); return true; }
+  if (id === 'gun_kit' || id === 'light_kit' || id === 'radar_kit' || id === 'launcher_kit') { const line = canReceiveLoot(id) && applyKit(id); if (!line) return false; toast(line); sfx.upgrade(); return true; }
   if (id === 'battery') { if (!canReceiveLoot(id)) return false; inv.batteries++; toast('Found a battery. B to swap it in'); return true; }
   if (id === 'matches') { if (!canReceiveLoot(id)) return false; inv.matches += 2 + ((lootRng() * 3) | 0); toast(`Found matches (${inv.matches} total)`); return true; }
   if (id === 'potion') { if (!canReceiveLoot(id)) return false; inv.potions++; toast('Found a potion. Q or its inventory slot to drink'); return true; }
@@ -1736,6 +1790,7 @@ function openChest(c) {
     if (isCollectiveRound() && (c.tier || 'common') === 'common') c.loot = 'matches';
     else if (!radar.acquired && (isChoirRound() || (isObserverRound() && (round.t >= 90 || lootRng() < 0.16)))) c.loot = 'radar';
     else if (!inv.gun) c.loot = 'pistol';
+    else if (!inv.kitGiven && inv.gunTier === 0 && (c.tier || 'common') !== 'common') c.loot = 'gun_kit';      // the first good chest always rebuilds the pistol
     else if ((c.tier || 'common') === 'common' && lootRng() < 0.12 && lore.dropAt('world', camera.position.x, camera.position.z)) c.loot = 'lore';
     if (!c.loot) c.loot = rollChestLoot(c.tier || 'common');
     if (c.loot) chestLootRolls.set(c.id, c.loot);
@@ -1747,6 +1802,7 @@ function openChest(c) {
   } else granted = c.loot && grantChestLoot(c.loot);
   if (!granted) { toast(`Inventory full (${inventorySlots().length}/${bag.capacity}). Select a slot and press X to make room`); return; }
   opened.add(c.id); openedChests.push(c.id); refreshChunks(true); sfx.chest();
+  { const [lo, hi] = PARTS_IN_CHEST[c.tier || 'common'] || PARTS_IN_CHEST.common; addParts(lo + ((lootRng() * (hi - lo + 1)) | 0), true); }     // every chest has parts in the bottom of it
   chestLootRolls.delete(c.id);
   if (c.loot === 'radar') radar.beepIn = 0;
   c.loot = null;
@@ -1760,7 +1816,9 @@ function actionKey(e) {
   else if (e.code === 'KeyB') swapBattery();
   else if (e.code === 'KeyM') strikeMatch();
   else if (e.code === 'KeyQ') drinkPotion();
-  else if (e.code === 'KeyG' && (isObserverRound() || isChoirRound()) && radar.acquired) {
+  else if (e.code === 'KeyC') bench.open();
+  else if (e.code === 'KeyT') throwGrenade();
+  else if (e.code === 'KeyG' && radarWorks() && radar.acquired) {
     if (!radar.equipped && flashlight.battery <= 0) { toast('The radar battery is dead. B to swap in a spare'); return; }
     radar.equipped = !radar.equipped;
     gun.aiming = false;
@@ -1769,10 +1827,11 @@ function actionKey(e) {
 }
 document.addEventListener('mousedown', (e) => {
   if (!playing || finished || intro.active) return;
-  if (e.button === 0) shoot();
+  if (e.button === 0) { gun.trigger = true; shoot(); }
   else if (e.button === 2 && inv.gun && bag.activeWeapon === 'gun' && !radar.equipped) gun.aiming = true;
 });
 document.addEventListener('mouseup', (e) => {
+  if (e.button === 0) gun.trigger = false;
   if (e.button === 2) gun.aiming = false;
 });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -1783,12 +1842,13 @@ function updateItems(dt, bobX, bobY, inControl, raised) {
   const swordArc = swordSwing.t < swordSwing.duration ? Math.sin(swordProgress * Math.PI) : 0;
   // battery drains only while the beam is actually on
   if (inControl && (raised || radar.equipped) && flashlight.battery > 0) {
-    flashlight.battery = Math.max(0, flashlight.battery - dt / CFG.batterySeconds);
+    flashlight.battery = Math.max(0, flashlight.battery - dt / (CFG.batterySeconds * LIGHT_TIERS[inv.lightTier].life));
     if (flashlight.battery === 0) {
       if (radar.equipped) { radar.equipped = false; flashlight.equipped = false; toast('Radar battery dead. B to swap in a spare'); }
       else toast(inv.batteries > 0 ? 'Battery dead. B to swap in a spare' : 'Battery dead. M to strike a match');
     }
   }
+  if (inControl && !raised && !radar.equipped && LIGHT_TIERS[inv.lightTier].recharge) flashlight.battery = Math.min(1, flashlight.battery + dt * LIGHT_TIERS[inv.lightTier].recharge);
   flashlight.nextFlicker = Math.min(flashlight.nextFlicker, flickerGap(1));
 
   // A pistol or sword occupies the right hand, leaving the flashlight in the left.
@@ -1827,7 +1887,7 @@ function updateItems(dt, bobX, bobY, inControl, raised) {
   if (radar.equipped && inControl) {
     radar.beepIn -= dt;
     if (radar.beepIn <= 0) {
-      if (flashlight.battery > 0 && (obsRound.active || choir.active)) {
+      if (flashlight.battery > 0 && (obsRound.active || choir.active || inv.radarTier >= 1)) {
         const src = audioCtx.createBufferSource(), gain = audioCtx.createGain();
         src.buffer = radarBuffer; gain.gain.value = 0.12;
         if (obsRound.hunting) { src.playbackRate.value = 0.6 + Math.random() * 0.7; gain.gain.value = 0.08 + Math.random() * 0.1; }   // warped while it hunts
@@ -1842,6 +1902,9 @@ function updateItems(dt, bobX, bobY, inControl, raised) {
   const wantAds = gun.aiming && inv.gun && bag.activeWeapon === 'gun' && !radar.equipped && gun.reloadT < 0 && inControl ? 1 : 0;
   gun.ads += (wantAds - gun.ads) * Math.min(1, dt * 8);
   gun.cooldown = Math.max(0, gun.cooldown - dt);
+  // a rapid gun keeps firing while the trigger is held (or until a tapped burst is spent)
+  if (!inControl) { gun.trigger = false; gun.burst = 0; }
+  else if (gun.cooldown <= 0 && inv.gun && bag.activeWeapon === 'gun' && ((gun.trigger && GUN.auto) || gun.burst > 0)) { if (gun.burst > 0) gun.burst--; shoot(); }
   if (inv.gun) {
     gun.raise += (1 - gun.raise) * Math.min(1, dt * 6);
     gun.recoil = Math.max(0, gun.recoil - dt * 6);
@@ -1860,8 +1923,8 @@ function updateItems(dt, bobX, bobY, inControl, raised) {
     }
     const a = gun.ads, steady = 1 - a * 0.8;
     gunMesh.position.set(
-      0.36 + (0.02 - 0.36) * a + bobX * steady,
-      -0.31 + (-0.16 - -0.31) * a - (1 - gun.raise) * 0.5 - dip * 0.22 + gun.recoil * 0.05 + bobY * 0.6 * steady,
+      0.36 + (0.02 - 0.36) * a + bobX * steady - (GUN.scale - 1) * 0.1 * (1 - a),
+      -0.31 + (GUN.scale - 1) * 0.05 + (-0.16 - -0.31) * a - (1 - gun.raise) * 0.5 - dip * 0.22 + gun.recoil * 0.05 + bobY * 0.6 * steady,
       -0.6 + (-0.48 - -0.6) * a + gun.recoil * 0.07);
     gunMesh.rotation.z = -0.45 + (-0.06 - -0.45) * a - gun.recoil * 0.5 - dip * 0.9;
     muzzle.position.set(0.3 + (0.02 - 0.3) * a, -0.15 + (-0.05 - -0.15) * a, -0.9 + (-0.7 - -0.9) * a);
@@ -1896,6 +1959,8 @@ function updateItems(dt, bobX, bobY, inControl, raised) {
   setText(ui.spare, '+' + inv.batteries);
   setText(ui.matches, String(inv.matches));
   setText(ui.potions, String(inv.potions));
+  setText(ui.parts, String(inv.parts));
+  if (partsFlash > 0) { partsFlash = Math.max(0, partsFlash - dt); ui.parts.style.color = partsFlash > 0 ? '#fff' : ''; }
   setText(ui.ammoText, gun.reloadT >= 0 ? 'reloading' : `${inv.mag} / ${inv.reserve}`);
   if (toastTimer > 0) { toastTimer -= dt; if (toastTimer <= 0) ui.toast.style.opacity = 0; }
 }
@@ -1927,7 +1992,7 @@ addEventListener('keyup', (e) => {
   keys[e.code] = false;
   if (e.code === 'Space') { holdingBreath = false; breathBlocked = false; }
 });
-addEventListener('blur', () => { holdingBreath = false; gun.aiming = false; });
+addEventListener('blur', () => { holdingBreath = false; gun.aiming = false; gun.trigger = false; });
 overlay.addEventListener('click', () => {
   if (TOUCH) { beginTouch(); return; }
   if (finished) { location.reload(); return; }
@@ -1943,12 +2008,12 @@ overlay.addEventListener('click', () => {
 });
 document.addEventListener('pointerlockchange', () => {
   playing = document.pointerLockElement === renderer.domElement;
-  overlay.style.display = playing || journal.isOpen ? 'none' : 'flex';
+  overlay.style.display = playing || journal.isOpen || bench.isOpen ? 'none' : 'flex';
   if (playing) { started = true; stopIntroSong(); }
   else { holdingBreath = false; gun.aiming = false; syncFootsteps(null); }
   if (!playing && !finished) document.getElementById('go').textContent = started ? 'Paused. Click to resume' : 'Click to begin';
 });
-document.addEventListener('pointerlockerror', () => { if (!journal.isOpen && !finished) { playing = false; overlay.style.display = 'flex'; } });
+document.addEventListener('pointerlockerror', () => { if (!journal.isOpen && !bench.isOpen && !finished) { playing = false; overlay.style.display = 'flex'; } });
 addEventListener('mousemove', (e) => {
   if (!playing || intro.active) return;
   const sens = 0.0022 * (1 - gun.ads * 0.4);
@@ -1985,7 +2050,7 @@ function beginTouch() {
   started = true;
   stopIntroSong();
   overlay.style.display = 'none';
-  fitTouch();
+  dispatchEvent(new Event('resize'));          // the touch layout refits itself on resize (fitTouch lives inside the TOUCH block)
 }
 let releaseTouch = () => {};
 function pauseTouch() {
@@ -2007,7 +2072,7 @@ if (TOUCH) {
     meta.content = content;
   }
   document.getElementById('go').textContent = 'Tap to begin';
-  document.getElementById('inventoryHelp').textContent = 'TAP AN ITEM TO USE OR SWAP';
+  document.getElementById('inventoryHelp').textContent = 'TAP AN ITEM TO USE · TWO FINGERS: DOWN WORKBENCH, SIDEWAYS GRENADE';
   const stick = document.getElementById('stick'), knob = document.getElementById('stickKnob'), gear = document.getElementById('gear'), breathBtn = document.getElementById('breath');
   const fingers = new Map();
   const breathSources = new Set();
@@ -2082,7 +2147,7 @@ if (TOUCH) {
     hideStick();
     endBreath();
     endUse();
-    gun.aiming = false;
+    gun.aiming = false; gun.trigger = false;
     clearTimeout(pendingFire);
     if (look) clearTimeout(look.holdTimer);
     if (pair) clearTimeout(pair.timer);
@@ -2157,15 +2222,16 @@ if (TOUCH) {
     if (!look || e.pointerId !== look.id) return;
     clearTimeout(look.holdTimer);
     const dist = Math.hypot(e.clientX - look.sx, e.clientY - look.sy);
-    const tap = !look.dragged && !look.aiming && dist < 16 && performance.now() - look.t < 320;
+    const tap = !look.dragged && !look.aiming && !look.firing && dist < 16 && performance.now() - look.t < 320;
     const doubled = gone && gone.double;
     if (look.aiming) gun.aiming = false;
+    if (look.firing) gun.trigger = false;
     look = null;
     if (rights.length > 0 || !tap) return;
     if (doubled) { lastTap = 0; clearTimeout(pendingFire); pressKey('KeyE'); releaseKey('KeyE'); return; }
     const stamp = performance.now();
     lastTap = stamp;
-    pendingFire = setTimeout(() => { if (lastTap === stamp) shoot(); }, 280);
+    pendingFire = setTimeout(() => { if (lastTap === stamp) { shoot(); if (GUN.auto && bag.activeWeapon === 'gun' && inv.gun) gun.burst = 3; } }, 280);     // a tap on a rapid gun is a short burst
   }
   document.addEventListener('pointerdown', (e) => {
     if (!playing || intro.active) return;
@@ -2190,9 +2256,9 @@ if (TOUCH) {
     }
     const rights = rightFingers();
     if (rights.length >= 2) {
-      if (look) { clearTimeout(look.holdTimer); if (look.aiming) gun.aiming = false; endUse(); look = null; }
+      if (look) { clearTimeout(look.holdTimer); if (look.aiming) gun.aiming = false; if (look.firing) gun.trigger = false; endUse(); look = null; }
       clearTimeout(pendingFire);
-      pair = { t: performance.now(), sy: rights.reduce((sum, f) => sum + f.sy, 0) / rights.length, moved: 0, opened: false, timer: 0 };
+      pair = { t: performance.now(), sx: rights.reduce((sum, f) => sum + f.sx, 0) / rights.length, sy: rights.reduce((sum, f) => sum + f.sy, 0) / rights.length, moved: 0, opened: false, timer: 0 };
       pair.timer = setTimeout(() => {
         if (!pair || pair.opened || pair.moved >= 16 || breathOn || rightFingers().length < 2) return;
         pair.used = true; beginBreath('fingers');
@@ -2203,6 +2269,8 @@ if (TOUCH) {
       look = { id: e.pointerId, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: rec.t, dragged: false, aiming: false, holdTimer: 0 };
       look.holdTimer = setTimeout(() => {
         if (!look || look.id !== e.pointerId || look.dragged || rightFingers().length >= 2) return;
+        // tap, then hold: a rapid gun fires for as long as the finger stays down, and the finger still aims it
+        if (rec.double && GUN.auto && inv.gun && bag.activeWeapon === 'gun' && !radar.equipped) { look.firing = true; lastTap = 0; gun.trigger = true; shoot(); return; }
         if (touchCanUse()) { look.using = true; clearTimeout(pendingFire); lastTap = 0; pressKey('KeyE'); return; }
         look.aiming = true; gun.aiming = true;
       }, 280);
@@ -2216,22 +2284,30 @@ if (TOUCH) {
     f.x = e.clientX; f.y = e.clientY;
     const rights = rightFingers();
     if (rights.length >= 2 && pair) {
-      const ay = rights.reduce((sum, p) => sum + p.y, 0) / rights.length;
-      pair.moved = Math.max(pair.moved, Math.abs(pair.sy - ay));
-      if (!pair.opened && pair.sy - ay > 46) { pair.opened = true; pair.used = true; gear.classList.add('on'); endBreath('fingers'); }
+      const ay = rights.reduce((sum, p) => sum + p.y, 0) / rights.length, ax = rights.reduce((sum, p) => sum + p.x, 0) / rights.length;
+      const up = pair.sy - ay, across = ax - pair.sx;
+      pair.moved = Math.max(pair.moved, Math.hypot(up, across));
+      if (pair.opened) return;
+      // two fingers together: up for the gear, down for the workbench, sideways to throw a grenade
+      const tall = Math.abs(up) > 46 && Math.abs(up) > Math.abs(across), wide = Math.abs(across) > 56 && Math.abs(across) > Math.abs(up);
+      if (!tall && !wide) return;
+      pair.opened = true; pair.used = true; endBreath('fingers');
+      if (wide) throwGrenade();
+      else if (up > 0) gear.classList.add('on');
+      else if (!finished) bench.open();
       return;
     }
     if (e.pointerId === stickId) { moveStick(e.clientX, e.clientY); return; }
     if (!look || e.pointerId !== look.id) return;
-    if (Math.hypot(e.clientX - look.sx, e.clientY - look.sy) > 12) { look.dragged = true; clearTimeout(look.holdTimer); }
-    if (!look.dragged && !look.aiming) return;
+    if (!look.firing && Math.hypot(e.clientX - look.sx, e.clientY - look.sy) > 12) { look.dragged = true; clearTimeout(look.holdTimer); }
+    if (!look.dragged && !look.aiming && !look.firing) return;
     const sens = 0.0045 * (1 - gun.ads * 0.4);
     yaw -= dx * sens;
     pitch = Math.max(-1.45, Math.min(1.45, pitch - dy * sens));
   });
   document.addEventListener('pointerup', endPointer);
   document.addEventListener('pointercancel', endPointer);
-  document.addEventListener('touchmove', (e) => { if (!e.target.closest('#board, #playerName, #inventorySlots, #breath')) e.preventDefault(); }, { passive: false });
+  document.addEventListener('touchmove', (e) => { if (!e.target.closest('#board, #playerName, #inventorySlots, #breath, #menuPanel, #bench .wlist')) e.preventDefault(); }, { passive: false });
 }
 
 // ───────────────────────── loop ─────────────────────────
@@ -2535,6 +2611,7 @@ function updateWorld(dt, inControl) {
     if (!hit) ventTick = VENT.every * 0.8;
     else { ventTick += dt; if (ventTick >= VENT.every) { ventTick = 0; damagePlayer(VENT.damage, 'burned'); sfx.sizzle(); } }
   }
+  updateGrenades(dt, inControl);
   const bodyAction = obsRound.world(dt, inControl, px, pz, yaw, t);
   if (bodyAction && (!mapAction || bodyAction.label.startsWith('[E]'))) mapAction = bodyAction;
   const civilianAction = inControl && consumer.active ? consumer.worldAction(px, pz, yaw) : null;
@@ -2829,7 +2906,7 @@ function startRound(n) {
   if (collective.active) collective.stop();
   if (choir.active) choir.stop();
   if (consumer.active) consumer.stop();
-  radar.equipped = false;
+  if (inv.radarTier < 1) radar.equipped = false;       // a tracker works in any round, so it stays out
   setHuntSilence(false);                 // an Observer round can end mid-hunt: bring the world's sound back
   setDusk(false);
   round.n = n; round.t = 0; round.rest = 0; round.announced = false;
@@ -2861,7 +2938,7 @@ function endGame(won) {
   syncTick(false);
   if (!won) playClip(dyingBuffer, 0.9);
   document.getElementById('title').textContent = won ? 'DAWN' : deathCause === 'time' ? 'TOO LATE' : 'YOU DIED';
-  document.getElementById('sub').textContent = won ? `You made it through all ${ROUND.count} rounds.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.`, sanity: 'Your mind was empty for too long.', cutscene: cutsceneLine }[deathCause] || `The dead took you in round ${round.n}.`);
+  document.getElementById('sub').textContent = won ? `You made it through all ${ROUND.count} rounds.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', blast: 'You were standing too close.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.`, sanity: 'Your mind was empty for too long.', cutscene: cutsceneLine }[deathCause] || `The dead took you in round ${round.n}.`);
   document.getElementById('go').textContent = TOUCH ? 'Tap to play again' : 'Click to play again';
   overlay.style.display = 'flex';
   if (document.pointerLockElement) document.exitPointerLock();
@@ -2879,6 +2956,7 @@ function roundWon(cleared, line) {
   if (consumer.active) consumer.stop();
   if (round.n >= ROUND.count) { endGame(true); return; }
   banner(`ROUND ${round.n} SURVIVED`, line || (cleared ? 'Every ghost is gone' : 'You outlasted them'));
+  addParts(3); toast(`Salvaged 3 parts (${inv.parts}). C opens the workbench`);
   round.rest = ROUND.rest;
   for (const g of ghosts) if (g.state !== 'die') { g.state = 'flee'; g.timer = 0; }
 }
@@ -2918,11 +2996,19 @@ function ghostHit(maxRange = 45, spread = 0.3, damage = 1) {
     if (mx * mx + mz * mz < spread * targetScale * targetScale && Math.abs(my) < 0.9 * targetScale) { best = g; bestT = t; }
   }
   if (!best || MAP.blocked(o.x, o.z, best.x, best.z, opened)) return false;      // rock stops attacks
-  best.hp -= damage;
   best.x += aim.x * 0.6; best.z += aim.z * 0.6;
-  if (best.hp <= 0) { best.state = 'die'; setAnim(best, 'die'); playGhostDeath(best); if (Math.random() < 0.45) dropLore('request', best.x, best.z, 'It leaves something behind.'); }
-  else { best.state = 'hurt'; best.timer = 0.5; best.anim = ''; setAnim(best, 'hurt'); playGhostShot(best); }
+  hurtGhost(best, damage);
   return true;
+}
+// A bullet, a blade or a blast: it staggers, or it dies. The dead sometimes leave a request, sometimes a part.
+function hurtGhost(g, damage) {
+  if (g.state === 'die') return;
+  g.hp -= damage;
+  if (g.hp <= 0) {
+    g.state = 'die'; setAnim(g, 'die'); playGhostDeath(g);
+    if (Math.random() < 0.45) dropLore('request', g.x, g.z, 'It leaves something behind.');
+    if (Math.random() < (g.brute ? 1 : 0.4)) addParts(g.brute ? 2 : 1);
+  } else { g.state = 'hurt'; g.timer = 0.5; g.anim = ''; setAnim(g, 'hurt'); playGhostShot(g); }
 }
 
 function updateMonsters(dt, inControl, beamOn) {
@@ -3120,6 +3206,174 @@ const journal = createJournal({
     else overlay.style.display = 'flex';
   },
 });
+
+// ───────────────────────── gear: parts, kits, the workbench, grenades ─────────────────────────
+let partsFlash = 0;
+document.getElementById('partsIcon').src = SPRITES.parts.url;
+// say: tack the find onto whatever the last message was (a chest has just said what else was in it)
+function addParts(n, say = false) {
+  inv.parts += n; partsFlash = 1.2;
+  if (say) { ui.toast.textContent += ` · +${n} part${n > 1 ? 's' : ''}`; ui.toast.style.opacity = 1; toastTimer = Math.max(toastTimer, 3); }
+}
+// Fit an upgrade, from a kit in a chest or built at the bench. Returns the line to say, or null if there was nothing to fit.
+function applyKit(id) {
+  if (id === 'gun_kit') {
+    if (!inv.gun || inv.gunTier >= GUN_TIERS.length - 1) return null;
+    const was = GUN.name, oldMag = GUN.mag;
+    inv.gunTier++; inv.kitGiven = true; fitGun();
+    inv.reserve = Math.round(inv.reserve * GUN.mag / oldMag); inv.mag = GUN.mag;        // what you were carrying is recut to fit
+    gun.reloadT = -1; gun.trigger = false; gun.burst = 0;
+    return `Your ${was.toLowerCase()} is rebuilt as ${/^[AEIOU]/.test(GUN.name) ? 'an' : 'a'} ${GUN.name.toUpperCase()}: ${GUN.mag} rounds${GUN.damage > 1 ? `, ${GUN.damage}× the damage` : ''}. Hold the trigger to keep firing`;
+  }
+  if (id === 'light_kit') {
+    if (inv.lightTier >= LIGHT_TIERS.length - 1) return null;
+    inv.lightTier++; flashlight.battery = 1;
+    return `${LIGHT_TIERS[inv.lightTier].name.toUpperCase()} fitted. ${LIGHT_TIERS[inv.lightTier].note}`;
+  }
+  if (id === 'radar_kit') {
+    if (!radar.acquired || inv.radarTier >= RADAR_TIERS.length - 1) return null;
+    inv.radarTier++; radar.drawIn = 0;
+    return `Radar rebuilt as a ${RADAR_TIERS[inv.radarTier].name.toUpperCase()}. ${RADAR_TIERS[inv.radarTier].note}. G to raise it`;
+  }
+  if (id === 'launcher_kit') {
+    if (inv.launcher) return null;
+    inv.launcher = true; if (bagHasRoom('grenade')) inv.grenades += 2;
+    return 'LAUNCHER TUBE fitted: grenades now fly flat and far and go off where they hit. T to fire';
+  }
+  return null;
+}
+// What the bench can make right now. ok: you can afford it and have room; why: the reason, when you cannot.
+function gearRecipes() {
+  const out = [], add = (id, name, cost, note, can = true, why = '', tag = '') => out.push({ id, name, tag, cost, note, ok: can && inv.parts >= cost, why: !can ? why : inv.parts < cost ? `${cost - inv.parts} more parts` : '' });
+  add('battery', 'Battery', COSTS.battery, `A spare cell. You carry ${inv.batteries}`, canReceiveLoot('battery'), 'pack is full');
+  if (inv.gun) add('ammo', `${GUN.mag} bullets`, COSTS.ammo, `A magazine for the ${GUN.name.toLowerCase()}. You carry ${inv.mag + inv.reserve}`, canReceiveLoot('ammo'), 'pack is full');
+  add('matches', '2 matches', COSTS.matches, `You carry ${inv.matches}`, canReceiveLoot('matches'), 'pack is full');
+  add('grenade', 'Grenade', COSTS.grenade, `${TOUCH ? 'Sweep two fingers sideways' : 'T'} to ${inv.launcher ? 'fire' : 'throw'}. Clears a wide circle, you included. You carry ${inv.grenades}`, canReceiveLoot('grenade'), 'pack is full');
+  if (inv.gun && inv.gunTier < GUN_TIERS.length - 1) {
+    const next = GUN_TIERS[inv.gunTier + 1];
+    add('gun_kit', next.name, next.cost, `Rebuild the ${GUN.name.toLowerCase()}: ${TOUCH ? 'tap, then hold, and it keeps firing' : 'fires while the trigger is held'}, ${next.mag} rounds${next.damage > GUN.damage ? `, ${next.damage}× damage` : ''}`, true, '', 'UPGRADE');
+  }
+  if (inv.lightTier < LIGHT_TIERS.length - 1) { const next = LIGHT_TIERS[inv.lightTier + 1]; add('light_kit', next.name, next.cost, next.note, true, '', 'UPGRADE'); }
+  if (!radar.acquired) add('radar', RADAR_TIERS[0].name, RADAR_TIERS[0].cost, RADAR_TIERS[0].note, bagHasRoom('radar'), 'pack is full', 'NEW');
+  else if (inv.radarTier < RADAR_TIERS.length - 1) { const next = RADAR_TIERS[inv.radarTier + 1]; add('radar_kit', next.name, next.cost, next.note, true, '', 'UPGRADE'); }
+  if (!inv.launcher) add('launcher_kit', 'Launcher tube', COSTS.launcher, 'Grenades fly flat and far and go off where they hit. Comes with two', true, '', 'UPGRADE');
+  add('potion', 'Potion', COSTS.potion, `Mends you and clears a mind that has not broken. You carry ${inv.potions}`, canReceiveLoot('potion'), 'pack is full');
+  return out;
+}
+function craftGear(id) {
+  const r = gearRecipes().find((x) => x.id === id);
+  if (!r || !r.ok) return null;
+  let line = null;
+  if (id === 'battery') { inv.batteries++; line = `Built a battery (${inv.batteries} spare)`; }
+  else if (id === 'ammo') { inv.reserve += GUN.mag; line = `Pressed ${GUN.mag} bullets (${inv.mag + inv.reserve} in all)`; }
+  else if (id === 'matches') { inv.matches += 2; line = `Dipped 2 matches (${inv.matches} in all)`; }
+  else if (id === 'grenade') { inv.grenades++; line = `Packed a grenade (${inv.grenades} carried)`; }
+  else if (id === 'potion') { inv.potions++; line = `Mixed a potion (${inv.potions} carried)`; }
+  else if (id === 'radar') { radar.acquired = true; radar.drawIn = 0; line = 'Built a radar. G raises it during Observer and Choir rounds'; }
+  else line = applyKit(id);
+  if (!line) return null;
+  inv.parts -= r.cost; sfx.upgrade();
+  return useWords(line);
+}
+let benchWasPlaying = false;
+const bench = createWorkbench({
+  touch: TOUCH, recipes: gearRecipes, craft: craftGear, parts: () => inv.parts,
+  gear: () => `${inv.gun ? GUN.name.toUpperCase() : 'NO GUN'} · ${LIGHT_TIERS[inv.lightTier].name.toUpperCase()} · ${radar.acquired ? RADAR_TIERS[inv.radarTier].name.toUpperCase() : 'NO RADAR'}${inv.launcher ? ' · LAUNCHER' : ''}`,
+  // the world stops while you work, the way it does for the journal
+  onOpen() { benchWasPlaying = playing; playing = false; releaseTouch(); for (const k in keys) keys[k] = false; holdingBreath = false; gun.aiming = false; gun.trigger = false; gun.burst = 0; syncFootsteps(null); if (document.pointerLockElement) document.exitPointerLock(); overlay.style.display = 'none'; },
+  onClose() {
+    if (benchWasPlaying && !finished) {
+      playing = true;
+      if (TOUCH) overlay.style.display = 'none';
+      else { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => { playing = false; overlay.style.display = 'flex'; }); }
+    }
+    else overlay.style.display = 'flex';
+  },
+});
+
+// Grenades. Thrown, one bounces and rolls and goes off when its fuse runs out. From the launcher tube it flies flat and
+// goes off where it lands. Either way the blast does not care who is standing in it.
+const NADE = { fuse: 1.9, radius: 5.5, launchRadius: 6.5, self: 4.2 };
+const grenades = [], blasts = [];
+const nadeGeo = new THREE.BoxGeometry(0.13, 0.16, 0.13), nadeMat = new THREE.MeshLambertMaterial({ color: 0x4d6238 });
+const fireCells = atlas.sprites.fire || atlas.sprites.bonfire || [];
+let nadeWait = 0;
+function throwGrenade() {
+  if (radar.equipped || swim.in || nadeWait > 0) return;
+  if (inv.grenades <= 0) { toast('No grenades. Chests hold them, and the workbench (C) builds them'); return; }
+  inv.grenades--; nadeWait = 0.7;
+  camera.getWorldDirection(aim);
+  const fast = inv.launcher, sp = fast ? 32 : 13.5, mesh = new THREE.Mesh(nadeGeo, nadeMat);
+  scene.add(mesh);
+  grenades.push({ x: camera.position.x + aim.x * 0.5, y: camera.position.y - 0.2, z: camera.position.z + aim.z * 0.5, vx: aim.x * sp, vy: aim.y * sp + (fast ? 1.2 : 4.4), vz: aim.z * sp,
+                  fuse: fast ? 3 : NADE.fuse, fast, mesh });
+  if (fast) { thump(190, 55, 0.22, 1); noise1(0.18, 'lowpass', 1200, 200, 0.6); gun.recoil = 1; } else sfx.swing();
+  if (isChoirRound()) choir.noise(camera.position.x, camera.position.z, fast ? 1.2 : 0.4, 'grenade');
+  if (isConsumerRound()) consumer.noise(camera.position.x, camera.position.z, fast ? 1.2 : 0.4, 'grenade');
+}
+function explode(g) {
+  scene.remove(g.mesh);
+  const x = g.x, z = g.z, y = Math.max(g.y, MAP.groundY(x, z)), R = g.fast ? NADE.launchRadius : NADE.radius;
+  blasts.push({ x, y, z, t: 0, R });
+  sfx.boom();
+  const pd = Math.hypot(camera.position.x - x, camera.position.z - z);
+  consumerViewShake.value = Math.max(consumerViewShake.value, Math.max(0, 1.4 - pd / 14));
+  // the dead
+  for (const gh of ghosts.slice()) { const d = Math.hypot(gh.x - x, gh.z - z); if (d < R && !MAP.blocked(x, z, gh.x, gh.z, opened)) hurtGhost(gh, d < R * 0.5 ? 5 : 2); }
+  // everything else already knows what being shot means, so the blast shoots at each thing inside it
+  const from = new THREE.Vector3(x, y + 0.9, z), dir = new THREE.Vector3();
+  const at = (tx, tz, fn) => { const d = Math.hypot(tx - x, tz - z); if (d > R || d < 0.05) return; dir.set((tx - x) / d, 0, (tz - z) / d); fn(d); };
+  if (choir.active) {
+    choir.noise(x, z, 2.6, 'explosion');
+    for (const s of choir.singers) if (s.alive) at(s.x, s.z, () => choir.shot(from, dir, { range: R, damage: 5 }));
+    if (choir.hive) at(choir.hive.x, choir.hive.z, () => choir.shot(from, dir, { range: R, damage: 6 }));
+  }
+  if (consumer.active) {
+    consumer.noise(x, z, 2.6, 'explosion');
+    at(consumer.x, consumer.z, () => consumer.shot(from, dir, { range: R + 2, damage: 18 }));
+  }
+  if (collective.active && ['appear', 'warning', 'dispersal', 'last'].includes(collective.phase)) {
+    const low = new THREE.Vector3(x, MAP.groundY(x, z) + 0.7, z);        // they are small: the blast reaches them at their own height
+    for (const k of collective.kids) at(k.x, k.z, () => collective.shot(low, dir));
+  }
+  if (obsRound.active) {
+    for (const o of obsRound.observers) if (o.active) at(o.position.x, o.position.z, () => obsRound.shot(from, dir));
+    const lit = obsRound.burnNear(x, z, R * 0.75);          // fire is fire: it burns the bodies too, and brings the watcher
+    if (lit) toast(lit > 1 ? `${lit} bodies catch` : 'The body catches');
+  }
+  // and you
+  if (pd < NADE.self && !MAP.blocked(x, z, camera.position.x, camera.position.z, opened)) damagePlayer(Math.round(70 * (1 - pd / NADE.self)) + 8, 'blast');
+}
+// every frame, inside the world update (between the glow layer reset and commit), so the fire can be drawn
+function updateGrenades(dt, inControl) {
+  nadeWait = Math.max(0, nadeWait - dt);
+  for (let i = grenades.length - 1; i >= 0 && inControl; i--) {
+    const g = grenades[i];
+    g.vy -= (g.fast ? 7 : 19) * dt;
+    let nx = g.x + g.vx * dt, ny = g.y + g.vy * dt, nz = g.z + g.vz * dt, hit = false;
+    if (MAP.blocked(g.x, g.z, nx, nz, opened) || (MAP.grid && MAP.grid.solidCell(MAP.grid.cellOf(nx), MAP.grid.cellOf(nz), opened))) {   // a wall
+      hit = true; nx = g.x; nz = g.z; g.vx *= -0.35; g.vz *= -0.35;
+    }
+    const floor = MAP.groundY(nx, nz) + 0.08;
+    if (ny <= floor) { hit = true; ny = floor; g.vy = g.vy < -2.5 ? -g.vy * 0.32 : 0; g.vx *= 0.55; g.vz *= 0.55; if (g.vy > 0 && !g.fast) noise1(0.05, 'lowpass', 700, 300, 0.25); }
+    if (META.ceiling && ny > META.ceiling - 0.1) { ny = META.ceiling - 0.1; g.vy = -Math.abs(g.vy) * 0.3; }
+    if (g.fast && !hit) for (const gh of ghosts) if (gh.state !== 'die' && (gh.x - nx) ** 2 + (gh.z - nz) ** 2 < 1.3 && Math.abs(gh.mesh.position.y - ny) < 1.4) { hit = true; break; }
+    g.x = nx; g.y = ny; g.z = nz; g.fuse -= dt;
+    g.mesh.position.set(nx, ny, nz); g.mesh.rotation.x += dt * 9; g.mesh.rotation.z += dt * 6;
+    if (g.fuse <= 0 || (g.fast && hit)) { grenades.splice(i, 1); explode(g); }
+  }
+  for (let i = blasts.length - 1; i >= 0; i--) {
+    const b = blasts[i];
+    b.t += dt;
+    if (b.t >= 0.75) { blasts.splice(i, 1); continue; }
+    const k = b.t / 0.75, glare = Math.max(0, 1 - b.t / 0.4);
+    extraLights.push(b.x, b.y + 1.0, b.z, 5 * glare, 0);
+    if (fireCells.length) for (let n = 0; n < 5; n++) {                 // a ball of fire that swells and thins
+      const a = n * 2.4 + b.x, r = (n ? 0.5 + k * b.R * 0.42 : 0), s = (n ? 2.4 : 3.8) + k * 3.8 - k * k * 2.4;
+      if (k < 0.85) glowLayer.add(b.x + Math.cos(a) * r, b.y - 0.1, b.z + Math.sin(a) * r, s, s, fireCells[(n + ((b.t * 14) | 0)) % fireCells.length], 0.02);
+    }
+  }
+}
 const lore = createLorePickups({ scene, camera, world: { walkable: creatureWorld.walkable, groundY: (x, z) => MAP.groundY(x, z) }, map: MAP_NAME, journal, rng: Math.random });
 let nearLore = null;
 function collectLore(it) {
@@ -3715,10 +3969,10 @@ function updateSanity(dt, inControl, running) {
     sanity.value += dt * SANITY_BREATH_COLLECTIVE;
     recovering = true;
   } else if (sheltered) {
-    sanity.value += dt * (holdingBreath && playerSpeedNow < 0.08 ? 1.15 : 0.55);
+    sanity.value += dt * (holdingBreath && playerSpeedNow < 0.08 ? SANITY_BREATH_SHELTER : 0.55);
     recovering = true;
   } else if (breathCalm) {
-    sanity.value += dt * 0.62;
+    sanity.value += dt * SANITY_BREATH;
     recovering = true;
   } else {
     const hasLight = (flashlight.equipped && flashlight.battery > 0.05) || match.t > 0;
@@ -4000,7 +4254,7 @@ Object.assign(cinemaKit, {
     return () => { for (let i = 0; i < clearZones.length; i += 3) if (clearZones[i] === x && clearZones[i + 1] === z && clearZones[i + 2] === r) { clearZones.splice(i, 3); break; } refreshChunks(true); };
   },
   lock(on) { intro.active = on; },                        // everything that ignores input during the opening ignores it now
-  quiet() { for (const k in keys) keys[k] = false; holdingBreath = false; gun.aiming = false; syncFootsteps(null); syncBodyAudio(null, false); syncTick(false); },
+  quiet() { for (const k in keys) keys[k] = false; holdingBreath = false; gun.aiming = false; gun.trigger = false; gun.burst = 0; syncFootsteps(null); syncBodyAudio(null, false); syncTick(false); },
   clear() { while (ghosts.length) removeGhost(ghosts[0]); clearMind(); bannerEl.style.opacity = 0; bannerTimer = 0; },
   clearMind() { clearMind(); sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; },
   canPlay: () => playing && !finished && !swim.in && swim.climb < 0 && !burn.in && !journal.isOpen,
@@ -4058,4 +4312,4 @@ if (LAB) buildLabDead();
 mountLeaderboard();
 
 // small debug handle for the console
-window.game = { title, cutscenes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };
+window.game = { title, cutscenes, bench, GUN, applyKit, addParts, throwGrenade, grenades, craftGear, gearRecipes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };
