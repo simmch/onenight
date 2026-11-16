@@ -29,6 +29,7 @@ const CFG = {
   light: { intensity: 45, distance: 40, angle: 0.44, penumbra: 0.5, decay: 1.35 },
   batterySeconds: 200,  // beam-on time a full battery lasts
   startMatches: 3,
+  startPotions: 1,
   match: { seconds: 30, intensity: 5, distance: 10 },
   chestChance: 0.25,    // chance a 16 m chunk holds a chest (about one every 30 m)
   chestReach: 2.2,
@@ -1168,7 +1169,7 @@ if (intro.active) { hudEl.style.visibility = 'hidden'; applyIntro(); }
 // GUN is the gun in hand right now: the pistol to begin with, rebuilt tier by tier (see gear/upgrades.js). reload matches the 2 s reload clip.
 const GUN = { ...GUN_TIERS[0] };
 // parts are spent at the workbench (C). gunTier, lightTier and radarTier count the upgrades fitted so far.
-const inv = { gun: false, mag: 0, reserve: 0, batteries: 0, matches: CFG.startMatches, potions: 0, health: 100, maxHealth: 100, innocents: 0,
+const inv = { gun: false, mag: 0, reserve: 0, batteries: 0, matches: CFG.startMatches, potions: CFG.startPotions, health: 100, maxHealth: 100, innocents: 0,
               parts: 0, grenades: 0, launcher: false, gunTier: 0, lightTier: 0, radarTier: 0, kitGiven: false };
 const radarWorks = () => inv.radarTier >= 1 || isObserverRound() || isChoirRound();
 const ITEM_DEFS = {
@@ -2008,7 +2009,8 @@ overlay.addEventListener('click', () => {
 });
 document.addEventListener('pointerlockchange', () => {
   playing = document.pointerLockElement === renderer.domElement;
-  overlay.style.display = playing || journal.isOpen || bench.isOpen ? 'none' : 'flex';
+  if (!playing && cutscenes.dying) cutscenes.skipDeath();          // Esc while dying: straight to the death screen
+  overlay.style.display = playing || journal.isOpen || bench.isOpen || cutscenes.dying ? 'none' : 'flex';
   if (playing) { started = true; stopIntroSong(); }
   else { holdingBreath = false; gun.aiming = false; syncFootsteps(null); }
   if (!playing && !finished) document.getElementById('go').textContent = started ? 'Paused. Click to resume' : 'Click to begin';
@@ -2778,7 +2780,7 @@ const ghosts = [];
 const round = { n: 0, t: 0, rest: 0, announced: false, type: 'ghosts' };
 const MAP_HINT = { labyrinth: 'Find the way out and the round is won', rural: 'Houses can be entered. E opens doors', cave: 'Watch your step near the water', hell: 'Keep out of the lava and clear of the vents' };
 const bannerEl = document.getElementById('banner'), hurtEl = document.getElementById('hurt'), hpFill = document.getElementById('hpFill');
-let bannerTimer = 0, hurtFlash = 0, cutsceneLine = '';
+let bannerTimer = 0, hurtFlash = 0, cutsceneLine = '', cutsceneFrom = '';
 function banner(title, sub) {
   bannerEl.innerHTML = '';
   const h = document.createElement('div'); h.className = 'big'; h.textContent = title;
@@ -2940,8 +2942,8 @@ function endGame(won) {
   document.getElementById('title').textContent = won ? 'DAWN' : deathCause === 'time' ? 'TOO LATE' : 'YOU DIED';
   document.getElementById('sub').textContent = won ? `You made it through all ${ROUND.count} rounds.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', blast: 'You were standing too close.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.`, sanity: 'Your mind was empty for too long.', cutscene: cutsceneLine }[deathCause] || `The dead took you in round ${round.n}.`);
   document.getElementById('go').textContent = TOUCH ? 'Tap to play again' : 'Click to play again';
-  overlay.style.display = 'flex';
-  if (document.pointerLockElement) document.exitPointerLock();
+  // Dying is a scene of its own (cinema/Cutscenes.js): the death screen waits until it has played. A win goes straight there.
+  if (won || !cutscenes.playDeath(deathCause, showEndScreen, cutsceneFrom)) showEndScreen();
   const ending = won ? 'dawn' : deathCause === 'collective' ? `collective ${collective.S.reason || ''}`.trim() : deathCause;
   offerScore({
     won,
@@ -2950,6 +2952,10 @@ function endGame(won) {
     map: (META.label || MAP_NAME || '').slice(0, 40),
     ending: ending.slice(0, 40),
   });
+}
+function showEndScreen() {
+  overlay.style.display = 'flex';
+  if (document.pointerLockElement) document.exitPointerLock();
 }
 function roundWon(cleared, line) {
   if (choir.active) choir.stop();
@@ -4030,7 +4036,7 @@ function frame(now) {
   // the landing page: nothing in the night moves until PLAY
   if (title.active) { title.update(dt); if (title.active) { title.render(); return; } }
   // between rounds: a scene has the camera, and the night waits for it (it stops with the rest when paused)
-  if (cutscenes.active) { if (playing) cutscenes.update(dt); if (cutscenes.active) { cutscenes.render(); return; } }
+  if (cutscenes.active) { if (playing || cutscenes.dying) cutscenes.update(dt); if (cutscenes.active) { cutscenes.render(); return; } }
 
   let speed = 0, running = false;
   const bonuses = bagBonuses();
@@ -4258,10 +4264,22 @@ Object.assign(cinemaKit, {
   clear() { while (ghosts.length) removeGhost(ghosts[0]); clearMind(); bannerEl.style.opacity = 0; bannerTimer = 0; },
   clearMind() { clearMind(); sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; },
   canPlay: () => playing && !finished && !swim.in && swim.climb < 0 && !burn.in && !journal.isOpen,
-  die(line) { cutsceneLine = line; deathCause = 'cutscene'; endGame(false); },
+  die(line, from = '') { cutsceneLine = line; cutsceneFrom = from; deathCause = 'cutscene'; endGame(false); },
+  ceiling: META.ceiling || 0,
+  // eyelids: 0 open, 1 shut
+  lids(v) { const shut = Math.max(0, Math.min(1, v)) * 52; lidTop.style.height = lidBot.style.height = shut + 'vh'; lidTop.style.display = lidBot.style.display = shut > 0.01 ? 'block' : 'none'; },
+  // fire sprites for this frame: [x, y, z, size, frame]
+  flames(list) { glowLayer.n = glowStatic; if (fireCells.length) for (const f of list) glowLayer.add(f[0], f[1], f[2], f[3], f[3], fireCells[f[4] % fireCells.length], 0.02); glowLayer.commit(); },
+  // the sky getting light: 0 the night as it is, 1 morning
+  dawn(v) {
+    if (v <= 0) { setDusk(isDusk); return; }
+    duskLight.intensity = Math.max(duskLight.intensity, v * 2.2);
+    scene.fog.color.set(META.fog).lerp(dawnColor, v); scene.background.copy(scene.fog.color); scene.fog.density = META.fogDensity * (1 - 0.45 * v);
+  },
   audio: { play: playClip, stop: stopClip, thump, noise1, sfx, obs: mindAudio,
-           clips: { run: runBuffer, bones: boneBuffer, candle: candleBuffer, stopMoving: collectiveStop, thank: collectiveThank, hug: collectiveHug } },
+           clips: { sing: singBuffer, run: runBuffer, bones: boneBuffer, candle: candleBuffer, stopMoving: collectiveStop, thank: collectiveThank, hug: collectiveHug } },
 });
+const dawnColor = new THREE.Color(0x6a6a86);
 const cutscenes = createCutscenes(cinemaKit);
 playIntroSong();
 requestAnimationFrame(frame);
@@ -4312,4 +4330,4 @@ if (LAB) buildLabDead();
 mountLeaderboard();
 
 // small debug handle for the console
-window.game = { title, cutscenes, bench, GUN, applyKit, addParts, throwGrenade, grenades, craftGear, gearRecipes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };
+window.game = { title, cutscenes, die(cause) { deathCause = cause; endGame(false); }, bench, GUN, applyKit, addParts, throwGrenade, grenades, craftGear, gearRecipes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };

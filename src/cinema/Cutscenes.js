@@ -15,6 +15,12 @@ const CSS = `
 #cine .bar.top { top: 0; } #cine .bar.bot { bottom: 0; }
 #cine.on .bar { height: 9vh; }
 #cineTint { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, rgba(70,20,90,.15) 20%, rgba(40,6,60,.85) 100%); }
+#cineWater { position: absolute; inset: 0; overflow: hidden; display: none; }
+#cineWater .surface { position: absolute; left: 50%; top: -24vh; width: 96vw; height: 64vh; margin-left: -48vw; border-radius: 50%; transform-origin: 50% 20%;
+  background: radial-gradient(ellipse at center, rgba(180,222,236,.8) 0%, rgba(96,158,184,.38) 38%, rgba(40,90,120,0) 70%); }
+#cineWater i { position: absolute; bottom: -5vh; border-radius: 50%; border: 1px solid rgba(196,228,242,.75); background: rgba(160,205,225,.16); opacity: 0; animation: cineBubble linear infinite; }
+@keyframes cineBubble { 0% { transform: translate(0, 0) scale(.6); opacity: 0; } 10% { opacity: .9; } 100% { transform: translate(var(--dx), -118vh) scale(1.3); opacity: 0; } }
+#cineSkip { position: absolute; right: 22px; bottom: 2.6vh; font-size: 10px; letter-spacing: 3px; opacity: 0; transition: opacity .8s; }
 #cineCap { position: absolute; left: 0; right: 0; bottom: 10.5vh; text-align: center; font-size: 15px; letter-spacing: 3px; opacity: 0; transition: opacity .5s; text-shadow: 0 0 8px #000, 0 0 2px #000; }
 #cine.asking #cineCap { bottom: auto; top: 12.5vh; }
 #qte { position: absolute; left: 50%; top: 71%; transform: translate(-50%, -50%); display: none; flex-direction: column; align-items: center; gap: 10px;
@@ -51,10 +57,12 @@ export function createCutscenes(kit) {
   const A = kit.audio, cam = kit.camera, v3 = new THREE.Vector3();
   const style = document.createElement('style'); style.textContent = CSS; document.head.append(style);
   const root = document.createElement('div'); root.id = 'cine';
-  root.innerHTML = '<div id="cineTint"></div><div class="bar top"></div><div class="bar bot"></div><div id="cineCap"></div>' +
+  root.innerHTML = '<div id="cineTint"></div><div id="cineWater"><div class="surface"></div><div class="bubbles"></div></div><div class="bar top"></div><div class="bar bot"></div><div id="cineCap"></div><div id="cineSkip"></div>' +
     '<button id="qte" type="button" tabindex="-1"><span class="key"></span><span class="what"></span><span class="meter"><i></i></span><span class="sub"></span></button>';
   document.body.append(root);
   const $ = (q) => root.querySelector(q);
+  const waterEl = $('#cineWater'), surfaceEl = $('#cineWater .surface'), bubblesEl = $('#cineWater .bubbles');
+  const skipEl = $('#cineSkip'); skipEl.textContent = kit.TOUCH ? 'TAP TO MOVE ON' : 'ANY KEY TO MOVE ON';
   const tintEl = $('#cineTint'), capEl = $('#cineCap'), qteEl = $('#qte'), keyEl = $('#qte .key'), whatEl = $('#qte .what'), subEl = $('#qte .sub'), fillEl = $('#qte .meter i');
 
   // ── the cast, built once so nothing has to be made in the middle of a fright ──
@@ -113,6 +121,7 @@ export function createCutscenes(kit) {
   addEventListener('keydown', (e) => {
     if (!cur || e.code === 'Escape') return;
     e.stopImmediatePropagation(); if (e.code === 'Space' || e.code === 'Tab') e.preventDefault();
+    if (S.death) { if (!e.repeat && S.clock > 1.2) skipDeath(); return; }
     if (!e.repeat && live()) qDown(e.code);
   }, true);
   addEventListener('keyup', (e) => { if (!cur || e.code === 'Escape') return; e.stopImmediatePropagation(); if (live()) qUp(e.code); }, true);
@@ -120,6 +129,7 @@ export function createCutscenes(kit) {
   let finger = null;                                      // the touch a gesture is being read from
   const down = new Set();                                 // every finger on the glass: a hold lasts until the last one lifts
   addEventListener('pointerdown', (e) => {
+    if (cur && S.death) { if (S.clock > 1.2) skipDeath(); return; }
     if (!live() || !Q || Q.state !== 'live') return;
     if (Q.type === 'still') { settle(false); return; }
     if (kit.TOUCH) {
@@ -179,7 +189,7 @@ export function createCutscenes(kit) {
   }
   const beamStutter = (t) => (Math.sin(t * 46) > 0.2 ? 1 : 0.05);
   // the farthest you can see along level ground from here, and which way that is (so there is room to put things)
-  function findRoom() {
+  function findRoom(keepFacing = false) {
     let best = S.yaw0, room = 0, score = -1;
     for (let k = 0; k < 24; k++) {
       const a = S.yaw0 + (k / 24) * TAU; let d = 0.5;
@@ -187,6 +197,7 @@ export function createCutscenes(kit) {
       const turn = Math.abs(Math.atan2(Math.sin(a - S.yaw0), Math.cos(a - S.yaw0)));
       const s = Math.min(d, 9) - turn * 0.6;
       if (s > score) { score = s; best = a; room = d - 0.5; }
+      if (keepFacing) break;                               // k = 0 is the way you are facing
     }
     S.yaw0 = best; S.room = Math.max(1.4, room);
   }
@@ -203,10 +214,13 @@ export function createCutscenes(kit) {
   function cleanup() {
     obs.model.root.visible = false; if (obs.model.root.parent !== kit.scene) kit.scene.add(obs.model.root);
     obs.model.root.position.y = 0;
-    for (const k of kids) k.root.visible = false;
+    for (const k of kids) { k.root.visible = false; k.root.rotation.x = 0; }
     for (const c of S.bodies) { c.root.removeFromParent(); c.root.traverse((o) => { if (o.material) o.material.dispose(); }); }
     for (const h of S.loops) A.stop(h, 0.3);
-    glow.intensity = 0; tintEl.style.opacity = '0'; caption(''); kit.hurt(0);
+    glow.intensity = 0; glow.distance = 10; tintEl.style.opacity = '0'; tintEl.style.background = ''; caption(''); kit.hurt(0);
+    skipEl.style.opacity = '0'; kit.fade.style.background = '';
+    waterEl.style.display = 'none'; bubblesEl.replaceChildren();
+    if (S.death) { kit.flames([]); if (S.dawned) kit.dawn(0); }
     if (S.zone) S.zone();
     Q = null; qteEl.className = ''; root.classList.remove('on', 'asking'); document.body.classList.remove('cine');
     if (stage) stage.clearExtras();
@@ -231,18 +245,21 @@ export function createCutscenes(kit) {
     S.shake = Math.max(0, S.shake - dt * 1.8);
     if (S.ph === 'in') { if (S.t >= 0.5) begin(); }
     else if (S.ph === 'out') { if (S.t >= 0.55) { const done = cleanup(); fade(0, 0.7); done(); return; } }
-    else if (S.ph === 'dead') { if (S.t >= 1.5) { const line = S.line; cleanup(); fade(0, 0); kit.die(line); return; } }
+    else if (S.ph === 'dead') { if (S.t >= 1.5) { const line = S.line, from = S.name; cleanup(); fade(0, 0); kit.die(line, from); return; } }
+    else if (S.ph === 'gone') { if (S.t >= 0.75) { const done = cleanup(); kit.lids(0); done(); return; } }       // a death is over: black, and the screen that says so
     else cur.run(S);
     if (!S || S.stage) return;
     // the camera stays where you stood; the scene turns your head for you
     const c = S.cam, k = S.shake, w = S.clock;
     cam.position.set(S.px + c.x, S.gy + kit.eye + c.y + Math.sin(w * 47) * 0.03 * k, S.pz + c.z);
-    cam.rotation.set(c.pitch + Math.sin(w * 31) * 0.035 * k, S.yaw0 + c.yaw + Math.sin(w * 37) * 0.04 * k, c.roll + Math.sin(w * 29) * 0.03 * k);
+    const tilt = S.death ? S.pitch0 * (1 - ease(0, 0.5, w)) : 0;      // dying starts from wherever you were looking
+    if (S.death) skipEl.style.opacity = w > 1.6 && S.ph !== 'gone' ? '0.45' : '0';
+    cam.rotation.set(c.pitch + tilt + Math.sin(w * 31) * 0.035 * k, S.yaw0 + c.yaw + Math.sin(w * 37) * 0.04 * k, c.roll + Math.sin(w * 29) * 0.03 * k);
     const flick = 0.94 + 0.06 * Math.sin(w * 23) * Math.sin(w * 7.3);
     kit.beam(S.beam * flick, S.torch);
   }
   function render() {
-    root.style.visibility = kit.playing() ? '' : 'hidden';          // paused: the pause screen has the page to itself
+    root.style.visibility = kit.playing() || (S && S.death) ? '' : 'hidden';          // paused: the pause screen has the page to itself
     if (S && S.stage) kit.render(stage.scene, runCam, false); else kit.render(kit.scene, cam, kit.handsShown());
   }
 
@@ -518,6 +535,161 @@ export function createCutscenes(kit) {
     },
   };
 
+
+  // ═════════════════════════ dying ═════════════════════════
+  // The night does not end on a cut to a menu. What killed you decides how you go: six ways, each a few seconds long,
+  // each ending in the dark with the death screen over it. Nothing is asked of you; any key or a tap moves on.
+  const beat = (vol = 0.9) => { A.thump(58, 34, 0.22, vol); setTimeout(() => A.thump(50, 30, 0.2, vol * 0.7), 170); };
+  const endDeath = () => { if (S.ph !== 'gone') { phase('gone'); fade(1, 0.5); } };
+  const DEATHS = {
+    // The dead have you. Your legs go, the flashlight rolls off into the grass, and your heart takes its time stopping.
+    fall: {
+      run() {
+        const t = S.t, knees = ease(0.1, 0.7, t), down = ease(1.0, 1.45, t);
+        if (at(0)) { S.shake = 1.2; kit.hurt(0.85); }
+        S.cam.y = -0.55 * knees - 0.85 * down; S.cam.pitch = -0.35 * knees * (1 - down) + 0.12 * down; S.cam.roll = 1.2 * down; S.cam.yaw = 0.25 * down;
+        if (at(1.42)) { A.thump(110, 36, 0.4, 1); S.shake = 0.9; S.beam = 0; S.torch = false; }
+        const [fx, fz] = spotAt(S.yaw0 + 0.5, 1.7);          // where the flashlight came to rest, still on
+        glow.color.set(0xfff0cc); glow.distance = 9; glow.position.set(fx, S.gy + 0.12, fz);
+        glow.intensity = t < 1.42 ? 0 : 3.2 * (t > 4.6 ? beamStutter(t) * Math.max(0, 1 - (t - 4.6) / 1.2) : 1);
+        for (const b of [1.9, 2.9, 4.1, 5.6]) if (at(b)) beat();
+        kit.hurt(0.85 * (1 - ease(1.5, 5, t)) + 0.15);
+        kit.lids(Math.max(ease(3.0, 3.25, t) * (1 - ease(3.4, 3.7, t)) * 0.9, ease(4.6, 6.2, t)));     // a long blink, then the last one
+        if (t >= 6.6) endDeath();
+      },
+    },
+    // Under the water. The surface is a pale thing going away above you.
+    drown: {
+      start() {
+        tintEl.style.background = 'radial-gradient(ellipse at 50% 10%, rgba(40,96,124,.55) 0%, rgba(4,20,36,.95) 78%)'; S.cam.y = -1.0;
+        waterEl.style.display = 'block'; bubblesEl.style.opacity = '1';
+        for (let i = 0; i < 18; i++) {                      // your air, going up without you
+          const b = document.createElement('i'), s = 5 + Math.random() * 11;
+          b.style.cssText = `left:${22 + Math.random() * 56}%;width:${s}px;height:${s}px;animation-duration:${2.2 + Math.random() * 2.4}s;animation-delay:${Math.random() * 2.6}s`;
+          b.style.setProperty('--dx', `${(Math.random() - 0.5) * 70}px`);
+          bubblesEl.append(b);
+        }
+      },
+      run() {
+        const t = S.t;
+        if (at(0.05)) A.noise1(2.6, 'lowpass', 500, 90, 0.9);
+        if (at(2.4)) A.noise1(3.6, 'lowpass', 300, 60, 0.8);
+        tintEl.style.opacity = String(0.7 + 0.28 * ease(0, 5, t));
+        const sink = ease(0, 5.5, t);
+        surfaceEl.style.transform = `scale(${1 - 0.68 * sink})`; surfaceEl.style.opacity = String(1 - ease(1.2, 5.6, t));
+        bubblesEl.style.opacity = String(1 - ease(2.6, 5, t));
+        S.cam.y = -1.0 - 0.75 * sink;
+        S.cam.pitch = lerp(-0.1, 0.95, ease(0.3, 3.5, t)); S.cam.roll = Math.sin(t * 0.9) * 0.12; S.cam.yaw = Math.sin(t * 0.5) * 0.3;
+        S.beam = t < 1.6 ? S.beam0 * 0.6 : t < 2.6 ? S.beam0 * beamStutter(t) * 0.5 : 0; S.torch = false;
+        glow.color.set(0x9fd0e6); glow.distance = 12; glow.position.set(S.px, S.gy + 2.6, S.pz); glow.intensity = 2.4 * (1 - ease(1.5, 5.5, t));
+        if ((S.bub = (S.bub ?? 0.3) - S.dt) <= 0 && t < 4.2) { S.bub = 0.25 + Math.random() * 0.5; A.noise1(0.09, 'bandpass', 700 + Math.random() * 900, 1600, 0.3 * (1 - t / 5)); }   // the last of your air
+        for (const b of [1.2, 2.3, 3.7, 5.4]) if (at(b)) beat(0.8);
+        if (at(4.4)) fade(1, 1.8);
+        if (t >= 6.4) endDeath();
+      },
+    },
+    // Fire. It closes in from every side, you go to your knees, and the world goes white and then to ash.
+    burn: {
+      start() { tintEl.style.background = 'radial-gradient(ellipse at center, rgba(255,150,40,.22) 0%, rgba(190,50,8,.9) 100%)'; },
+      run() {
+        const t = S.t, rise = ease(0, 2.2, t), down = ease(2.6, 3.3, t);
+        if (at(0)) { A.noise1(3, 'lowpass', 1800, 300, 1.1); S.shake = 1; }
+        if (at(2.6)) { A.noise1(3, 'lowpass', 1200, 120, 1.0); A.sfx.hurt(); }
+        S.shake = Math.max(S.shake, 0.5 * (1 - ease(3, 5, t)));
+        tintEl.style.opacity = String(0.22 + 0.5 * rise);
+        const flames = [];
+        for (let i = 0; i < 9; i++) {
+          const [x, z] = spotAt(S.yaw0 + i * 0.7 + Math.sin(t * 0.7 + i) * 0.1, 4.4 - 2.3 * rise + (i % 3) * 0.55);
+          flames.push([x, kit.groundY(x, z) - 0.1, z, 1.5 + rise * 1.5 + Math.sin(t * 9 + i * 2) * 0.2, i + ((t * 12) | 0)]);
+        }
+        kit.flames(flames);
+        glow.color.set(0xff7a22); glow.distance = 12; glow.position.set(S.px, S.gy + 0.9, S.pz); glow.intensity = (5 + 6 * rise) * (0.8 + 0.2 * Math.sin(t * 27) * Math.sin(t * 11));
+        S.cam.yaw = Math.sin(t * 2.1) * 0.5 * (1 - ease(2.4, 3.2, t));        // looking for a way out, and there is none
+        S.cam.y = -0.95 * down; S.cam.pitch = 0.5 * down;
+        S.beam = 0; S.torch = false;
+        if (at(3.6)) { kit.fade.style.background = '#f6e7c4'; fade(1, 0.9); }
+        if (at(4.7)) { kit.fade.style.transition = 'background-color 1.3s linear'; kit.fade.style.background = '#000'; }
+        if (t >= 6.3) endDeath();
+      },
+    },
+    // It did not kill you where you stood. You come round on your back, moving, with your ankle in its hand.
+    drag: {
+      start() { fade(1, 0); S.len = Math.max(1.5, Math.min(9, S.room - 1.2)); },
+      run() {
+        const t = S.t, go = ease(0.4, 6.0, t) * S.len, d = 2.3;
+        if (at(0.3)) fade(0, 0.9);
+        S.cam.x = -Math.sin(S.yaw0) * go; S.cam.z = -Math.cos(S.yaw0) * go;
+        S.cam.y = -1.3 + Math.sin(t * 5.3) * 0.03 + Math.abs(Math.sin(t * 2.2)) * 0.05; S.cam.pitch = 0.16; S.cam.roll = Math.sin(t * 2.2) * 0.05;
+        S.beam = 0; S.torch = false;
+        const [ox, oz] = spotAt(S.yaw0, go + d);               // it walks ahead of you and does not look back
+        obs.d = d; obs.model.root.visible = true; obs.model.root.position.set(ox, kit.groundY(ox, oz), oz); obs.model.root.rotation.y = S.yaw0 + Math.PI;
+        obsTick('stalk', 1.3, 0.2);
+        glow.color.set(0x7088b0); glow.distance = 9; glow.position.set(S.px + S.cam.x, S.gy + 0.8, S.pz + S.cam.z); glow.intensity = 0.9;
+        if ((S.stepIn = (S.stepIn ?? 0) - S.dt) <= 0 && t < 5.4) { S.stepIn = 0.7; A.obs.step(0, d, 1, 1); A.noise1(0.5, 'lowpass', 500, 180, 0.35); }   // its feet, and you, scraping along behind
+        if (t < 5.4) A.obs.breath(S.dt, 0, d, 1, 12);
+        if (at(5.4)) { A.obs.stop(); A.obs.exhale(0, 1); }
+        kit.lids(ease(4.8, 6.4, t));
+        if (t >= 6.8) endDeath();
+      },
+    },
+    // The children. You are on your back and they are all round you, looking down, and they are still singing.
+    circle: {
+      start() { S.loops.push(A.play(A.clips.sing, 0.7)); },
+      run() {
+        const t = S.t, down = ease(0, 0.9, t), r = lerp(1.5, 1.0, ease(1.6, 5.2, t));
+        if (at(0.75)) { A.thump(110, 36, 0.4, 1); S.shake = 0.8; }
+        S.cam.y = -1.42 * down; S.cam.pitch = 0.82 * ease(0.2, 1.3, t); S.cam.roll = 0.08 * Math.sin(t * 0.8);
+        if (t >= 0.9) { S.beam = 0; S.torch = false; }
+        if (t >= 1.3) kids.forEach((c, i) => {
+          stand(c.root, S.yaw0 + (i - 2) * 0.38, r + Math.abs(i - 2) * 0.08); kit.poseChild(c, 'watch', i * 1.7, S.clock);       // a half ring over you, heads together
+          c.root.rotation.order = 'YXZ'; c.root.rotation.x = 0.42;                   // bent over you
+        });
+        glow.color.set(0xc9d2e0); glow.distance = 7; glow.position.set(S.px, S.gy + 0.25, S.pz); glow.intensity = 0.8 * ease(1.2, 2, t);
+        if (at(3.6)) A.play(A.clips.thank, 0.9);
+        kit.lids(ease(4.6, 6.4, t));
+        if (t >= 6.9) endDeath();
+      },
+    },
+    // You leave. What is left of you lies where it fell with the flashlight still on, and gets smaller.
+    float: {
+      start() {
+        const b = corpse('ground', S.yaw0, 0.1); b.mats.jacket.color.set(0x56684a); b.mats.skin.color.set(0xb08e74);
+        S.top = kit.ceiling ? Math.max(0.6, kit.ceiling - kit.eye - 0.5) : 9;
+      },
+      run() {
+        const t = S.t;
+        if (at(0.1)) A.obs.sting();
+        S.cam.y = -0.2 * ease(0, 0.5, t) + S.top * ease(0.6, 7, t); S.cam.pitch = lerp(0, -1.45, ease(0.1, 1.6, t)); S.cam.yaw = t * 0.12; S.cam.roll = Math.sin(t * 0.5) * 0.04;
+        S.beam = 0; S.torch = false;
+        const [fx, fz] = spotAt(S.yaw0 + 1.2, 0.9);
+        glow.color.set(0xfff0cc); glow.distance = 13; glow.position.set(fx, S.gy + 0.3, fz); glow.intensity = 6 * (1 - ease(4.5, 7, t) * 0.8);
+        if (S.cause === 'time') { S.dawned = true; kit.dawn(ease(2, 7, t)); }
+        if (at(2.2)) caption(S.cause === 'time' ? 'The sun comes up without you.' : 'It gets quiet.', 3);
+        if (at(6.2)) fade(1, 1.4);
+        if (t >= 7.8) endDeath();
+      },
+    },
+  };
+  const DEATH_FOR = { ghost: 'fall', choir: 'fall', consumer: 'fall', drowned: 'drown', burned: 'burn', blast: 'burn', observer: 'drag', collective: 'circle', sanity: 'float', time: 'float' };
+  // cause: what main.js calls the death. from: when a quick time event was failed, which scene it was in.
+  function playDeath(cause, done = () => {}, from = '') {
+    if (cur) return false;
+    const name = DEATHS[cause] ? cause : cause === 'cutscene' ? (from === 'still' ? 'circle' : from === 'mind' ? 'float' : 'drag') : DEATH_FOR[cause] || 'fall';
+    const view = kit.view();
+    cur = DEATHS[name];
+    S = { name, death: true, cause, done, t: 0, dt: 0, clock: 0, ph: 'go', px: cam.position.x, pz: cam.position.z, gy: kit.groundY(cam.position.x, cam.position.z),
+          yaw0: view.yaw, pitch0: view.pitch, room: 2, cam: { yaw: 0, pitch: 0, roll: 0, x: 0, y: 0, z: 0 }, beam: kit.lightOn() ? 1 : 0, torch: kit.lightOn(), shake: 0, stage: false, bodies: [], loops: [] };
+    S.beam0 = S.beam;
+    fired.clear(); Q = null; qteEl.className = '';
+    kit.lock(true); kit.quiet();
+    document.body.classList.add('cine'); root.classList.add('on');
+    findRoom(name !== 'drag');                              // only the drag turns you to face where there is room to be pulled
+    S.zone = kit.clearGround(S.px, S.pz, 6.5);
+    if (cur.start) cur.start(S);
+    return true;
+  }
+  function skipDeath() { if (S && S.death && S.ph !== 'gone') { phase('gone'); kit.fade.style.background = ''; fade(1, 0.25); S.t = 0.45; } }
+
   // ── which, and when ──
   const names = Object.keys(SCENES);
   let bag = [];
@@ -538,6 +710,8 @@ export function createCutscenes(kit) {
     names, play,
     get active() { return !!cur; },
     get name() { return S ? S.name : null; },
+    get dying() { return !!(S && S.death); },
+    deaths: Object.keys(DEATHS), playDeath, skipDeath,
     // called when a round has been survived and its rest is over: true if a scene has taken over (done runs after it)
     maybePlay(done, { force = null, chance = 0.65 } = {}) {
       if (cur || force === 'none' || !kit.canPlay()) return false;
