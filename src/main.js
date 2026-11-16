@@ -1389,7 +1389,24 @@ function useWords(text) {
     .replace(/\[E\]\s*/g, 'Press and hold to ')
     .replace(/press E to/gi, 'press and hold to')
     .replace(/\bHold E\b/g, 'Press and hold')
-    .replace(/Press and hold to ([A-Z])/g, (_, c) => 'Press and hold to ' + c.toLowerCase());
+    .replace(/Press and hold to ([A-Z])/g, (_, c) => 'Press and hold to ' + c.toLowerCase())
+    .replace(/Select a slot and press X to make room/g, 'Tap an item, then swipe up and tap Drop, to make room')
+    .replace(/Q or its inventory slot to drink/g, 'Tap it to drink')
+    .replace(/G or its inventory slot swaps it with your weapon/g, 'Tap it to swap it with your weapon')
+    .replace(/Select its inventory slot when you want to equip it/g, 'Tap it when you want to equip it')
+    .replace(/Select its slot to equip/g, 'Tap it to equip')
+    .replace(/Select its slot to restore stamina/g, 'Tap it to restore stamina')
+    .replace(/Select its inventory slot to equip it/g, 'Tap it to equip it')
+    .replace(/B to swap in a spare/g, 'Tap the battery to swap in a spare')
+    .replace(/B to replace it/g, 'Tap the battery to replace it')
+    .replace(/B to swap it in/g, 'Tap it to swap it in')
+    .replace(/M to strike a match/g, 'Tap the matches to strike one')
+    .replace(/Hold Space to quiet your breath/g, 'Hold the breath button to quiet your breath')
+    .replace(/Hold Space while still/g, 'Hold the breath button while still')
+    .replace(/\bHold Space\b/g, 'Hold the breath button')
+    .replace(/\bhold Space\b/g, 'hold the breath button')
+    .replace(/Press F again/g, 'Tap the light again')
+    .replace(/Click to shoot, right mouse to aim, R to reload/g, 'Tap to shoot, hold to aim, tap the ammo to reload');
 }
 function toast(text) { ui.toast.textContent = useWords(text); ui.toast.style.opacity = 1; toastTimer = 3; }
 function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
@@ -1419,7 +1436,11 @@ function renderInventoryHud(inControl) {
     } else {
       const label = document.createElement('span'); label.textContent = 'empty'; cell.append(label);
     }
-    if (TOUCH) cell.addEventListener('click', (e) => { e.stopPropagation(); useInventorySlot(i); });
+    if (TOUCH && slot) cell.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      useInventorySlot(i);
+    });
     ui.inventorySlots.append(cell);
   }
 }
@@ -1984,9 +2005,10 @@ if (TOUCH) {
     meta.content = content;
   }
   document.getElementById('go').textContent = 'Tap to begin';
-  document.getElementById('inventoryHelp').textContent = 'TAP A SLOT';
-  const stick = document.getElementById('stick'), knob = document.getElementById('stickKnob'), gear = document.getElementById('gear');
+  document.getElementById('inventoryHelp').textContent = 'TAP AN ITEM TO USE OR SWAP';
+  const stick = document.getElementById('stick'), knob = document.getElementById('stickKnob'), gear = document.getElementById('gear'), breathBtn = document.getElementById('breath');
   const fingers = new Map();
+  const breathSources = new Set();
   let stickId = null, stickX = 0, stickY = 0, look = null, pair = null, breathOn = false, lastTap = 0, pendingFire = 0;
   function hideStick() {
     stickId = null;
@@ -2002,7 +2024,34 @@ if (TOUCH) {
     keys.ShiftLeft = reach > 40;
   }
   function rightFingers() { return [...fingers.values()].filter((f) => f.side === 'right'); }
-  function endBreath() { if (!breathOn) return; breathOn = false; releaseKey('Space'); }
+  function beginBreath(source) {
+    const fresh = breathSources.size === 0;
+    breathSources.add(source);
+    breathOn = true;
+    breathBtn.classList.toggle('held', breathSources.has('button'));
+    breathBtn.setAttribute('aria-pressed', breathSources.has('button') ? 'true' : 'false');
+    if (fresh) pressKey('Space');
+  }
+  function endBreath(source) {
+    if (source) breathSources.delete(source);
+    else breathSources.clear();
+    breathBtn.classList.toggle('held', breathSources.has('button'));
+    breathBtn.setAttribute('aria-pressed', breathSources.has('button') ? 'true' : 'false');
+    if (breathSources.size || !breathOn) return;
+    breathOn = false;
+    releaseKey('Space');
+  }
+  breathBtn.addEventListener('pointerdown', (e) => {
+    if (!playing || intro.active) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try { breathBtn.setPointerCapture(e.pointerId); } catch (err) { /* a synthetic pointer has nothing to capture */ }
+    beginBreath('button');
+  });
+  const releaseBreathButton = (e) => { e.preventDefault(); endBreath('button'); };
+  breathBtn.addEventListener('pointerup', releaseBreathButton);
+  breathBtn.addEventListener('pointercancel', releaseBreathButton);
+  breathBtn.addEventListener('contextmenu', (e) => e.preventDefault());
   function fitTouch() {
     const box = touchView();
     document.documentElement.classList.add('touch-root');
@@ -2083,7 +2132,7 @@ if (TOUCH) {
     if (e.pointerId === stickId) hideStick();
     const rights = rightFingers();
     const wasBreath = breathOn;
-    if (gone && gone.side === 'right' && rights.length < 2 && breathOn) endBreath();
+    if (gone && gone.side === 'right' && rights.length < 2) endBreath('fingers');
     if (gone && gone.side === 'right' && rights.length === 0 && pair) {
       const quick = !pair.opened && !pair.used && !wasBreath && pair.moved < 18 && performance.now() - pair.t < 320;
       clearTimeout(pair.timer);
@@ -2118,7 +2167,7 @@ if (TOUCH) {
   }
   document.addEventListener('pointerdown', (e) => {
     if (!playing || intro.active) return;
-    if (e.target.closest && e.target.closest('#overlay, #turn, #board, #inventorySlots')) return;
+    if (e.target.closest && e.target.closest('#overlay, #turn, #board, #inventorySlots, #breath')) return;
     const btn = e.target.closest && e.target.closest('#gear button');
     if (btn) {
       e.preventDefault();
@@ -2144,7 +2193,7 @@ if (TOUCH) {
       pair = { t: performance.now(), sy: rights.reduce((sum, f) => sum + f.sy, 0) / rights.length, moved: 0, opened: false, timer: 0 };
       pair.timer = setTimeout(() => {
         if (!pair || pair.opened || pair.moved >= 16 || breathOn || rightFingers().length < 2) return;
-        breathOn = true; pair.used = true; pressKey('Space');
+        pair.used = true; beginBreath('fingers');
       }, 240);
       return;
     }
@@ -2167,7 +2216,7 @@ if (TOUCH) {
     if (rights.length >= 2 && pair) {
       const ay = rights.reduce((sum, p) => sum + p.y, 0) / rights.length;
       pair.moved = Math.max(pair.moved, Math.abs(pair.sy - ay));
-      if (!pair.opened && pair.sy - ay > 46) { pair.opened = true; pair.used = true; gear.classList.add('on'); endBreath(); }
+      if (!pair.opened && pair.sy - ay > 46) { pair.opened = true; pair.used = true; gear.classList.add('on'); endBreath('fingers'); }
       return;
     }
     if (e.pointerId === stickId) { moveStick(e.clientX, e.clientY); return; }
@@ -2180,7 +2229,7 @@ if (TOUCH) {
   });
   document.addEventListener('pointerup', endPointer);
   document.addEventListener('pointercancel', endPointer);
-  document.addEventListener('touchmove', (e) => { if (!e.target.closest('#board, #playerName')) e.preventDefault(); }, { passive: false });
+  document.addEventListener('touchmove', (e) => { if (!e.target.closest('#board, #playerName, #inventorySlots, #breath')) e.preventDefault(); }, { passive: false });
 }
 
 // ───────────────────────── loop ─────────────────────────
@@ -3697,11 +3746,11 @@ function updateSanity(dt, inControl, running) {
   sanityEl.classList.toggle('low', value <= 68 && value > 30);
   sanityEl.classList.toggle('critical', value <= 30);
   sanityStateEl.textContent = recovering ? 'RECOVERING' : value > 75 ? 'CLEAR' : value > 50 ? 'UNSTEADY' : value > 25 ? 'FRACTURED' : 'BREAKING';
-  sanityEl.title = recovering
+  sanityEl.title = useWords(recovering
     ? (collectiveBreath
       ? 'Holding Space is restoring your sanity.'
       : 'Sanity is recovering. Shelter restores it; holding Space while still restores it faster.')
-    : 'Hold Space while still to recover sanity. During the Collective that works even while they are close. Shelter helps too.';
+    : 'Hold Space while still to recover sanity. During the Collective that works even while they are close. Shelter helps too.');
   sanityHazeEl.style.opacity = String(stress * 0.22);
   sanityVisionEl.style.opacity = '0';
   updateMind(dt, value);

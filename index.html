@@ -90,9 +90,14 @@
   body.touch #boardList { max-height: 64px; }
   body.touch #ammo { top: 14px; bottom: auto; right: 12px; }
   body.touch #status { top: 78px; bottom: auto; left: 16px; font-size: 12px; }
-  body.touch #inventoryPanel { bottom: 4px; }
-  body.touch .inventory-slot { width: 32px; height: 32px; }
-  body.touch #inventorySlots { pointer-events: auto; }
+  body.touch #inventoryPanel { bottom: 8px; }
+  body.touch .inventory-slot { width: 46px; height: 46px; touch-action: none; }
+  body.touch .inventory-slot b { display: none; }
+  body.touch .inventory-slot img { width: 26px; height: 26px; }
+  body.touch #inventorySlots { pointer-events: auto; gap: 6px; }
+  body.touch #breath { display: none; position: fixed; z-index: 8; right: 14px; top: 42%; width: 64px; height: 64px; margin: 0; padding: 0; border-radius: 50%; border: 1px solid rgba(185,179,163,.55); background: rgba(0,0,0,.4); color: #d8d2c0; font: 10px "Courier New", monospace; letter-spacing: 1px; touch-action: none; }
+  body.touch.playing #breath { display: block; }
+  body.touch #breath.held { background: rgba(216,210,192,.32); color: #fff; }
   body.touch.playing #touch { display: block; }
   body.touch #stick { display: none; position: fixed; z-index: 6; width: 104px; height: 104px; margin: -52px 0 0 -52px; border-radius: 50%; border: 1px solid rgba(185,179,163,.35); background: rgba(0,0,0,.22); touch-action: none; pointer-events: none; }
   body.touch #stick.on { display: block; }
@@ -105,6 +110,7 @@
     body.touch #turn p:first-child { font-size: 22px; color: #d8d2c0; margin: 0 0 8px; }
     body.touch #turn p:last-child { margin: 0; font-size: 13px; }
     body.touch.playing #touch { display: none; }
+    body.touch.playing #breath { display: none; }
   }
 </style>
 <script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
@@ -132,8 +138,8 @@
   <p class="desk">1–9 select/use inventory &middot; X drop selected item &middot; Better packs add slots</p>
   <p class="desk">Sanity: hold Space while still to recover, including while the Collective is close. Shelter helps too. A potion clears a mind that has not broken yet.</p>
   <p class="phone">Turn sideways. The left finger moves — push farther to run. The right finger looks.</p>
-  <p class="phone">Tap shoots. Hold aims. Press and hold uses. Tap a chest to open it. Two fingers: tap the light, hold your breath, swipe up for gear.</p>
-  <p class="phone">Hold still and hold your breath to recover sanity, including while the Collective is close. Shelter helps too. A potion clears a mind that has not broken yet.</p>
+  <p class="phone">Tap shoots. Hold aims. Press and hold uses. Tap a chest to open it. Two fingers: tap the light, swipe up for gear.</p>
+  <p class="phone">Tap an item to use it or swap to it. Hold the breath button to hold your breath, and hold it while still to recover sanity.</p>
   <p class="go" id="go">Click to begin</p>
   <div id="board">
     <label>NAME <input id="playerName" maxlength="20" autocomplete="nickname" spellcheck="false"></label>
@@ -143,6 +149,7 @@
   </div>
 </div>
 <div id="touch">
+  <button type="button" id="breath" aria-pressed="false">BREATH</button>
   <div id="stick" aria-hidden="true"><div id="stickKnob"></div></div>
   <div id="gear">
     <button type="button" data-tap="KeyR">RELOAD</button>
