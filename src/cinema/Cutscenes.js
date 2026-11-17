@@ -670,7 +670,7 @@ export function createCutscenes(kit) {
       },
     },
   };
-  const DEATH_FOR = { ghost: 'fall', choir: 'fall', consumer: 'fall', drowned: 'drown', burned: 'burn', blast: 'burn', observer: 'drag', collective: 'circle', sanity: 'float', time: 'float' };
+  const DEATH_FOR = { ghost: 'fall', choir: 'fall', consumer: 'fall', slime: 'drown', drowned: 'drown', burned: 'burn', blast: 'burn', observer: 'drag', collective: 'circle', sanity: 'float', time: 'float' };
   // cause: what main.js calls the death. from: when a quick time event was failed, which scene it was in.
   function playDeath(cause, done = () => {}, from = '') {
     if (cur) return false;

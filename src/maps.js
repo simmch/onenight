@@ -28,7 +28,7 @@ export function createMap(name, env) {
   const has = (k) => !!(kinds[k] && kinds[k].length);
   const pick = (r, ...names) => { for (const n of names) if (has(n)) return kinds[n][(r() * kinds[n].length) | 0]; return 0; };
   const rngFor = (a, b, salt) => mulberry((hash2(a, b, salt) * 4294967296) | 0);
-  const blank = () => ({ props: [], glow: [], col: [], aabb: [], chest: null, boxes: {}, lights: [], vents: [], doors: [], houses: [], secrets: [] });
+  const blank = () => ({ props: [], glow: [], col: [], aabb: [], chest: null, boxes: {}, lights: [], vents: [], doors: [], houses: [], secrets: [], cameraWords: [] });
   const box = (c, layer, x, y, z, sx, sy, sz, rot = 0) => (c.boxes[layer] ||= []).push(x, y, z, sx, sy, sz, rot);
   // billboard helpers: kind names fall back left to right; a missing kind is skipped
   const put = (c, r, names, x, z, w, h, rad = 0, sway = 0, y = 0) => {
@@ -74,7 +74,10 @@ export function createMap(name, env) {
       if (x * x + z * z < 16) continue;                   // keep spawn clear
       if (nearChestSq(x, z) < 6) continue;                // and leave a small clearing around a chest
       const roll = r(), bleak = noise(x, z, 60, 3);
-      if (roll < 0.12 + bleak * 0.25) { const h = 4 + r() * 3;   add(x, z, h * 0.95, h, pick(r, 'dead'), 0.004, 0.3); }
+      if (roll < 0.12 + bleak * 0.25) {
+        const h = 4 + r() * 3; add(x, z, h * 0.95, h, pick(r, 'dead'), 0.004, 0.3);
+        if (hash2(Math.floor(x), Math.floor(z), 79) < 0.012) c.cameraWords.push({ id: `forest:${Math.floor(x)},${Math.floor(z)}:birthday`, x, y: 1.8, z: z + 0.18, rotation: 0, line: (hash2(x, z, 80) * 4) | 0, chalk: hash2(x, z, 81) > 0.52 });
+      }
       else if (roll < 0.55)           { const h = 6 + r() * 4;   add(x, z, h * 0.72, h, pick(r, 'fir'),  0.006, 0.35); }
       else if (roll < 0.8)            { const h = 6 + r() * 4.5; add(x, z, h * 0.75, h, pick(r, 'pine'), 0.006, 0.35); }
       else                            { const h = 5 + r() * 3;   add(x, z, h,        h, pick(r, 'oak'),  0.005, 0.4); }
@@ -113,7 +116,10 @@ export function createMap(name, env) {
       const density = noise(x, z, 44, 2);
       if (r() > 0.12 + density * 0.7) continue;
       if (x * x + z * z < 16 || nearChestSq(x, z) < 6) continue;
-      if (r() < 0.16) { const h = 4 + r() * 3; put(c, r, ['snowdead', 'dead'], x, z, h * 0.95, h, 0.3, 0.004, Y(x, z)); }
+      if (r() < 0.16) {
+        const h = 4 + r() * 3; put(c, r, ['snowdead', 'dead'], x, z, h * 0.95, h, 0.3, 0.004, Y(x, z));
+        if (hash2(Math.floor(x), Math.floor(z), 82) < 0.018) c.cameraWords.push({ id: `snow:${Math.floor(x)},${Math.floor(z)}:birthday`, x, y: Y(x, z) + 1.8, z: z + 0.18, rotation: 0, line: (hash2(x, z, 83) * 4) | 0, chalk: true });
+      }
       else { const h = 6 + r() * 5; put(c, r, ['snowtree', 'fir'], x, z, h * 0.74, h, 0.35, 0.007, Y(x, z)); }
     }
     for (let n = 0; n < 5; n++) {
@@ -191,6 +197,21 @@ export function createMap(name, env) {
     box(c, 'roof', mx, WALL_H + 0.13, mz, x1 - x0 + 1.1, 0.26, z1 - z0 + 1.1);
     c.houses.push(x0 + T / 2, z0 + T / 2, x1 - T / 2, z1 - T / 2);
 
+    // A few homes carry marks left by the birthday boy. They are just map data until the
+    // upgraded video camera's light finds them; the renderer owns the handwriting texture.
+    if (r() < 0.2) {
+      const walls = ['z0', 'z1', 'x0', 'x1'].filter((wall) => !h.doors.some((d) => d.wall === wall));
+      if (walls.length) {
+        const wall = walls[(r() * walls.length) | 0], alongX = wall[0] === 'z';
+        const inward = wall[1] === '0' ? 1 : -1;
+        const x = alongX ? mx : (wall === 'x0' ? x0 : x1) + inward * 0.17;
+        const z = alongX ? (wall === 'z0' ? z0 : z1) + inward * 0.17 : mz;
+        c.cameraWords.push({ id: `${h.id}:birthday`, x, y: 1.52, z,
+          rotation: wall === 'z0' ? 0 : wall === 'z1' ? Math.PI : wall === 'x0' ? Math.PI / 2 : -Math.PI / 2,
+          line: (hash2(h.seed, 0, 94) * 4) | 0, chalk: hash2(h.seed, 1, 94) > 0.52 });
+      }
+    }
+
     // chest and furniture
     const placed = [];
     const free = (x, z, gap) => !placed.some(p => (p[0] - x) ** 2 + (p[1] - z) ** 2 < gap * gap) && !h.doors.some(d => (d.x - x) ** 2 + (d.z - z) ** 2 < 2.0 * 2.0);
@@ -264,7 +285,10 @@ export function createMap(name, env) {
     for (let i = 0; i < S / G; i++) for (let j = 0; j < S / G; j++) {
       const x = ox + (i + 0.15 + r() * 0.7) * G, z = oz + (j + 0.15 + r() * 0.7) * G, roll = r(), kind = r();
       if (roll > 0.2 || !clear(x, z, 1.8, 2.2)) continue;
-      if (kind < 0.18) { const h = 4 + r() * 3; put(c, r, ['yarddead', 'haunted', 'dead'], x, z, h, h, 0.3, 0.004); }
+      if (kind < 0.18) {
+        const h = 4 + r() * 3; put(c, r, ['yarddead', 'haunted', 'dead'], x, z, h, h, 0.3, 0.004);
+        if (hash2(Math.floor(x), Math.floor(z), 84) < 0.035) c.cameraWords.push({ id: `rural-tree:${Math.floor(x)},${Math.floor(z)}:birthday`, x, y: 1.8, z: z + 0.18, rotation: 0, line: (hash2(x, z, 85) * 4) | 0, chalk: hash2(x, z, 86) > 0.52 });
+      }
       else if (kind < 0.3) { const h = 6 + r() * 3; put(c, r, 'fir', x, z, h * 0.72, h, 0.35, 0.006); }
       else { const h = 5 + r() * 3.5; put(c, r, ['yardtree', 'oak'], x, z, h, h, 0.4, 0.005); }
     }
@@ -374,7 +398,15 @@ export function createMap(name, env) {
       if (t === SOLID) {
         let edge = false;
         for (let dj = -1; dj <= 1 && !edge; dj++) for (let di = -1; di <= 1; di++) if (cellType(i + di, j + dj) !== SOLID) { edge = true; break; }
-        if (edge) { const wh = P.wallMin + h * P.wallVar; box(c, 'wall', x, wh / 2, z, CELL, wh, CELL); }
+        if (edge) {
+          const wh = P.wallMin + h * P.wallVar; box(c, 'wall', x, wh / 2, z, CELL, wh, CELL);
+          const faces = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([di, dj]) => cellType(i + di, j + dj) === FLOOR);
+          if (faces.length && hash2(i, j, 71) < 0.045) {
+            const [di, dj] = faces[(hash2(i, j, 72) * faces.length) | 0];
+            c.cameraWords.push({ id: `${name}:${i},${j}:birthday`, x: x + di * (CELL / 2 + 0.04), y: 1.45, z: z + dj * (CELL / 2 + 0.04),
+              rotation: Math.atan2(di, dj), line: (hash2(i, j, 73) * 4) | 0, chalk: hash2(i, j, 74) > 0.52 });
+          }
+        }
         continue;
       }
       if (t === SECRET) { c.secrets.push({ id: secretId(i, j), i, j, x, z }); continue; }
@@ -401,7 +433,10 @@ export function createMap(name, env) {
         if (walls.length && r() < 0.12) { const [di, dj] = walls[0]; put(c, r, ['moss', 'web'], x + di * 1.6, z + dj * 1.6, 1.1, 1.2, 0, 0.01, H - 1.2); }
       } else {
         if (far && h > 1 - P.vent && walls.length < 2) c.vents.push(x + (r() - 0.5) * 2, z + (r() - 0.5) * 2, 5 + r() * 5, r() * 10);
-        if (far && r() < 0.07) { const [px, pz] = at(3), hh = 3 + r() * 2.5; put(c, r, ['burnt', 'dead'], px, pz, hh, hh, 0.3, 0.003); }
+        if (far && r() < 0.07) {
+          const [px, pz] = at(3), hh = 3 + r() * 2.5; put(c, r, ['burnt', 'dead'], px, pz, hh, hh, 0.3, 0.003);
+          if (hash2(Math.floor(px), Math.floor(pz), 87) < 0.035) c.cameraWords.push({ id: `hell:${Math.floor(px)},${Math.floor(pz)}:birthday`, x: px, y: 1.65, z: pz + 0.18, rotation: 0, line: (hash2(px, pz, 88) * 4) | 0, chalk: hash2(px, pz, 89) > 0.52 });
+        }
         if (far && r() < 0.1) { const [px, pz] = at(3), hh = 1.5 + r() * 2.2; put(c, r, ['hellrock', 'stalagmite'], px, pz, hh * 0.6, hh, 0.4); }
         if (far && r() < 0.04) { const [px, pz] = at(3); put(c, r, 'lavarock', px, pz, 1.2, 1.2, 0.45); }
         if (far && r() < 0.035) { const [px, pz] = at(3); put(c, r, 'spikes', px, pz, 1.2, 0.9, 0.4); }
@@ -527,7 +562,15 @@ export function createMap(name, env) {
       if (labCell(i, j) === SOLID) {
         let edge = false;
         for (let dj = -1; dj <= 1 && !edge; dj++) for (let di = -1; di <= 1; di++) if (labCell(i + di, j + dj) !== SOLID) { edge = true; break; }
-        if (edge) box(c, 'wall', x, LAB_H / 2, z, CELL, LAB_H, CELL);
+        if (edge) {
+          box(c, 'wall', x, LAB_H / 2, z, CELL, LAB_H, CELL);
+          const faces = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([di, dj]) => labCell(i + di, j + dj) === FLOOR);
+          if (faces.length && hash2(i, j, 75 + lab.gen) < 0.045) {
+            const [di, dj] = faces[(hash2(i, j, 76 + lab.gen) * faces.length) | 0];
+            c.cameraWords.push({ id: `labyrinth:${lab.gen}:${i},${j}:birthday`, x: x + di * (CELL / 2 + 0.04), y: 1.45, z: z + dj * (CELL / 2 + 0.04),
+              rotation: Math.atan2(di, dj), line: (hash2(i, j, 77 + lab.gen) * 4) | 0, chalk: hash2(i, j, 78 + lab.gen) > 0.52 });
+          }
+        }
         continue;
       }
       const far = x * x + z * z > 64, walls = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([di, dj]) => labCell(i + di, j + dj) === SOLID);
@@ -571,6 +614,8 @@ export function createMap(name, env) {
     blocked: isGrid ? gridBlocked : () => false,
     door: { W: DOOR_W, H: DOOR_H, T: WALL_T }, wallH: WALL_H,
     // the labyrinth only: its current maze, whether a point lies outside the outer wall, and a fresh maze on demand
+    // a new seed has been set (hash2 reads it live): forget everything worked out under the old one
+    reseed() { blockCache.clear(); regions.clear(); },
     labyrinth: name === 'labyrinth' ? { state: lab, outside: labOutside, regen: () => setLab(lab.gen + 1) } : null,
   };
 }

@@ -9,12 +9,13 @@ import { createCollective, COLLECTIVE } from './collective/CollectiveRound.js';
 import { buildChild, poseChild, createCollectiveMaterials } from './collective/CollectiveModel.js';
 import { createChoirRound } from './choir/ChoirRound.js';
 import { createConsumerRound } from './consumer/ConsumerRound.js';
+import { createSlimeRound, SLIME } from './slime/SlimeRound.js';
 import { createJournal } from './lore/journal.js';
 import { createLorePickups } from './lore/pickups.js';
 import { mountLeaderboard, offerScore } from './leaderboard.js';
 import { createTitleScreen } from './cinema/TitleScreen.js';
 import { createCutscenes } from './cinema/Cutscenes.js';
-import { GUN_TIERS, LIGHT_TIERS, RADAR_TIERS, COSTS, PARTS_IN_CHEST, SPRITES, createWorkbench, createPicker } from './gear/upgrades.js';
+import { GUN_TIERS, LIGHT_TIERS, RADAR_TIERS, COSTS, PARTS_IN_CHEST, SPRITES, createWorkbench, createPicker, ARMOR_TIERS, ARMOR_ICONS, rollArmorTier } from './gear/upgrades.js';
 
 // ───────────────────────── config ─────────────────────────
 const CFG = {
@@ -147,12 +148,14 @@ const held = new THREE.Mesh(
 );
 held.renderOrder = 999;
 held.layers.set(1);
+const plainFlashlightTexture = held.material.map;
 const HELD_UP = new THREE.Vector3(0.36, -0.30, -0.62), HELD_DOWN = new THREE.Vector3(0.36, -0.75, -0.62);
 held.position.copy(HELD_DOWN);
 camera.add(held);
 
 const SKIP_INTRO = new URLSearchParams(location.search).has('nointro');
 const flashlight = { battery: 1, equipped: SKIP_INTRO, raise: 0, flickerAge: -1, flickerDur: 0, nextFlicker: 7 + Math.random() * 8 };
+const videoFlicker = { next: 2.5 + Math.random() * 2.5, age: -1, duration: 0, amount: 0 };
 
 // Soft fringe around the beam: the core stays sharp, the ring around it is blurred.
 const visionRT = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: true, samples: 0 });
@@ -165,6 +168,9 @@ const visionUniforms = {
   uCore: { value: 0.18 },
   uSoft: { value: 0.2 },
   uStain: { value: 0 },
+  uVideo: { value: 0 },
+  uVideoTime: { value: 0 },
+  uVideoOut: { value: 0 },
 };
 const visionMat = new THREE.ShaderMaterial({
   uniforms: visionUniforms,
@@ -179,8 +185,12 @@ const visionMat = new THREE.ShaderMaterial({
     uniform float uCore;
     uniform float uSoft;
     uniform float uStain;
+    uniform float uVideo;
+    uniform float uVideoTime;
+    uniform float uVideoOut;
     varying vec2 vUv;
     vec3 tap(vec2 o){ return texture2D(tDiffuse, vUv + o).rgb; }
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
     void main(){
       vec3 sharp = tap(vec2(0.0));
       vec2 px = uTexel * 6.5;
@@ -191,12 +201,27 @@ const visionMat = new THREE.ShaderMaterial({
       blur += tap(px * vec2( 0.7,-0.7)) + tap(px * vec2(-0.7,-0.7));
       blur /= 8.18;
       float d = length((vUv - vec2(0.5, 0.46)) * vec2(uAspect, 1.0));
-      float fringe = smoothstep(uCore, uCore + uSoft, d);
+      float core = mix(uCore, 0.46, uVideo);                        // the camera sees wide: its blur starts far out, near the rim of the lens
+      float fringe = smoothstep(core, core + mix(uSoft, 0.3, uVideo), d);
       vec3 color = mix(sharp, blur, fringe);
       float lift = clamp(uStain, 0.0, 1.0);
       color.r = mix(color.r, min(1.0, color.r * 0.45 + 0.62), lift);
       color.g = mix(color.g, color.g * 0.38, lift);
       color.b = mix(color.b, color.b * 0.28, lift);
+      vec2 pixel = floor(vUv / uTexel);
+      float grain = hash(pixel + vec2(floor(uVideoTime * 24.0))) - 0.5;
+      float snow = step(0.9975, hash(pixel * 1.7 + vec2(floor(uVideoTime * 11.0))));
+      float scanline = 0.9 + 0.1 * sin(pixel.y * 3.14159);
+      float luma = dot(color, vec3(0.299, 0.587, 0.114));
+      // the lens gathers light: what the beam shows, the camera shows brighter, in green, with a little white in the highlights
+      float gained = pow(clamp(luma * 2.6, 0.0, 1.0), 0.7);
+      vec3 nightVision = (vec3(gained * 0.14, gained * 0.96, gained * 0.3) + vec3(pow(gained, 4.0) * 0.3)) * scanline;
+      nightVision += vec3(grain * 0.04 + snow * 0.2, grain * 0.07 + snow * 0.32, grain * 0.03 + snow * 0.12);
+      float band = step(0.9975, hash(vec2(floor(vUv.y * 96.0), floor(uVideoTime * 8.0)))) * 0.16;
+      nightVision += vec3(band * 0.25, band, band * 0.5);
+      nightVision *= 1.0 - smoothstep(0.5, 0.95, d) * 0.97;       // and round the lens, soft black
+      color = mix(color, clamp(nightVision, 0.0, 1.0), uVideo);
+      color *= 1.0 - clamp(uVideoOut, 0.0, 1.0) * uVideo;
       gl_FragColor = vec4(color, 1.0);
     }`,
 });
@@ -259,6 +284,44 @@ function placeGround() {
 // ───────────────────────── billboards (instanced, camera-facing) ─────────────────────────
 const atlas = await (await fetch('./assets/atlas.json')).json();
 const MAP = createMap(MAP_NAME, { seed: CFG.seed, S: CFG.chunk, atlas, hash2, mulberry, noise, chestChance: CFG.chestChance });
+// ───────────────────────── the lake, and ground that has been eaten ─────────────────────────
+// Every open map has one lake, far from where the night starts. It is the only thing that kills the Slime.
+// `eaten` is the ground the Slime has rolled over (and the lake bed): circles, bucketed by chunk. Whatever stood there is gone.
+const lake = { on: !MAP.grid, x: 0, z: 0, r: 22, y: 0, far: 210 };
+const eaten = new Map();
+let eatenDirty = false;
+function eatAdd(x, z, r) {
+  const S = CFG.chunk;
+  for (let cx = Math.floor((x - r) / S); cx <= Math.floor((x + r) / S); cx++) for (let cz = Math.floor((z - r) / S); cz <= Math.floor((z + r) / S); cz++) {
+    const k = cx + ',' + cz; let list = eaten.get(k); if (!list) eaten.set(k, list = []);
+    list.push(x, z, r * r);
+  }
+  eatenDirty = true;
+}
+function inEaten(E, x, z) {
+  for (let i = 0; i < E.length; i += 3) if ((x - E[i]) ** 2 + (z - E[i + 1]) ** 2 < E[i + 2]) return true;
+  return false;
+}
+const rawGroundY = MAP.groundY;
+MAP.groundY = (x, z) => {                 // on rolling ground the lake lies level, and its banks ease down to it
+  const y = rawGroundY(x, z);
+  if (!lake.on || !META.terrain) return y;
+  const d = Math.hypot(x - lake.x, z - lake.z);
+  if (d > lake.r + 12) return y;
+  const k = Math.max(0, (d - lake.r) / 12), e = k * k * (3 - 2 * k);
+  return lake.y + (y - lake.y) * e;
+};
+const lakeMesh = new THREE.Mesh(new THREE.CircleGeometry(1, 48), new THREE.MeshBasicMaterial({ color: 0x1f66b8, transparent: true, opacity: 0.9 }));
+lakeMesh.rotation.x = -Math.PI / 2; lakeMesh.visible = false; scene.add(lakeMesh);
+function placeLake() {
+  if (!lake.on) return;
+  const a = hash2(17, 5, 977) * Math.PI * 2;
+  lake.x = Math.cos(a) * lake.far; lake.z = Math.sin(a) * lake.far; lake.y = rawGroundY(lake.x, lake.z);
+  lakeMesh.position.set(lake.x, lake.y + 0.06, lake.z); lakeMesh.scale.setScalar(lake.r); lakeMesh.visible = true;
+  eatAdd(lake.x, lake.z, lake.r + 1.5);
+}
+const inLake = (x, z, pad = 0) => lake.on && (x - lake.x) ** 2 + (z - lake.z) ** 2 < (lake.r + pad) ** 2;
+placeLake();
 const CAP = 24000;
 const uTime = { value: 0 };
 const atlasTex = pixelTex('./assets/atlas.png');
@@ -401,6 +464,66 @@ let glowStatic = 0;
 const chunks = new Map();
 const key = (cx, cz) => cx + ',' + cz;
 const pick = (r, kind) => { const a = atlas.sprites[kind]; return a[(r() * a.length) | 0]; };
+const CAMERA_WORDS = [
+  'TODAY WAS MY EIGHTH BIRTHDAY.',
+  'FATHER LOCKED THE DOOR.',
+  'MOTHER HELD ME WHILE HE HIT ME.',
+  'THEY SANG HAPPY BIRTHDAY OVER MY BODY.',
+];
+const seenCameraWords = new Set(), cameraWordChunks = new Map();
+function makeCameraWord(data) {
+  const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 192;
+  const g = canvas.getContext('2d'), phrase = CAMERA_WORDS[data.line] || CAMERA_WORDS[0];
+  g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = 'bold 30px Courier New, monospace';
+  const words = phrase.split(' '), lines = []; let line = '';
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (g.measureText(next).width > 570 && line) { lines.push(line); line = word; } else line = next;
+  }
+  if (line) lines.push(line);
+  if (data.chalk) {
+    g.fillStyle = '#d8d5c8'; g.shadowColor = '#c5c9bd'; g.shadowBlur = 3;
+    lines.forEach((text, i) => g.fillText(text, 320, 60 + i * 42));
+    g.shadowBlur = 0; g.fillStyle = 'rgba(230,230,216,.42)';
+    for (let i = 0; i < 170; i++) g.fillRect(Math.random() * 640, Math.random() * 192, 1, 1);
+  } else {
+    g.fillStyle = '#6b110d'; g.shadowColor = '#9a1f17'; g.shadowBlur = 5;
+    lines.forEach((text, i) => g.fillText(text, 320 + Math.sin(i * 7) * 2, 60 + i * 42));
+    g.shadowBlur = 0; g.fillStyle = '#65110e';
+    for (let i = 0; i < 15; i++) { const x = 42 + Math.random() * 556, y = 45 + Math.random() * 105; g.beginPath(); g.ellipse(x, y, 1 + Math.random() * 2, 3 + Math.random() * 8, 0, 0, Math.PI * 2); g.fill(); }
+  }
+  const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace; texture.magFilter = THREE.LinearFilter; texture.minFilter = THREE.LinearFilter;
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -1 });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.84), material);
+  mesh.position.set(data.x, data.y, data.z); mesh.rotation.y = data.rotation; mesh.visible = false; mesh.renderOrder = 3; scene.add(mesh);
+  return { id: `${MAP_NAME}:${data.id}`, mesh, exposed: false };
+}
+function mountCameraWords(chunkKey, chunk) {
+  if (cameraWordChunks.has(chunkKey)) return;
+  const entries = (chunk.cameraWords || []).map(makeCameraWord);
+  cameraWordChunks.set(chunkKey, entries);
+}
+function unmountCameraWords(chunkKey) {
+  const entries = cameraWordChunks.get(chunkKey); if (!entries) return;
+  for (const entry of entries) {
+    if (entry.exposed) seenCameraWords.add(entry.id);
+    scene.remove(entry.mesh); entry.mesh.geometry.dispose(); entry.mesh.material.map.dispose(); entry.mesh.material.dispose();
+  }
+  cameraWordChunks.delete(chunkKey);
+}
+const wordAim = new THREE.Vector3(), wordTo = new THREE.Vector3();
+function updateCameraWords(active) {
+  camera.getWorldDirection(wordAim);
+  for (const entries of cameraWordChunks.values()) for (const entry of entries) {
+    if (seenCameraWords.has(entry.id)) { entry.mesh.visible = false; continue; }
+    const p = entry.mesh.position, dx = p.x - camera.position.x, dy = p.y - camera.position.y, dz = p.z - camera.position.z;
+    const distance = Math.hypot(dx, dy, dz);
+    const lit = active && distance < 15 && distance > 0.5 && wordAim.dot(wordTo.set(dx, dy, dz).normalize()) > Math.cos(spot.angle * 0.9)
+      && !creatureWorld.losBlocked(camera.position.x, camera.position.z, p.x, p.z);
+    if (lit) { entry.mesh.visible = true; entry.exposed = true; }
+    else if (entry.exposed) { entry.mesh.visible = false; entry.exposed = false; seenCameraWords.add(entry.id); }
+  }
+}
 
 // Opened chests, open doors and broken-through cave walls, by id. Map generation itself lives in maps.js.
 const opened = new Set();
@@ -433,9 +556,10 @@ function refreshChunks(force) {
     const k = key(cx + dx, cz + dz); wanted.add(k);
     let c = chunks.get(k);
     if (!c) chunks.set(k, c = MAP.generateChunk(cx + dx, cz + dz));
-    const p = c.props, q = c.glow;
-    for (let i = 0; i < p.length; i += 7) { if (p[i + 3] < 3 && inClearZone(p[i], p[i + 1])) continue; vegLayer.add(p[i], p[i + 6], p[i + 1], p[i + 2], p[i + 3], p[i + 4], p[i + 5]); }
-    for (let i = 0; i < q.length; i += 7) glowLayer.add(q[i], q[i + 6], q[i + 1], q[i + 2], q[i + 3], q[i + 4], q[i + 5]);
+    mountCameraWords(k, c);
+    const p = c.props, q = c.glow, E = eaten.get(k);
+    for (let i = 0; i < p.length; i += 7) { if (p[i + 3] < 3 && inClearZone(p[i], p[i + 1])) continue; if (E && inEaten(E, p[i], p[i + 1])) continue; vegLayer.add(p[i], p[i + 6], p[i + 1], p[i + 2], p[i + 3], p[i + 4], p[i + 5]); }
+    for (let i = 0; i < q.length; i += 7) if (!E || !inEaten(E, q[i], q[i + 1])) glowLayer.add(q[i], q[i + 6], q[i + 1], q[i + 2], q[i + 3], q[i + 4], q[i + 5]);
     if (c.chest) {
       const tint = c.chest.tier === 'armory' ? 0xd9b86c : c.chest.tier === 'red' ? 0xd27666 : c.chest.tier === 'blue' ? 0x769dc9 : 0xffffff;
       vegLayer.add(c.chest.x, MAP.groundY(c.chest.x, c.chest.z) - 0.05, c.chest.z, 0.95, 0.95, chestCell[opened.has(c.chest.id) ? 1 : 0], 0, tint);
@@ -443,9 +567,10 @@ function refreshChunks(force) {
     for (let i = 0; i < c.vents.length && ventCells.length; i += 4) vegLayer.add(c.vents[i], 0, c.vents[i + 1], 1.0, 0.5, ventCells[(i / 4) % ventCells.length], 0);
     for (const name in c.boxes) {
       const L = layers[name], b = c.boxes[name];
-      for (let i = 0; i < b.length; i += 7) setBox(L, b[i], b[i + 1], b[i + 2], b[i + 3], b[i + 4], b[i + 5], b[i + 6]);
+      for (let i = 0; i < b.length; i += 7) if (!E || !inEaten(E, b[i], b[i + 2])) setBox(L, b[i], b[i + 1], b[i + 2], b[i + 3], b[i + 4], b[i + 5], b[i + 6]);
     }
     for (const d of c.doors) {        // shut: across the gap. open: swung in on its hinge
+      if (E && inEaten(E, d.x, d.z)) continue;
       const open = opened.has(d.id), alongX = d.along === 'x', lieX = open ? !alongX : alongX;
       const x = d.x + (open ? (alongX ? -D.W / 2 : d.inward * D.W / 2) : 0), z = d.z + (open ? (alongX ? d.inward * D.W / 2 : -D.W / 2) : 0);
       setBox(layers.door, x, D.H / 2, z, lieX ? D.W : 0.08, D.H, lieX ? 0.08 : D.W, 0);
@@ -458,7 +583,7 @@ function refreshChunks(force) {
     }
     if (Math.abs(dx) <= 1 && Math.abs(dz) <= 1) { for (const d of c.doors) near.doors.push(d); for (const s of c.secrets) near.secrets.push(s); }
   }
-  for (const k of chunks.keys()) if (!wanted.has(k)) chunks.delete(k);   // deterministic, so safe to drop
+  for (const k of chunks.keys()) if (!wanted.has(k)) { unmountCameraWords(k); chunks.delete(k); }   // deterministic, so safe to drop
   vegLayer.commit(); glowStatic = glowLayer.n; glowLayer.commit();
   for (const name in layers) { const L = layers[name]; L.mesh.count = L.n; L.mesh.instanceMatrix.needsUpdate = true; }
 }
@@ -479,14 +604,16 @@ function collide(pos, PR = 0.3, creature = false) {
   }
   for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
     const c = chunks.get(key(cx + dx, cz + dz)); if (!c) continue;
+    const E = eaten.get(key(cx + dx, cz + dz));
     for (let i = 0; i < c.col.length; i += 3) {
+      if (E && inEaten(E, c.col[i], c.col[i + 1])) continue;
       const ex = pos.x - c.col[i], ez = pos.z - c.col[i + 1], min = c.col[i + 2] + PR;
       const d2 = ex * ex + ez * ez;
       if (d2 < min * min && d2 > 1e-6) { const d = Math.sqrt(d2), push = (min - d) / d; pos.x += ex * push; pos.z += ez * push; }
     }
-    for (let i = 0; i < c.aabb.length; i += 4) pushOutBox(pos, c.aabb[i], c.aabb[i + 1], c.aabb[i + 2], c.aabb[i + 3], PR);
+    for (let i = 0; i < c.aabb.length; i += 4) if (!E || !inEaten(E, (c.aabb[i] + c.aabb[i + 2]) / 2, (c.aabb[i + 1] + c.aabb[i + 3]) / 2)) pushOutBox(pos, c.aabb[i], c.aabb[i + 1], c.aabb[i + 2], c.aabb[i + 3], PR);
     for (const d of c.doors) {
-      if (opened.has(d.id)) continue;
+      if (opened.has(d.id) || (E && inEaten(E, d.x, d.z))) continue;
       if (d.along === 'x') pushOutBox(pos, d.x - D.W / 2, d.z - D.T / 2, d.x + D.W / 2, d.z + D.T / 2, PR);
       else pushOutBox(pos, d.x - D.T / 2, d.z - D.W / 2, d.x + D.T / 2, d.z + D.W / 2, PR);
     }
@@ -732,6 +859,8 @@ const kidClips = await Promise.all([
   'scary_kids_giggling_#4-1794542979890.mp3',
 ].map((file) => loadClip(file, '../sound_effects/kids/')));
 const drinkBuffer = await loadClip('drinking_potion,_gul_#3-1794631930380.mp3');
+const videoCamBuffer = await loadClip('ongoing_old_video_ca_#4-1794932489169.mp3');
+const collectiveStepsBuffer = await loadClip('group_footsteps_movi_#2-1794932719907.mp3');
 const [snowWalkBuffer, snowRunBuffer] = MAP_NAME === 'snow' ? await Promise.all([
   loadClip('Walking_in_snow_#1-1794670709006.mp3'),
   loadClip('Running_in_snow_#3-1794670755314.mp3'),
@@ -1019,9 +1148,10 @@ const SANITY_LOOK_COLLECTIVE = 3.5; // the Collective wears at the mind much mor
 const SANITY_BREATH = 2.4; // holding Space while still restores the mind
 const SANITY_BREATH_SHELTER = 3.2; // indoors with a held breath is faster
 const SANITY_BREATH_COLLECTIVE = 5.0; // holding Space while still brings it back, even with them close
-const SANITY_POTION = 68; // a mind still above the break can be cleared by a potion
-const SANITY_EMPTY = 45; // seconds at zero before the night ends
-const sanity = { value: SANITY_MAX, warned: false, empty: 0 };
+const SANITY_EMPTY = 45; // seconds at zero before the night ends (holding breath can still fill it)
+const SANITY_BURN = 6; // per second while an Observer body is on fire
+const SANITY_BURN_DONE = 14; // when that body is ash
+const sanity = { value: SANITY_MAX, warned: false, empty: 0, drained: false };
 
 function rampParam(param, value, seconds) {
   const t = audioCtx.currentTime;
@@ -1171,6 +1301,9 @@ const GUN = { ...GUN_TIERS[0] };
 // parts are spent at the workbench (C). gunTier, lightTier and radarTier count the upgrades fitted so far.
 const inv = { gun: false, mag: 0, reserve: 0, batteries: 0, matches: CFG.startMatches, potions: CFG.startPotions, health: 100, maxHealth: 100, innocents: 0,
               parts: 0, grenades: 0, launcher: false, gunTier: 0, lightTier: 0, radarTier: 0, kitGiven: false };
+const CAMERA_LIGHT_TIER = LIGHT_TIERS.findIndex((tier) => tier.camera);
+const hasCameraUpgrade = () => CAMERA_LIGHT_TIER >= 0 && inv.lightTier >= CAMERA_LIGHT_TIER;
+const videoCameraOn = () => hasCameraUpgrade() && flashlight.equipped && flashlight.battery > 0.01;
 const radarWorks = () => inv.radarTier >= 1 || isObserverRound() || isChoirRound();
 const ITEM_DEFS = {
   knife: { name: 'Knife', icon: './assets/items/combat_knife.png', kind: 'weapon', damage: 1, reach: 1.9, cooldown: 0.48, noise: 0.28 },
@@ -1339,6 +1472,7 @@ const gunshotGain = audioCtx.createGain();
 gunshotGain.gain.value = 0.85;
 gunshotGain.connect(audioCtx.destination);
 let candleSrc = null;
+let videoCamLoop = null;
 
 function syncCandle(lit) {
   if (lit === !!candleSrc) return;
@@ -1355,6 +1489,11 @@ function syncCandle(lit) {
   src.connect(candleGain);
   src.start();
   candleSrc = src;
+}
+function syncVideoCamera(on) {
+  if (on === !!videoCamLoop) return;
+  if (videoCamLoop) { stopClip(videoCamLoop, 0.12); videoCamLoop = null; return; }
+  videoCamLoop = playClip(videoCamBuffer, 0.42, true);
 }
 function playGunshot() {
   if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -1397,6 +1536,8 @@ const sfx = {
   click()  { noise1(0.04, 'highpass', 2600, 2000, 0.35); },
   strike() { noise1(0.38, 'bandpass', 2200, 4200, 0.3); },
   chest()  { thump(170, 80, 0.16, 0.5); noise1(0.12, 'lowpass', 900, 300, 0.4); },
+  shieldHit() { thump(300, 140, 0.12, 0.45); noise1(0.1, 'highpass', 2600, 1400, 0.3); },
+  shieldBreak() { thump(240, 60, 0.35, 0.7); noise1(0.45, 'bandpass', 3000, 600, 0.6); },
   upgrade() { thump(420, 620, 0.12, 0.35); noise1(0.08, 'highpass', 3000, 5200, 0.25); setTimeout(() => thump(620, 880, 0.16, 0.3), 110); },
   boom()   { thump(95, 26, 1.0, 1.6); noise1(0.9, 'lowpass', 1400, 70, 1.5); noise1(0.25, 'bandpass', 2600, 500, 0.8); },
   drink()  { playClip(drinkBuffer, 0.85); },
@@ -1404,7 +1545,7 @@ const sfx = {
 
 // HUD
 const $ = (id) => document.getElementById(id);
-const ui = { status: $('status'), battFill: $('battFill'), batt: $('batt'), spare: $('spare'), matches: $('matches'), potions: $('potions'), parts: $('parts'), reticle: $('reticle'),
+const ui = { shieldRow: $('shieldRow'), shieldFill: $('shieldFill'), shieldIcon: $('shieldIcon'), status: $('status'), battFill: $('battFill'), batt: $('batt'), spare: $('spare'), matches: $('matches'), potions: $('potions'), parts: $('parts'), reticle: $('reticle'),
              ammo: $('ammo'), ammoText: $('ammoText'), prompt: $('prompt'), toast: $('toast'), inventory: $('inventoryPanel'), inventoryMeta: $('inventoryMeta'), inventorySlots: $('inventorySlots') };
 let toastTimer = 0;
 function useWords(text) {
@@ -1452,10 +1593,10 @@ function renderInventoryHud(inControl) {
   bag.selected = Math.max(0, Math.min(bag.selected, Math.max(0, bag.capacity - 1)));
   const weaponDef = ITEM_DEFS[bag.activeWeapon];
   const weapon = bag.activeWeapon === 'gun' ? GUN.name : weaponDef ? `${weaponDef.name}${weaponDef.maxDurability ? ` ${bag.durability[bag.activeWeapon] ?? weaponDef.maxDurability}/${weaponDef.maxDurability}` : ''}` : 'None';
-  const armor = bag.armorId ? ITEM_DEFS[bag.armorId]?.name : 'None';
+  const worn = armor.tier ? ARMOR_TIERS[armor.tier].name : 'None';
   const surge = bag.staminaUntil > uTime.value ? ` · WIND ${Math.ceil(bag.staminaUntil - uTime.value)}s` : '';
-  const signature = `${bag.capacity}|${bag.selected}|${weapon}|${armor}|${slots.map((slot) => `${slot.id}:${slot.label}:${slot.active ? 1 : 0}`).join('|')}`;
-  setText(ui.inventoryMeta, `PACK ${slots.length}/${bag.capacity} · WEP ${weapon} · ARM ${armor}${surge}`);
+  const signature = `${bag.capacity}|${bag.selected}|${weapon}|${worn}|${slots.map((slot) => `${slot.id}:${slot.label}:${slot.active ? 1 : 0}`).join('|')}`;
+  setText(ui.inventoryMeta, `PACK ${slots.length}/${bag.capacity} · WEP ${weapon} · ARM ${worn}${surge}`);
   if (signature === inventoryHudSignature) return;
   inventoryHudSignature = signature;
   ui.inventorySlots.replaceChildren();
@@ -1623,6 +1764,7 @@ function drawRadarMap() {
     for (const gh of ghosts) if (gh.state !== 'die') dot(gh.x, gh.z, gh.brute ? '#e7a0ff' : '#bfe3ff', (gh.brute ? 4.5 : 3.2) + Math.sin(now * 6 + gh.phase));
     if (collective.active && ['appear', 'warning', 'dispersal', 'last'].includes(collective.phase)) for (const k of collective.kids) dot(k.x, k.z, '#f0e08a', 3);
     if (consumer.active) dot(consumer.x, consumer.z, '#ff8a5c', 6);
+    if (slime.active) { dot(slime.x, slime.z, '#4f9bff', 5 + Math.min(6, slime.r * 0.5)); for (const l of slime.littles) dot(l.x, l.z, '#8fc2ff', 2.5); }
   }
   g.translate(cx, cy); g.rotate(-yaw);
   g.fillStyle = '#e5e1cc'; g.beginPath(); g.moveTo(0, -8); g.lineTo(-5, 6); g.lineTo(0, 3); g.lineTo(5, 6); g.closePath(); g.fill();
@@ -1645,14 +1787,14 @@ function strikeMatch() {
 }
 function drinkPotion() {
   if (inv.potions <= 0) { toast('No potions'); return; }
-  const canCleanse = sanity.value > SANITY_POTION && sanity.value < SANITY_MAX;
   const hurt = inv.health < inv.maxHealth;
-  if (!canCleanse && !hurt) { toast(sanity.value <= SANITY_POTION ? 'Your mind is too far gone' : "You're not hurt"); return; }
+  const mind = sanity.value < SANITY_MAX;
+  if (!hurt && !mind) { toast("You're fine"); return; }
   inv.potions--;
   if (hurt) inv.health = Math.min(inv.maxHealth, inv.health + 50);
-  if (canCleanse) { sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; }
+  if (mind) { sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; sanity.drained = false; }
   sfx.drink();
-  toast(canCleanse && hurt ? 'The potion mends you and clears your mind' : canCleanse ? 'The potion clears your mind' : 'Drank a potion');
+  toast(mind && hurt ? 'The potion mends you and clears your mind' : mind ? 'The potion clears your mind' : 'Drank a potion');
 }
 function startReload() {
   if (!inv.gun || radar.equipped || bag.activeWeapon !== 'gun' || gun.reloadT >= 0 || inv.mag >= GUN.mag) return;
@@ -1683,6 +1825,7 @@ function shoot() {
   if (collective.active) { camera.getWorldDirection(aim); collective.shot(camera.position, aim); }
   if (choir.active) { camera.getWorldDirection(aim); choir.shot(camera.position, aim, { damage: GUN.damage }); }
   if (consumer.active) { camera.getWorldDirection(aim); consumer.shot(camera.position, aim, { damage: 3 * GUN.damage, noiseVolume: 1.25 }); }
+  if (slime.active) { camera.getWorldDirection(aim); slime.shot(camera.position, aim); }
 }
 function meleeAttack() {
   const item = ITEM_DEFS[bag.activeWeapon], bonuses = bagBonuses();
@@ -1696,6 +1839,7 @@ function meleeAttack() {
   if (choir.active) choir.shot(camera.position, aim, { range: item.reach, melee: true, damage, noiseVolume: item.noise });
   if (collective.active) collective.shot(camera.position, aim);
   if (consumer.active) consumer.shot(camera.position, aim, { range: item.reach, melee: true, damage: damage * 2, noiseVolume: item.noise });
+  if (slime.active) slime.shot(camera.position, aim, { range: item.reach, melee: true });
   if (item.maxDurability) {
     const remaining = (bag.durability[bag.activeWeapon] ?? item.maxDurability) - 1;
     if (remaining <= 0) {
@@ -1713,10 +1857,10 @@ function meleeAttack() {
 const openedChests = [];
 const chestLootRolls = new Map();
 const CHEST_LOOT = {
-  common: [['ammo', 22], ['battery', 20], ['matches', 18], ['potion', 10], ['stamina_tonic', 7], ['knife', 5], ['swift_boots', 4], ['stamina_charm', 3], ['steady_charm', 3], ['armor', 2], ['sword', 0.8], ['sword_iron', 0.22], ['sword_hive', 0.05], ['stamina_surge', 0.6], ['grenade', 3], ['gun_kit', 1.6], ['light_kit', 1.6], ['radar_kit', 1], ['launcher_kit', 0.3]],
-  blue: [['pack_blue', 14], ['stamina_surge', 9], ['armor', 14], ['sword', 8], ['sword_iron', 3], ['sword_hive', 0.7], ['knife', 8], ['stamina_tonic', 12], ['swift_boots', 9], ['stamina_charm', 8], ['steady_charm', 6], ['battery', 5], ['ammo', 4], ['potion', 3], ['matches', 3], ['grenade', 8], ['gun_kit', 9], ['light_kit', 7], ['radar_kit', 5], ['launcher_kit', 2]],
-  red: [['pack_red', 17], ['sword', 16], ['sword_iron', 8], ['sword_hive', 2], ['armor', 16], ['stamina_surge', 14], ['stamina_charm', 12], ['steady_charm', 9], ['swift_boots', 6], ['knife', 5], ['stamina_tonic', 5], ['battery', 4], ['ammo', 3], ['potion', 2], ['matches', 1], ['grenade', 10], ['gun_kit', 12], ['light_kit', 8], ['radar_kit', 6], ['launcher_kit', 5]],
-  armory: [['sword', 24], ['sword_iron', 16], ['sword_hive', 5], ['armor', 24], ['knife', 20], ['stamina_surge', 9], ['stamina_tonic', 8], ['swift_boots', 5], ['stamina_charm', 4], ['steady_charm', 4], ['pack_blue', 2], ['grenade', 16], ['gun_kit', 22], ['launcher_kit', 10], ['light_kit', 4]],
+  common: [['ammo', 22], ['battery', 20], ['matches', 18], ['potion', 10], ['stamina_tonic', 7], ['knife', 5], ['swift_boots', 4], ['stamina_charm', 3], ['steady_charm', 3], ['armor', 6], ['sword', 0.8], ['sword_iron', 0.22], ['sword_hive', 0.05], ['stamina_surge', 0.6], ['grenade', 3], ['gun_kit', 1.6], ['light_kit', 1.6], ['radar_kit', 1], ['launcher_kit', 0.3]],
+  blue: [['pack_blue', 14], ['stamina_surge', 9], ['armor', 16], ['sword', 8], ['sword_iron', 3], ['sword_hive', 0.7], ['knife', 8], ['stamina_tonic', 12], ['swift_boots', 9], ['stamina_charm', 8], ['steady_charm', 6], ['battery', 5], ['ammo', 4], ['potion', 3], ['matches', 3], ['grenade', 8], ['gun_kit', 9], ['light_kit', 7], ['radar_kit', 5], ['launcher_kit', 2]],
+  red: [['pack_red', 17], ['sword', 16], ['sword_iron', 8], ['sword_hive', 2], ['armor', 18], ['stamina_surge', 14], ['stamina_charm', 12], ['steady_charm', 9], ['swift_boots', 6], ['knife', 5], ['stamina_tonic', 5], ['battery', 4], ['ammo', 3], ['potion', 2], ['matches', 1], ['grenade', 10], ['gun_kit', 12], ['light_kit', 8], ['radar_kit', 6], ['launcher_kit', 5]],
+  armory: [['sword', 24], ['sword_iron', 16], ['sword_hive', 5], ['armor', 28], ['knife', 20], ['stamina_surge', 9], ['stamina_tonic', 8], ['swift_boots', 5], ['stamina_charm', 4], ['steady_charm', 4], ['pack_blue', 2], ['grenade', 16], ['gun_kit', 22], ['launcher_kit', 10], ['light_kit', 4]],
 };
 function canReceiveLoot(id) {
   if (id === 'pack_blue' || id === 'pack_red') return bag.capacity < bag.maxCapacity;
@@ -1727,8 +1871,9 @@ function canReceiveLoot(id) {
   if (id === 'matches') return bagHasRoom('matches');
   if (id === 'potion') return bagHasRoom('potion');
   if (id === 'grenade') return bagHasRoom('grenade');
+  if (id === 'armor') return true;                       // worn, not carried: it never needs a slot
   if (id === 'gun_kit') return inv.gun && inv.gunTier < GUN_TIERS.length - 1;
-  if (id === 'light_kit') return inv.lightTier < LIGHT_TIERS.length - 1;
+  if (id === 'light_kit') return inv.lightTier < CAMERA_LIGHT_TIER;
   if (id === 'radar_kit') return radar.acquired && inv.radarTier < RADAR_TIERS.length - 1;
   if (id === 'launcher_kit') return !inv.launcher;
   if (ITEM_DEFS[id]) return (ITEM_DEFS[id].kind === 'consumable' || !bag.items.includes(id)) && bagHasRoom(id);
@@ -1767,6 +1912,7 @@ function grantChestLoot(id) {
   }
   if (id === 'ammo') { if (!canReceiveLoot(id)) return false; const n = Math.round((4 + ((lootRng() * 5) | 0)) * GUN.ammoScale); inv.reserve += n; toast(`Found ${n} bullets`); return true; }
   if (id === 'grenade') { if (!canReceiveLoot(id)) return false; const n = 1 + ((lootRng() * 2) | 0); inv.grenades += n; toast(`Found ${n > 1 ? `${n} grenades` : 'a grenade'}. T or its inventory slot to throw. Stand well back`); return true; }
+  if (id === 'armor') { toast(wearArmor(rollArmorTier(round.n, lootRng))); return true; }
   if (id === 'gun_kit' || id === 'light_kit' || id === 'radar_kit' || id === 'launcher_kit') { const line = canReceiveLoot(id) && applyKit(id); if (!line) return false; toast(line); sfx.upgrade(); return true; }
   if (id === 'battery') { if (!canReceiveLoot(id)) return false; inv.batteries++; toast('Found a battery. B to swap it in'); return true; }
   if (id === 'matches') { if (!canReceiveLoot(id)) return false; inv.matches += 2 + ((lootRng() * 3) | 0); toast(`Found matches (${inv.matches} total)`); return true; }
@@ -1856,7 +2002,12 @@ function updateItems(dt, bobX, bobY, inControl, raised) {
   const rightHandOccupied = (inv.gun && bag.activeWeapon === 'gun') || bag.activeWeapon.startsWith('sword');
   handSide += ((rightHandOccupied ? -1 : 1) - handSide) * Math.min(1, dt * 8);
   held.position.x = handSide * HELD_UP.x + bobX;
-  held.scale.x = handSide < 0 ? -1 : 1;
+  const cameraTier = hasCameraUpgrade();
+  const heldTexture = cameraTier ? LIGHT_TIERS[CAMERA_LIGHT_TIER].sprite : plainFlashlightTexture;
+  if (held.material.map !== heldTexture) {
+    held.material.map = heldTexture; held.material.color.set(cameraTier ? 0xffffff : 0x6a6a6a); held.material.needsUpdate = true;
+  }
+  held.scale.x = (handSide < 0 ? -1 : 1) * (cameraTier ? 1.35 : 1);
   spot.position.x = halo.position.x = 0.22 * handSide;
 
   // match: a small, short-lived glow in the flashlight hand
@@ -2708,10 +2859,10 @@ let debugAmbient = 0;      // console only: game.debugLight(1.5) floods the map 
 // ───────────────────────── rounds + monsters ─────────────────────────
 // Each round: survive ROUND.seconds or kill every monster. Inventory carries over between rounds.
 const ROUND = {
-  count: 7, seconds: 300, rest: 6,
+  seconds: 300, rest: 6,
   // Each round draws its monsters at random: ghosts, Observer, Collective, Choir, or Consumer.
-  // Force one with ?monster=ghosts|observer|collective|choir|consumer.
-  types: ['ghosts', 'observer', 'collective', 'choir', 'consumer'],
+  // Force one with ?monster=ghosts|observer|collective|choir|consumer|slime. The Slime needs open ground and a lake: no caves.
+  types: ['ghosts', 'observer', 'collective', 'choir', 'consumer', 'slime'],
   frenzy: 60,                          // the last N seconds of a round: clock ticks, ghosts turn vicious
   perRoundMenace: 0.15, frenzyMenace: 0.6,
   sneak: [0, 0.15, 0.35, 0.5, 0.65],   // per round: chance a creeping ghost attacks unlit instead of just staring (always, in a frenzy)
@@ -2722,28 +2873,30 @@ const isCollectiveRound = () => round.type === 'collective';
 const isObserverRound = () => round.type === 'observer';
 const isChoirRound = () => round.type === 'choir';
 const isConsumerRound = () => round.type === 'consumer';
-const roundSeconds = () => isObserverRound() ? OBS_ROUND.seconds : isCollectiveRound() || isChoirRound() || isConsumerRound() ? Infinity : ROUND.seconds;
+const isSlimeRound = () => round.type === 'slime';
+const roundSeconds = () => isObserverRound() ? OBS_ROUND.seconds : isCollectiveRound() || isChoirRound() || isConsumerRound() || isSlimeRound() ? Infinity : ROUND.seconds;
 let forcedMonster = ROUND.types.includes(new URLSearchParams(location.search).get('monster')) ? new URLSearchParams(location.search).get('monster') : null;
 // The same monster may come twice in a row, and never a third time.
 const monsterStreak = [];
 function pickMonster() {
-  if (forcedMonster) return forcedMonster;
+  if (forcedMonster) return forcedMonster === 'slime' && !lake.on ? 'ghosts' : forcedMonster;
   const repeat = monsterStreak.length >= 2 && monsterStreak[0] === monsterStreak[1] ? monsterStreak[0] : null;
-  const pool = repeat ? ROUND.types.filter((t) => t !== repeat) : ROUND.types;
+  const pool = ROUND.types.filter((t) => t !== repeat && (t !== 'slime' || lake.on));
   const type = pool[(Math.random() * pool.length) | 0];
   monsterStreak.unshift(type);
   if (monsterStreak.length > 2) monsterStreak.pop();
   return type;
 }
 // Every round raises the minimum ghost count, with a little extra variation at higher rounds.
+// Past round 12 the count stops climbing (the frame rate would not survive it); the night grows harder in other ways.
 const ghostCount = (n) => {
-  const min = 4 + n;
-  const max = min + 1 + Math.floor(n * 0.5);
+  const k = Math.min(n, 12), min = 4 + k;
+  const max = min + 1 + Math.floor(k * 0.5);
   return min + Math.floor(Math.random() * (max - min + 1));
 };
 function menace() {
   const frenzy = round.rest <= 0 && round.n > 0 && round.t >= roundSeconds() - ROUND.frenzy;
-  return { frenzy, lvl: (round.n - 1) * ROUND.perRoundMenace + (frenzy ? ROUND.frenzyMenace : 0), sneak: frenzy ? 1 : ROUND.sneak[round.n - 1] ?? 0.65 };
+  return { frenzy, lvl: Math.min(1.35, (round.n - 1) * ROUND.perRoundMenace) + (frenzy ? ROUND.frenzyMenace : 0), sneak: frenzy ? 1 : ROUND.sneak[round.n - 1] ?? 0.65 };
 }
 let tick = null;
 function syncTick(on) {
@@ -2910,6 +3063,7 @@ function startRound(n) {
   if (collective.active) collective.stop();
   if (choir.active) choir.stop();
   if (consumer.active) consumer.stop();
+  if (slime.active) slime.stop();
   if (inv.radarTier < 1) radar.equipped = false;       // a tracker works in any round, so it stays out
   setHuntSilence(false);                 // an Observer round can end mid-hunt: bring the world's sound back
   setDusk(false);
@@ -2920,6 +3074,7 @@ function startRound(n) {
   if (round.type === 'collective') { startCollectiveRound(); return; }
   if (round.type === 'choir') { startChoirRound(); return; }
   if (round.type === 'consumer') { startConsumerRound(); return; }
+  if (round.type === 'slime') { startSlimeRound(); return; }
   const count = ghostCount(n), r = mulberry(CFG.seed ^ (n * 7919));
   const bruteCount = n < 3 ? 0 : Math.min(count, Math.max(1, Math.floor(count * Math.min(0.38, 0.14 + (n - 3) * 0.04))));
   const brutes = new Set();
@@ -2933,23 +3088,25 @@ function startRound(n) {
 }
 function endGame(won) {
   finished = true; playing = false;
+  syncVideoCamera(false);
   for (const g of ghosts) silenceGhost(g);
   if (obsRound.active) obsRound.observer.silence();
   if (collective.active) { for (const k of collective.kids) k.speed = 0; collective.S.phase = collective.S.phase === 'done' ? 'done' : 'captured'; }
   if (choir.active) choir.stop();
   if (consumer.active) consumer.stop();
+  if (slime.active) slime.stop();
   setHuntSilence(false);
   syncTick(false);
   if (!won) playClip(dyingBuffer, 0.9);
   document.getElementById('title').textContent = won ? 'DAWN' : deathCause === 'time' ? 'TOO LATE' : 'YOU DIED';
-  document.getElementById('sub').textContent = won ? `You made it through all ${ROUND.count} rounds.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', blast: 'You were standing too close.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.`, sanity: 'Your mind was empty for too long.', cutscene: cutsceneLine }[deathCause] || `The dead took you in round ${round.n}.`);
+  document.getElementById('sub').textContent = won ? `You reached round ${round.n}.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', blast: 'You were standing too close.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', slime: 'The slime rolled over you.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.`, sanity: 'Your mind was empty for too long.', cutscene: cutsceneLine }[deathCause] || `The dead took you in round ${round.n}.`);
   document.getElementById('go').textContent = TOUCH ? 'Tap to play again' : 'Click to play again';
   // Dying is a scene of its own (cinema/Cutscenes.js): the death screen waits until it has played. A win goes straight there.
   if (won || !cutscenes.playDeath(deathCause, showEndScreen, cutsceneFrom)) showEndScreen();
   const ending = won ? 'dawn' : deathCause === 'collective' ? `collective ${collective.S.reason || ''}`.trim() : deathCause;
   offerScore({
-    won,
-    round: Math.max(1, Math.min(20, round.n || 1)),
+    won: !!won,
+    round: Math.max(1, round.n || 1),
     seconds: Math.max(0, Math.min(86400, Math.round(elapsed))),
     map: (META.label || MAP_NAME || '').slice(0, 40),
     ending: ending.slice(0, 40),
@@ -2962,7 +3119,7 @@ function showEndScreen() {
 function roundWon(cleared, line) {
   if (choir.active) choir.stop();
   if (consumer.active) consumer.stop();
-  if (round.n >= ROUND.count) { endGame(true); return; }
+  if (slime.active) slime.stop();
   banner(`ROUND ${round.n} SURVIVED`, line || (cleared ? 'Every ghost is gone' : 'You outlasted them'));
   addParts(3); toast(`Salvaged 3 parts (${inv.parts}). C opens the workbench`);
   round.rest = ROUND.rest; round.pickIn = 1.6;          // and in a moment, the survivor's pick
@@ -2979,8 +3136,15 @@ function stainFromInnocent() {
 function damagePlayer(amount, cause = 'ghost') {
   if (finished) return;
   sanity.value = Math.max(0, sanity.value - Math.min(12, amount * 0.18));
-  const reduction = Math.min(0.4, ITEM_DEFS[bag.armorId]?.reduction || 0);
-  inv.health = Math.max(0, inv.health - amount * (1 - reduction));
+  amount *= endlessHurt();
+  armor.quiet = 0;
+  if (armor.shield > 0) {                                 // the armor takes it first
+    const took = Math.min(armor.shield, amount);
+    armor.shield -= took; amount -= took; armor.flash = 1;
+    if (armor.shield <= 0) { sfx.shieldBreak(); toast(`Your ${ARMOR_TIERS[armor.tier].name.toLowerCase()} gives way`); }
+    if (amount <= 0) { sfx.shieldHit(); return; }
+  }
+  inv.health = Math.max(0, inv.health - amount);
   hurtFlash = 1; sfx.hurt();
   if (inv.health <= 0) { deathCause = cause; endGame(false); }
 }
@@ -3026,17 +3190,19 @@ function updateMonsters(dt, inControl, beamOn) {
   updateCollective(dt, inControl);
   updateChoir(dt, inControl);
   updateConsumer(dt, inControl);
+  updateSlime(dt, inControl);
   const px = camera.position.x, pz = camera.position.z;
   if (!inControl) {
     for (const g of ghosts) if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
   } else {
-    if (!round.announced) { round.announced = true; if (isObserverRound()) announceObserver(); else if (isCollectiveRound()) announceCollective(); else if (isChoirRound()) announceChoir(); else if (isConsumerRound()) announceConsumer(); else { banner(META.label, `Round ${round.n}. ${ghosts.length} dark ghosts are out there. Keep your light off them`); if (MAP_HINT[MAP_NAME]) toast(MAP_HINT[MAP_NAME]); } }
+    if (!round.announced) { round.announced = true; if (isObserverRound()) announceObserver(); else if (isCollectiveRound()) announceCollective(); else if (isChoirRound()) announceChoir(); else if (isConsumerRound()) announceConsumer(); else if (isSlimeRound()) announceSlime(); else { banner(META.label, `Round ${round.n}. ${ghosts.length} dark ghosts are out there. Keep your light off them`); if (MAP_HINT[MAP_NAME]) toast(MAP_HINT[MAP_NAME]); } }
     if (round.pickIn > 0 && (round.pickIn -= dt) <= 0 && !finished) picker.open(pickOffers());
     if (round.rest > 0) {
       round.rest -= dt;
       if (round.rest <= 0) {                               // sometimes the next round does not simply begin
         const next = round.n + 1;
-        if (!cutscenes.maybePlay(() => startRound(next), { force: CUTSCENE_PARAM })) startRound(next);
+        if (slimeTravel.pending) beginSlimeTravel(next);         // out of the water, and somewhere else
+        else if (!cutscenes.maybePlay(() => startRound(next), { force: CUTSCENE_PARAM })) startRound(next);
       }
     }
     else if (isObserverRound()) {
@@ -3056,6 +3222,8 @@ function updateMonsters(dt, inControl, beamOn) {
     } else if (isConsumerRound()) {
       round.t += dt;
       if (consumer.dead) roundWon(true, 'The Consumer is dead. The survivors escape.');
+    } else if (isSlimeRound()) {
+      round.t += dt;
     } else {
       round.t += dt;
       const alive = ghostsAlive();
@@ -3179,6 +3347,7 @@ function updateMonsters(dt, inControl, beamOn) {
   hpFill.parentElement.style.width = `${Math.min(220, 110 * inv.maxHealth / 100)}px`;
   hpFill.style.transform = `scaleX(${inv.health / inv.maxHealth})`;
   hpFill.parentElement.classList.toggle('low', inv.health / inv.maxHealth <= 0.25);
+  updateArmor(dt, inControl);
   hurtFlash = Math.max(0, hurtFlash - dt * 1.4);
   const blood = Math.min(0.62, inv.innocents * 0.07);
   hurtEl.style.opacity = Math.min(0.95, hurtFlash * 0.8 + (inv.health / inv.maxHealth <= 0.25 && !finished ? 0.18 : 0) + blood);
@@ -3216,6 +3385,42 @@ const journal = createJournal({
     else overlay.style.display = 'flex';
   },
 });
+
+
+// ───────────────────────── armor: a shield over your health ─────────────────────────
+// Six kinds (gear/upgrades.js). Chests, salvage, the dead and the survivor's pick all turn them up; which kind is down to
+// the round. One is worn at a time. Its shield takes every hit first, and grows back once you have gone a while unhurt.
+const armor = { tier: 0, shield: 0, quiet: 99, flash: 0 };
+const endlessHurt = () => (round.n > 7 ? 1 + (round.n - 7) * 0.07 : 1);   // later rounds hit harder
+const roundTag = () => `ROUND ${round.n}`;
+// Put on a kind of armor, or, if it is no better than what you wear, strip it to patch your own. Returns what to say.
+function wearArmor(tier) {
+  tier = Math.max(1, Math.min(6, tier));
+  const a = ARMOR_TIERS[tier];
+  if (tier <= armor.tier) {
+    armor.shield = ARMOR_TIERS[armor.tier].shield; addParts(1 + Math.floor(tier / 2));
+    return `Found ${a.a}${a.name.toLowerCase()}. No better than yours: you strip it to patch your own`;
+  }
+  const was = armor.tier;
+  armor.tier = tier; armor.shield = a.shield; armor.quiet = 99; armor.flash = 1;
+  if (was) addParts(1 + Math.floor(was / 2));
+  sfx.upgrade();
+  return `${a.name.toUpperCase()} on: a shield of ${a.shield} over your health${was ? `. Your ${ARMOR_TIERS[was].name.toLowerCase()} goes for parts` : ''}`;
+}
+function updateArmor(dt, inControl) {
+  const a = ARMOR_TIERS[armor.tier];
+  ui.shieldRow.hidden = !armor.tier;
+  if (!a) return;
+  if (inControl) {
+    armor.quiet += dt;
+    if (armor.quiet >= a.delay && armor.shield < a.shield) armor.shield = Math.min(a.shield, armor.shield + a.regen * dt);
+  }
+  armor.flash = Math.max(0, armor.flash - dt * 3);
+  ui.shieldFill.parentElement.style.width = `${Math.min(220, 40 + a.shield * 0.9)}px`;
+  ui.shieldFill.style.transform = `scaleX(${armor.shield / a.shield})`;
+  ui.shieldFill.style.filter = armor.flash > 0 ? `brightness(${1 + armor.flash})` : '';
+  if (ui.shieldIcon.dataset.tier !== String(armor.tier)) { ui.shieldIcon.src = ARMOR_ICONS[armor.tier]; ui.shieldIcon.dataset.tier = String(armor.tier); ui.shieldIcon.title = a.name; }
+}
 
 // ───────────────────────── gear: parts, kits, the workbench, grenades ─────────────────────────
 let partsFlash = 0;
@@ -3267,7 +3472,7 @@ function gearRecipes() {
   if (!radar.acquired) add('radar', RADAR_TIERS[0].name, RADAR_TIERS[0].cost, RADAR_TIERS[0].note, bagHasRoom('radar'), 'pack is full', 'NEW');
   else if (inv.radarTier < RADAR_TIERS.length - 1) { const next = RADAR_TIERS[inv.radarTier + 1]; add('radar_kit', next.name, next.cost, next.note, true, '', 'UPGRADE'); }
   if (!inv.launcher) add('launcher_kit', 'Launcher tube', COSTS.launcher, 'Grenades fly flat and far and go off where they hit. Comes with two', true, '', 'UPGRADE');
-  add('potion', 'Potion', COSTS.potion, `Mends you and clears a mind that has not broken. You carry ${inv.potions}`, canReceiveLoot('potion'), 'pack is full');
+  add('potion', 'Potion', COSTS.potion, `Mends you and restores your sanity. You carry ${inv.potions}`, canReceiveLoot('potion'), 'pack is full');
   return out;
 }
 function craftGear(id) {
@@ -3392,6 +3597,7 @@ function updateDrops(dt, inControl, px, pz) {
 function clearDrops() { for (const d of drops) { scene.remove(d.mesh); d.mat.dispose(); } drops.length = 0; }
 
 // 3. The survivor's pick: three offers drawn from what would be of use to you now.
+let pickArmor = 1;
 function pickOffers() {
   const pool = [
     { w: 3, name: '8 parts', note: 'For the workbench', take: () => { inv.parts += 8; partsFlash = 1.2; return 'You take the parts'; } },
@@ -3400,10 +3606,11 @@ function pickOffers() {
     { w: 2, ok: () => canReceiveLoot('matches'), name: '4 matches', note: `You carry ${inv.matches}`, take: () => { inv.matches += 4; return 'You take the matches'; } },
     { w: 2, ok: () => canReceiveLoot('potion'), name: 'A potion', note: `You carry ${inv.potions}`, take: () => { inv.potions++; return 'You take the potion'; } },
     { w: 2, ok: () => canReceiveLoot('grenade'), name: '2 grenades', note: `You carry ${inv.grenades}`, take: () => { inv.grenades += 2; return 'You take the grenades'; } },
-    { w: 2, ok: () => inv.health < inv.maxHealth * 0.7 || sanity.value < SANITY_MAX * 0.7, name: 'A moment of rest', note: 'Your wounds close and your head clears', take: () => { inv.health = inv.maxHealth; sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; return 'You rest. It helps'; } },
+    { w: 2, ok: () => inv.health < inv.maxHealth * 0.7 || sanity.value < SANITY_MAX * 0.7, name: 'A moment of rest', note: 'Your wounds close and your head clears', take: () => { inv.health = inv.maxHealth; sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; sanity.drained = false; return 'You rest. It helps'; } },
     { w: 1.4, ok: () => round.n >= 2 && canReceiveLoot('gun_kit'), name: 'A weapon kit', note: `Rebuilds the ${GUN.name.toLowerCase()} as ${inv.gunTier < GUN_TIERS.length - 1 ? GUN_TIERS[inv.gunTier + 1].name.toLowerCase() : ''}`, take: () => applyKit('gun_kit') },
     { w: 1.4, ok: () => canReceiveLoot('light_kit'), name: 'A lens kit', note: inv.lightTier < LIGHT_TIERS.length - 1 ? LIGHT_TIERS[inv.lightTier + 1].note : '', take: () => applyKit('light_kit') },
     { w: 1.2, ok: () => canReceiveLoot('radar_kit'), name: 'An antenna kit', note: inv.radarTier < RADAR_TIERS.length - 1 ? RADAR_TIERS[inv.radarTier + 1].note : '', take: () => applyKit('radar_kit') },
+    { w: 2.2, ok: () => (pickArmor = Math.max(armor.tier + 1, rollArmorTier(round.n))) <= 6, name: ARMOR_TIERS[Math.min(6, pickArmor)].name, note: `Armor. A shield of ${ARMOR_TIERS[Math.min(6, pickArmor)].shield} over your health${armor.tier ? `, in place of your ${ARMOR_TIERS[armor.tier].name.toLowerCase()}` : ''}`, take: ((t) => () => wearArmor(t))(pickArmor) },
     { w: 1, ok: () => bag.capacity < bag.maxCapacity, name: 'A bigger pack', note: 'One more inventory slot', take: () => { bag.capacity++; return `Your pack now holds ${bag.capacity}`; } },
   ].filter((o) => !o.ok || o.ok());
   const out = [];
@@ -3470,6 +3677,7 @@ function explode(g) {
     consumer.noise(x, z, 2.6, 'explosion');
     at(consumer.x, consumer.z, () => consumer.shot(from, dir, { range: R + 2, damage: 18 }));
   }
+  if (slime.active) slime.blast(x, z, R);
   if (collective.active && ['appear', 'warning', 'dispersal', 'last'].includes(collective.phase)) {
     const low = new THREE.Vector3(x, MAP.groundY(x, z) + 0.7, z);        // they are small: the blast reaches them at their own height
     for (const k of collective.kids) at(k.x, k.z, () => collective.shot(low, dir));
@@ -3549,7 +3757,8 @@ const obsRound = createObserverRound({
     },
   },
   onBurned(n) {
-    toast(n >= obsRound.total ? 'The last of them burns' : `${n} of ${obsRound.total} burned`);
+    sanity.value = Math.max(0, sanity.value - SANITY_BURN_DONE);
+    toast(n >= obsRound.total ? 'The last of them burns. It stays with you.' : `${n} of ${obsRound.total} burned. It gets into your head.`);
     for (const b of obsRound.bodies()) {                         // what it was carrying is left in the ash
       const k = b.x.toFixed(1) + ',' + b.z.toFixed(1);
       if (b.done && !ashDropped.has(k)) { ashDropped.add(k); if (dropLore('body', b.x, b.z)) setTimeout(() => toast('Something is left in the ash.'), 1500); }
@@ -3583,7 +3792,7 @@ function startObserverRound() {
   inv.gun = true;
   inv.mag = Math.max(inv.mag, GUN.mag);
   inv.reserve = Math.max(inv.reserve, GUN.mag);
-  const bodies = bodiesFor(round.n);
+  const bodies = bodiesFor(Math.min(round.n, 12));
   inv.matches = Math.max(inv.matches, bodies + 2);           // one per body and a couple to see by
   setDusk(DUSK.maps.includes(MAP_NAME) && Math.random() < DUSK.chance);
   ashDropped.clear();
@@ -3620,7 +3829,7 @@ function updateObserver(dt, inControl) {
 // Thirty of them. src/collective/ holds the creatures and their rules; here they get the map, the sound and the death.
 const collective = createCollective({
   scene, camera, world: creatureWorld,
-  audio: { ctx: audioCtx, dest: audioCtx.destination, walk: walkBuffer, run: runBuffer, loud: collectiveLoud, whisper: collectiveWhisper, hug: collectiveHug, stopMoving: collectiveStop, walkAway: collectiveWalk, goHome: collectiveHome },
+  audio: { ctx: audioCtx, dest: audioCtx.destination, walk: walkBuffer, run: runBuffer, loud: collectiveLoud, whisper: collectiveWhisper, hug: collectiveHug, stopMoving: collectiveStop, walkAway: collectiveWalk, goHome: collectiveHome, groupSteps: collectiveStepsBuffer },
   hooks: {
     say: (text) => toast(text),
     mark() { document.getElementById('collectiveMark')?.classList.add('on'); },
@@ -3799,6 +4008,136 @@ function updateConsumerAtmosphere(dt, inControl) {
     }
   }
 }
+// ───────────────────────── the Slime ─────────────────────────
+// slime/SlimeRound.js rolls it, grows it and sheds the small ones. Here: what it eats, the water that ends it,
+// what it does to the player's legs and to the ground under them, and the way out of the lake into another map.
+const wade = { sink: 0, in: false, step: 0 };
+const slimeFx = { clingUntil: 0, bed: null, fizz: 0 };
+const slimeTravel = { pending: false, t: -1, next: 0, swapped: false };
+const slimeDrag = () => slimeTravel.t >= 0 ? 0 : (uTime.value < slimeFx.clingUntil ? 0.55 : 1) * (wade.in ? 0.72 : 1);
+// What stood inside this bite, and so how much the Slime grows on it. Then the bite is taken out of the world.
+function slimeEat(x, z, r) {
+  let gain = 0;
+  const r2 = r * r, hit = (px, pz) => (px - x) ** 2 + (pz - z) ** 2 < r2;
+  forChunksNear(x - r, z - r, x + r, z + r, (c) => {
+    const p = c.props;
+    for (let i = 0; i < p.length; i += 7) {
+      if (!hit(p[i], p[i + 1])) continue;
+      const E = eaten.get(key(Math.floor(p[i] / CFG.chunk), Math.floor(p[i + 1] / CFG.chunk)));
+      if (!E || !inEaten(E, p[i], p[i + 1])) gain += 0.002 + p[i + 3] * 0.0025;      // a tree is a bigger meal than a weed
+    }
+    for (const name in c.boxes) { const b = c.boxes[name]; for (let i = 0; i < b.length; i += 7) if (hit(b[i], b[i + 2])) { const E = eaten.get(key(Math.floor(b[i] / CFG.chunk), Math.floor(b[i + 2] / CFG.chunk))); if (!E || !inEaten(E, b[i], b[i + 2])) gain += 0.05; } }
+  });
+  eatAdd(x, z, r);
+  return Math.min(0.05, gain);
+}
+const slime = createSlimeRound({
+  scene, world: creatureWorld,
+  hooks: {
+    say: (text) => toast(text),
+    damage: (amount, cause) => damagePlayer(amount, cause),
+    eat: slimeEat,
+    inWater: (x, z) => inLake(x, z),
+    cling(seconds) {
+      slimeFx.clingUntil = uTime.value + seconds;
+      noise1(0.3, 'lowpass', 700, 200, 0.45);
+      toast('Slime clings to your legs. You are slowed');
+    },
+    pop(x, z) {
+      const v = Math.max(0, 1 - Math.hypot(camera.position.x - x, camera.position.z - z) / 30);
+      if (v > 0.02) { noise1(0.16, 'bandpass', 1200, 300, 0.4 * v); thump(260, 90, 0.12, 0.3 * v); }
+    },
+    stomp(x, z, r, dist) {                       // every landing: a wet thud, and from a certain size the ground takes it too
+      const reach = 18 + r * 3.4, near = Math.max(0, 1 - dist / reach), size = Math.min(1, r / 9);
+      if (near > 0.02) { thump(70 - size * 30, 30, 0.22 + size * 0.3, (0.18 + size * 0.5) * near); noise1(0.2 + size * 0.25, 'lowpass', 260 - size * 120, 50, (0.15 + size * 0.45) * near); }
+      if (r > SLIME.shakeR) consumerViewShake.value = Math.max(consumerViewShake.value, near * Math.min(1.8, 0.4 + (r - SLIME.shakeR) * 0.16));
+    },
+    rumble(v) {                                  // under the thuds, the ground itself: louder the bigger and the nearer
+      if (!slimeFx.bed) { if (v <= 0) return; slimeFx.bed = noiseBed(audioCtx.destination, 'lowpass', 62, 0.9, 0); }
+      slimeFx.bed.gain.gain.setTargetAtTime(v * 0.85, audioCtx.currentTime, 0.12);
+      if (v > 0) consumerViewShake.value = Math.max(consumerViewShake.value, v * 0.9);
+    },
+    fizz(x, z, r, dt) {
+      if ((slimeFx.fizz -= dt) > 0) return;
+      slimeFx.fizz = 0.22;
+      const v = Math.max(0, 1 - Math.hypot(camera.position.x - x, camera.position.z - z) / 60);
+      noise1(0.3, 'highpass', 2400, 5200, 0.3 * v);
+    },
+    dissolved() {
+      noise1(1.6, 'highpass', 1800, 6000, 0.4); thump(120, 40, 0.8, 0.5);
+      slimeTravel.pending = true;
+      roundWon(true, 'The water takes it apart. The lake is still moving. Something under it is pulling');
+    },
+  },
+});
+function startSlimeRound() {
+  flashlight.equipped = true;
+  if (flashlight.battery <= 0.1 && inv.batteries <= 0) inv.batteries = 1;
+  inv.gun = true;
+  inv.mag = Math.max(inv.mag, GUN.mag);
+  inv.reserve = Math.max(inv.reserve, GUN.mag * 2);
+  const px = camera.position.x, pz = camera.position.z;
+  slime.start({ round: round.n, x: px, z: pz, awayX: px - lake.x, awayZ: pz - lake.z });
+  if (round.announced) announceSlime();
+}
+function announceSlime() {
+  banner('THE SLIME', 'It eats what it rolls over, and it grows. Nothing you carry will kill it. Lead it into the lake');
+  toast(`The lake is ${Math.round(Math.hypot(camera.position.x - lake.x, camera.position.z - lake.z))} m away: follow the WATER arrow at the top. It is slower than your run. Shoot the small ones before they reach your legs.`);
+}
+// "184 m ↗": how far the lake is, and which way to turn for it.
+function waterSign() {
+  const dx = lake.x - camera.position.x, dz = lake.z - camera.position.z, d = Math.hypot(dx, dz);
+  if (d < lake.r) return 'HERE';
+  let a = Math.atan2(-dx, -dz) - yaw;                       // 0 = dead ahead, positive = to the left
+  a = ((a % 6.2832) + 6.2832) % 6.2832;
+  return `${Math.round(d - lake.r)} m ${'↑↖←↙↓↘→↗'[Math.round(a / 0.7854) % 8]}`;
+}
+function updateSlime(dt, inControl) {
+  // the lake is there in every round: you wade in it, slower and lower
+  wade.in = inControl && !swim.in && inLake(camera.position.x, camera.position.z, -0.5);
+  wade.sink += ((wade.in ? 0.5 : 0) - wade.sink) * Math.min(1, dt * 4);
+  if (wade.in && playerSpeedNow > 0 && (wade.step -= dt) <= 0) { wade.step = 0.42; noise1(0.22, 'bandpass', 900, 350, 0.22); }
+  lakeMesh.material.opacity = 0.86 + Math.sin(uTime.value * 1.3) * 0.05;
+  slime.update(dt, { inControl: inControl && playing, x: camera.position.x, z: camera.position.z });
+  if (eatenDirty) { eatenDirty = false; refreshChunks(true); }
+  updateSlimeTravel(dt);
+}
+// A new map in place of this one: a new seed, and everything worked out under the old one forgotten.
+function newWorld() {
+  CFG.seed = (Math.random() * 1e9) | 0;
+  MAP.reseed();
+  for (const k of chunks.keys()) unmountCameraWords(k);
+  chunks.clear(); farChunks.clear(); eaten.clear(); lore.clear(); clearDrops();
+  opened.clear(); openedChests.length = 0; chestLootRolls.clear();
+  placeLake();
+  camera.position.x = 0; camera.position.z = 0;
+  refreshChunks(true);
+}
+// The lake pulls you under (the screen goes to water), and you come up out of water into another map, where the next round starts.
+const TRAVEL = { under: 1.1, hold: 0.7, rise: 3.0 };
+function beginSlimeTravel(next) {
+  slimeTravel.pending = false; slimeTravel.t = 0; slimeTravel.next = next; slimeTravel.swapped = false;
+  fadeEl.style.transition = ''; fadeEl.style.background = 'radial-gradient(circle at 50% 35%, #3f8fd8, #0d3f86 55%, #041c44)';
+  noise1(1.4, 'lowpass', 900, 120, 0.6); thump(90, 30, 1.0, 0.5);
+}
+function updateSlimeTravel(dt) {
+  const T = slimeTravel; if (T.t < 0) return;
+  T.t += dt;
+  const ease = (k) => k * k * (3 - 2 * k);
+  if (T.t < TRAVEL.under) {
+    const k = ease(T.t / TRAVEL.under);
+    fadeEl.style.opacity = k; cut.y = -1.25 * k; cut.pitch = -0.25 * k;
+    return;
+  }
+  if (!T.swapped) {
+    T.swapped = true; fadeEl.style.opacity = 1;
+    newWorld(); startRound(T.next);
+    noise1(2.2, 'bandpass', 500, 1800, 0.35);
+  }
+  const k = Math.min(1, Math.max(0, (T.t - TRAVEL.under - TRAVEL.hold) / TRAVEL.rise)), e = ease(k);
+  fadeEl.style.opacity = 1 - e; cut.y = -1.25 * (1 - e); cut.pitch = 0.5 * (1 - e) * (1 - k);   // head back, breaking the surface, then level
+  if (k >= 1) { T.t = -1; fadeEl.style.opacity = 0; fadeEl.style.background = ''; cut.y = 0; cut.pitch = 0; toast('You come up out of water you have never seen before.'); }
+}
 function startConsumerRound() {
   flashlight.equipped = true;
   if (flashlight.battery <= 0.1 && inv.batteries <= 0) inv.batteries = 1;
@@ -3829,15 +4168,17 @@ function updateClock() {
   const time = `${m}:${String(s).padStart(2, '0')}`;
   let text;
   if (round.rest > 0) text = `ROUND ${round.n} SURVIVED`;
-  else if (isCollectiveRound()) text = `ROUND ${round.n}/${ROUND.count} · THE COLLECTIVE`;
+  else if (isCollectiveRound()) text = `${roundTag()} · THE COLLECTIVE`;
   else if (isChoirRound()) {
     const hive = choir.hive;
     const core = choir.exposed && hive ? `CORE ${hive.hp}/${hive.maxHp}` : 'CORE HIDDEN';
-    text = `ROUND ${round.n}/${ROUND.count} · THE CHOIR · ${choir.state} · SINGERS ${choir.alive} · GRUNTS ${choir.grunts} · ${core}`;
+    text = `${roundTag()} · THE CHOIR · ${choir.state} · SINGERS ${choir.alive} · GRUNTS ${choir.grunts} · ${core}`;
+  } else if (isSlimeRound()) {
+    text = `${roundTag()} · THE SLIME · ${(slime.r * 2).toFixed(1)} m WIDE · WATER ${waterSign()}`;
   } else if (isConsumerRound()) {
-    text = `ROUND ${round.n}/${ROUND.count} · THE CONSUMER · CIVILIANS ${consumer.civilians} · SAVED ${consumer.rescued} · ${consumer.health}/${consumer.maxHealth} HP`;
-  } else if (isObserverRound()) text = `ROUND ${round.n}/${ROUND.count} · ${time} · BODIES ${obsRound.burned}/${obsRound.total}${obsRound.sense ? ' · ' + obsRound.sense : ''}`;
-  else text = `ROUND ${round.n}/${ROUND.count} · ${time} · GHOSTS ${ghostsAlive()}`;
+    text = `${roundTag()} · THE CONSUMER · CIVILIANS ${consumer.civilians} · SAVED ${consumer.rescued} · ${consumer.health}/${consumer.maxHealth} HP`;
+  } else if (isObserverRound()) text = `${roundTag()} · ${time} · BODIES ${obsRound.burned}/${obsRound.total}${obsRound.sense ? ' · ' + obsRound.sense : ''}`;
+  else text = `${roundTag()} · ${time} · GHOSTS ${ghostsAlive()}`;
   if (clockEl.textContent !== text) clockEl.textContent = text;
 }
 
@@ -3853,6 +4194,7 @@ function nearestHostileDistance() {
     if (choir.hive && !choir.hive.dead) consider(choir.hive.x, choir.hive.z);
   }
   if (consumer.active && !consumer.dead) consider(consumer.x, consumer.z);
+  if (slime.active) { consider(slime.x, slime.z); for (const l of slime.littles) consider(l.x, l.z); }
   return nearest;
 }
 
@@ -4102,6 +4444,10 @@ function updateSanity(dt, inControl, running) {
   const stillBreath = holdingBreath && !running && playerSpeedNow < 0.08 && !swim.in && !burn.in;
   // The Collective stands close enough that the usual "away from danger" rule never lets a breath land.
   const collectiveBreath = stillBreath && isCollectiveRound() && collective.encounter;
+  // An emptied mind can be filled by a held breath even with danger close; otherwise you die of the void.
+  if (sanity.value <= 0) sanity.drained = true;
+  if (sanity.value >= 50) sanity.drained = false;
+  const emptyBreath = stillBreath && sanity.drained;
   const breathCalm = stillBreath && safeToRecover;
   let recovering = false;
   if (round.rest > 0) {
@@ -4109,6 +4455,9 @@ function updateSanity(dt, inControl, running) {
     recovering = true;
   } else if (collectiveBreath) {
     sanity.value += dt * SANITY_BREATH_COLLECTIVE;
+    recovering = true;
+  } else if (emptyBreath) {
+    sanity.value += dt * SANITY_BREATH_SHELTER;
     recovering = true;
   } else if (sheltered) {
     sanity.value += dt * (holdingBreath && playerSpeedNow < 0.08 ? SANITY_BREATH_SHELTER : 0.55);
@@ -4123,12 +4472,21 @@ function updateSanity(dt, inControl, running) {
     sanity.value -= dt * stress * (holdingBreath ? 0.72 : 1);
   }
   const horror = flashlightOnHorror();
-  if (horror && !(horror === 'collective' && collectiveBreath)) {
+  if (horror && !emptyBreath && !(horror === 'collective' && collectiveBreath)) {
     sanity.value -= dt * (horror === 'collective' ? SANITY_LOOK_COLLECTIVE : SANITY_LOOK);
     recovering = false;
   }
+  if (obsRound.active) {
+    let burning = 0;
+    for (const b of obsRound.bodies()) if (!b.done && b.burnT >= 0) burning++;
+    if (burning) {
+      sanity.value -= dt * SANITY_BURN * burning;
+      recovering = false;
+    }
+  }
   sanity.value = THREE.MathUtils.clamp(sanity.value, 0, SANITY_MAX);
   if (sanity.value <= 0) {
+    sanity.drained = true;
     sanity.empty += dt;
     if (sanity.empty >= SANITY_EMPTY) {
       deathCause = 'sanity';
@@ -4139,7 +4497,7 @@ function updateSanity(dt, inControl, running) {
 
   if (sanity.value <= 62 && !sanity.warned) {
     sanity.warned = true;
-    toast(collectiveBreath || (isCollectiveRound() && collective.encounter)
+    toast(collectiveBreath || emptyBreath || (isCollectiveRound() && collective.encounter)
       ? 'Your mind is fraying. Hold Space while still to bring it back.'
       : 'Your mind is fraying. Hold Space while still, or reach shelter to recover sanity.');
   } else if (sanity.value >= 82) sanity.warned = false;
@@ -4149,12 +4507,12 @@ function updateSanity(dt, inControl, running) {
   sanityFill.style.transform = `scaleX(${value / SANITY_MAX})`;
   sanityEl.classList.toggle('low', value <= 68 && value > 30);
   sanityEl.classList.toggle('critical', value <= 30);
-  sanityStateEl.textContent = recovering ? 'RECOVERING' : value > 75 ? 'CLEAR' : value > 50 ? 'UNSTEADY' : value > 25 ? 'FRACTURED' : 'BREAKING';
+  sanityStateEl.textContent = recovering ? 'RECOVERING' : value > 75 ? 'CLEAR' : value > 50 ? 'UNSTEADY' : value > 25 ? 'FRACTURED' : value > 0 ? 'BREAKING' : 'EMPTY';
   sanityEl.title = useWords(recovering
-    ? (collectiveBreath
+    ? (collectiveBreath || emptyBreath
       ? 'Holding Space is restoring your sanity.'
       : 'Sanity is recovering. Shelter restores it; holding Space while still restores it faster.')
-    : 'Hold Space while still to recover sanity. During the Collective that works even while they are close. Shelter helps too.');
+    : 'Hold Space while still to recover sanity. An empty mind can still be filled that way. A potion restores it too. Shelter helps.');
   sanityHazeEl.style.opacity = String(stress * 0.22);
   sanityVisionEl.style.opacity = '0';
   updateMind(dt, value);
@@ -4186,7 +4544,7 @@ function frame(now) {
     if ((f || s) && swim.climb < 0) {
       const canRun = (keys.ShiftLeft || keys.ShiftRight) && (stamina > 0 || staminaSurge) && (!needRecover || staminaSurge);
       running = canRun && !swim.in;
-      speed = swim.in ? SWIM.speed : (running ? CFG.run * bonuses.runSpeed : CFG.walk) * (burn.in ? LAVA.slow : 1);
+      speed = (swim.in ? SWIM.speed : (running ? CFG.run * bonuses.runSpeed : CFG.walk) * (burn.in ? LAVA.slow : 1)) * slimeDrag();
       move.set(s, 0, -f).normalize().applyAxisAngle(THREE.Object3D.DEFAULT_UP, yaw).multiplyScalar(speed * dt);
       camera.position.x += move.x; camera.position.z += move.z;
       collide(camera.position);
@@ -4242,7 +4600,7 @@ function frame(now) {
   const runY = rk * (Math.abs(Math.sin(bob)) * 0.075 - 0.04 - strike * 0.03);
   consumerViewShake.value = Math.max(0, consumerViewShake.value - dt * 2.8);
   const consumerJolt = Math.sin(uTime.value * 51) * consumerViewShake.value * 0.055;
-  camera.position.y = MAP.groundY(camera.position.x, camera.position.z) + CFG.eye + bobY + runY + cut.y - swim.sink * 1.15 + consumerJolt;
+  camera.position.y = MAP.groundY(camera.position.x, camera.position.z) + CFG.eye + bobY + runY + cut.y - swim.sink * 1.15 - wade.sink + consumerJolt;
   let sx = rk * (-0.025 - strike * 0.03 + judder * 0.008), sy = rk * Math.cos(bob) * 0.028, sr = rk * (Math.sin(bob) * 0.045 + judder * 0.01);
   if (holdingBreath && holdTime >= 10) {
     const k = Math.min(1, (holdTime - 10) / 1.5);
@@ -4278,7 +4636,9 @@ function frame(now) {
   const raised = flashlight.raise > 0.6;
   updateWorld(dt, inControl);
   updateItems(dt, bobX, bobY, inControl, raised);
-  const breathFov = holdingBreath && inControl ? 61 : 70;
+  const videoLens = videoCameraOn();
+  syncVideoCamera(videoLens && !finished);
+  const breathFov = videoLens ? 82 : holdingBreath && inControl ? 61 : 70;
   zoomFov += (breathFov - zoomFov) * Math.min(1, dt * 3.2);
   const fov = zoomFov - gun.ads * 16;
   if (Math.abs(camera.fov - fov) > 0.02) { camera.fov = fov; camera.updateProjectionMatrix(); }
@@ -4304,7 +4664,20 @@ function frame(now) {
       flick *= 1 - (1 - stutter) * recover;
     }
   }
-  const beam = raised && flashlight.battery > 0 ? L.intensity * flick * cut.light * batteryDim() : 0;
+  const cameraViewActive = videoLens && raised && inControl;
+  if (cameraViewActive && videoFlicker.age < 0) {
+    videoFlicker.next -= dt;
+    if (videoFlicker.next <= 0) { videoFlicker.age = 0; videoFlicker.duration = 0.12 + Math.random() * 0.12; videoFlicker.next = 3.8 + Math.random() * 5.2; }
+  }
+  if (videoFlicker.age >= 0) {
+    videoFlicker.age += dt;
+    if (videoFlicker.age >= videoFlicker.duration) { videoFlicker.age = -1; videoFlicker.amount = 0; }
+    else videoFlicker.amount = Math.sin(videoFlicker.age * 155) > -0.3 ? 0.96 : 0.12;
+  } else videoFlicker.amount = 0;
+  const beam = raised && flashlight.battery > 0 ? L.intensity * flick * cut.light * batteryDim() * (cameraViewActive ? 1 - videoFlicker.amount * 0.94 : 1) : 0;
+  const beamAngle = cameraViewActive ? 0.74 : L.angle;
+  spot.angle = beamAngle; spot.distance = cameraViewActive ? 48 : L.distance; spot.color.set(cameraViewActive ? 0xa7ffb2 : 0xfff0cc);
+  halo.angle = cameraViewActive ? 0.98 : 0.62; halo.distance = cameraViewActive ? 32 : 26; halo.color.copy(spot.color);
   spot.intensity = beam;
   halo.intensity = beam * 0.18;
   updateMonsters(dt, inControl, beam > 1);
@@ -4312,6 +4685,10 @@ function frame(now) {
   const dreadAim = collective.active && ['appear', 'warning', 'dispersal', 'last'].includes(collective.phase) && flashlight.equipped;
   const aimOffset = dreadAim ? Math.sin(uTime.value * 2.3) * 0.38 + Math.sin(uTime.value * 0.53 + 1.4) * 0.16 : 0;
   spot.target.position.set(bobX * 4 + swayX + aimOffset + runFX, -0.35 + bobY * 5 + swayY + runFY + (dreadAim ? Math.sin(uTime.value * 1.7) * 0.13 : 0), -10);
+  visionUniforms.uVideo.value = cameraViewActive ? 1 : 0;
+  visionUniforms.uVideoTime.value = uTime.value;
+  visionUniforms.uVideoOut.value = cameraViewActive ? videoFlicker.amount : 0;
+  updateCameraWords(cameraViewActive && beam > 1);
 
   // world follows the player
   refreshChunks(false);
@@ -4324,13 +4701,20 @@ function frame(now) {
 // sharp: no soft fringe round the middle of the picture (that is the flashlight's, in first person).
 function renderView(sc, cam, hands, sharp = false) {
   const core = visionUniforms.uCore.value, stain = visionUniforms.uStain.value;
+  const videoPass = visionUniforms.uVideo.value > 0.5 && cam === camera && started && playing && !finished && !intro.active && !cutscenes.active;
+  if (!videoPass) visionUniforms.uVideo.value = 0;
   if (sharp) { visionUniforms.uCore.value = 9; visionUniforms.uStain.value = 0; }
   cam.layers.set(0);
   renderer.setRenderTarget(visionRT);
   renderer.render(sc, cam);
+  if (hands && videoPass) {
+    const bg = sc.background; sc.background = null;      // or the background is drawn again, over the world just rendered
+    cam.layers.set(1); renderer.autoClear = false; renderer.clearDepth(); renderer.render(sc, cam); renderer.autoClear = true;
+    sc.background = bg;
+  }
   renderer.setRenderTarget(null);
   renderer.render(visionScene, visionCam);
-  if (hands) {
+  if (hands && !videoPass) {
     cam.layers.set(1);
     const bg = sc.background;
     sc.background = null;
@@ -4341,11 +4725,12 @@ function renderView(sc, cam, hands, sharp = false) {
     sc.background = bg;
   }
   cam.layers.set(0);
+  if (cam === camera && !playing) visionUniforms.uVideo.value = 0;
   visionUniforms.uCore.value = core; visionUniforms.uStain.value = stain;
 }
 refreshChunks(true);
-// ?round=N starts at round N; ?monster=ghosts|observer|collective|choir|consumer forces the monster for every round
-startRound(Math.max(1, Math.min(ROUND.count, Number(new URLSearchParams(location.search).get('round')) || 1)));
+// ?round=N starts at round N; ?monster=ghosts|observer|collective|choir|consumer|slime forces the monster for every round
+startRound(Math.max(1, Math.min(99, Number(new URLSearchParams(location.search).get('round')) || 1)));
 updateClock();
 // ───────────────────────── title screen ─────────────────────────
 // A landing page in front of the night: the runner in the woods, PLAY, LEADERBOARD, INSTRUCTIONS.
@@ -4398,7 +4783,7 @@ Object.assign(cinemaKit, {
   lock(on) { intro.active = on; },                        // everything that ignores input during the opening ignores it now
   quiet() { for (const k in keys) keys[k] = false; holdingBreath = false; gun.aiming = false; gun.trigger = false; gun.burst = 0; syncFootsteps(null); syncBodyAudio(null, false); syncTick(false); },
   clear() { while (ghosts.length) removeGhost(ghosts[0]); clearMind(); bannerEl.style.opacity = 0; bannerTimer = 0; },
-  clearMind() { clearMind(); sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; },
+  clearMind() { clearMind(); sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; sanity.drained = false; },
   canPlay: () => playing && !finished && !swim.in && swim.climb < 0 && !burn.in && !journal.isOpen,
   die(line, from = '') { cutsceneLine = line; cutsceneFrom = from; deathCause = 'cutscene'; endGame(false); },
   ceiling: META.ceiling || 0,
@@ -4466,4 +4851,4 @@ if (LAB) buildLabDead();
 mountLeaderboard();
 
 // small debug handle for the console
-window.game = { title, cutscenes, picker, pickOffers, drops, dropBundle, salvage, salvageIn, die(cause) { deathCause = cause; endGame(false); }, bench, GUN, applyKit, addParts, throwGrenade, grenades, craftGear, gearRecipes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };
+window.game = { title, damagePlayer, armor, wearArmor, endlessHurt, rollArmorTier, cutscenes, picker, pickOffers, drops, dropBundle, salvage, salvageIn, die(cause) { deathCause = cause; endGame(false); }, bench, GUN, applyKit, addParts, throwGrenade, grenades, craftGear, gearRecipes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, slime, SLIME, lake, eaten, slimeTravel, newWorld, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };

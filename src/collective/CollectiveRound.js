@@ -60,6 +60,22 @@ export function createCollective(ctx) {
     const t = ac.currentTime; h.g.gain.cancelScheduledValues(t); h.g.gain.setValueAtTime(h.g.gain.value, t); h.g.gain.linearRampToValueAtTime(0, t + fade);
     try { h.s.stop(t + fade + 0.05); } catch (e) { /* stopped */ }
   }
+  // The group's own footsteps, while they are still walking and the beam has not frozen them.
+  let groupSteps = null;
+  function stopGroupSteps() {
+    if (!groupSteps) return;
+    stopLoop(groupSteps, 0.16);
+    groupSteps = null;
+  }
+  function ensureGroupSteps() {
+    if (groupSteps || !ctx.audio.groupSteps) return;
+    const g = ac.createGain(), pan = ac.createStereoPanner(), s = ac.createBufferSource();
+    g.gain.value = 0;
+    s.buffer = ctx.audio.groupSteps; s.loop = true;
+    s.connect(g).connect(pan).connect(ctx.audio.dest);
+    s.start();
+    groupSteps = { s, g, pan };
+  }
   let speech = null, speechNext = null;
   function cutSpeech() {
     speechNext = null;
@@ -123,6 +139,7 @@ export function createCollective(ctx) {
     S.distanceEcho?.removeFromParent(); S.distanceEcho = null; S.distanceEchoT = 0;
     stopLoop(S.whisper); S.whisper = null;
     cutSpeech();
+    stopGroupSteps();
     for (const v of voices) { voiceFor(v, null); v.gain.gain.value = 0; }
   }
   // uneven places around the player: random angles and distances, with just enough gap that they don't stack
@@ -381,8 +398,8 @@ export function createCollective(ctx) {
 
   // info: { inControl, yaw, flashlightOn, matchLit, running, moving, clock }
   function update(dt, info) {
-    if (S.phase === 'idle' || S.phase === 'done') return;
-    if (!info.inControl) { for (const v of voices) v.gain.gain.setTargetAtTime(0, ac.currentTime, 0.05); S.wasRunning = !!(info.running && info.moving); return; }
+    if (S.phase === 'idle' || S.phase === 'done') { stopGroupSteps(); return; }
+    if (!info.inControl) { for (const v of voices) v.gain.gain.setTargetAtTime(0, ac.currentTime, 0.05); stopGroupSteps(); S.wasRunning = !!(info.running && info.moving); return; }
     S.t += dt; S.burstClock += dt; S.currentRound = info.round || S.currentRound; S.sanity = info.sanity ?? S.sanity ?? 100;
     const p = P(), ph = S.phase;
     if (S.distanceEchoT > 0 && (S.distanceEchoT -= dt) <= 0) { S.distanceEcho?.removeFromParent(); S.distanceEcho = null; }
@@ -628,8 +645,25 @@ export function createCollective(ctx) {
         k.c.root.visible = !!info.flashlightOn && d < (info.beamRange || 40) && angle > (info.beamAngle || 0.44) * 0.92 && angle < (info.beamAngle || 0.44) * 1.55;
       } else k.c.root.visible = true;
     }
-    // footsteps: the six nearest that are moving carry the player's own footstep sounds
-    const movers = kids.filter((k) => !k.gone && k.speed > 0.3 && k !== S.last).map((k) => [distTo(k), k]).sort((a, b) => a[0] - b[0]).slice(0, voices.length);
+    // Footsteps of the ones still walking. The beam stops a child, and the loop stops once none of them are moving.
+    const walking = kids.filter((k) => !k.gone && !k.litFreeze && k.speed > 0.25);
+    if (!walking.length || !ctx.audio.groupSteps) stopGroupSteps();
+    else {
+      ensureGroupSteps();
+      let sx = 0, sz = 0;
+      for (const k of walking) {
+        const dx = k.x - p.x, dz = k.z - p.z, d = Math.hypot(dx, dz) || 1;
+        sx += dx / d; sz += dz / d;
+      }
+      sx /= walking.length; sz /= walking.length;
+      const side = Math.max(-1, Math.min(1, sx * Math.cos(info.yaw) + sz * -Math.sin(info.yaw)));
+      const ahead = Math.max(-1, Math.min(1, sx * -Math.sin(info.yaw) + sz * -Math.cos(info.yaw)));
+      const level = 0.2 + 0.55 * (0.5 + 0.5 * ahead);
+      groupSteps.g.gain.setTargetAtTime(level, ac.currentTime, 0.08);
+      groupSteps.pan.pan.setTargetAtTime(side, ac.currentTime, 0.08);
+    }
+    // the old per-child steps stay quiet while the group loop is the sound of them walking
+    const movers = groupSteps ? [] : kids.filter((k) => !k.gone && k.speed > 0.3 && k !== S.last).map((k) => [distTo(k), k]).sort((a, b) => a[0] - b[0]).slice(0, voices.length);
     voices.forEach((v, n) => {
       const m = movers[n];
       if (!m) { v.gain.gain.setTargetAtTime(0, ac.currentTime, 0.08); return; }

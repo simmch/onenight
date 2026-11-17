@@ -49,7 +49,7 @@ async function refresh() {
     const who = document.createElement('span');
     who.textContent = row.username;
     const result = document.createElement('span');
-    result.textContent = row.won ? `DAWN ${clock(row.seconds)}` : `R${row.round_reached} ${clock(row.seconds)}`;
+    result.textContent = `R${row.round_reached} ${clock(row.seconds)}`;
     li.append(rank, who, result);
     list.append(li);
   });
@@ -66,18 +66,21 @@ async function submit() {
   localStorage.setItem(NAME_KEY, username);
   saving = true;
   saveBtn.textContent = 'Saving...';
-  const res = await fetch(`${URL}/rest/v1/one_night_scores`, {
+  const send = (round) => fetch(`${URL}/rest/v1/one_night_scores`, {
     method: 'POST',
     headers: headers({ 'Content-Type': 'application/json', Prefer: 'return=minimal' }),
     body: JSON.stringify({
       username,
       won: !!pending.won,
-      round_reached: pending.round,
+      round_reached: round,
       seconds: pending.seconds,
       map: pending.map,
       ending: pending.ending,
     }),
   });
+  let res = await send(pending.round);
+  // the board was made when a night had seven rounds; if it will not take a long endless run, keep it as far as it allows
+  if (!res.ok && pending.round > 20) res = await send(20);
   saving = false;
   if (!res.ok) {
     saveBtn.textContent = 'Save this run';

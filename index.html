@@ -43,6 +43,8 @@
   #prompt { left: 0; right: 0; bottom: 30%; text-align: center; color: #d8d2c0; }
   #toast { left: 0; right: 0; bottom: 18%; text-align: center; opacity: 0; transition: opacity .6s; }
   #hp { width: 110px; height: 8px; border: 1px solid rgba(185,179,163,.45); background: rgba(0,0,0,.45); }
+  #shield { height: 8px; border: 1px solid rgba(150,190,220,.5); background: rgba(0,0,0,.45); }
+  #shieldFill { height: 100%; background: #7fa8c9; transform-origin: left center; }
   #hpFill { height: 100%; background: #9c3b34; transform-origin: left center; }
   #status .lbl { width: 24px; text-align: center; font-size: 12px; }
   #hurt { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, rgba(120,0,0,0) 35%, rgba(150,0,0,.85) 100%); }
@@ -153,6 +155,7 @@
 <body>
 <div id="hud"><span id="clock"></span><div id="stamina" hidden><div id="staminaFill"></div></div><div id="sanity" hidden title="Hold Space while still to recover sanity. During the Collective that works even while they are close."><span>SANITY</span><div id="sanityBar"><div id="sanityFill"></div></div><span id="sanityState">CLEAR</span></div></div>
 <div id="status" hidden>
+  <div class="row" id="shieldRow" hidden><img id="shieldIcon" alt="Armor"><div id="shield"><div id="shieldFill"></div></div></div>
   <div class="row"><span class="lbl">HP</span><div id="hp"><div id="hpFill"></div></div></div>
   <div class="row"><img src="./assets/items/battery.png" alt="Battery"><div id="batt"><div id="battFill"></div></div><span id="spare"></span></div>
   <div class="row"><img src="./assets/items/match.png" alt="Matches"><span id="matches"></span></div>
@@ -168,11 +171,11 @@
 <div id="fade"></div><div id="lidTop" class="lid"></div><div id="lidBot" class="lid"></div>
 <div id="overlay">
   <h1 id="title">ONE NIGHT</h1>
-  <p id="sub">Seven rounds of the dead, then worse things. Survive until dawn.</p>
+  <p id="sub">The dead keep coming. Survive as many rounds as you can.</p>
   <p class="desk">WASD move &middot; Mouse look &middot; Shift run &middot; F flashlight &middot; G radar &middot; Space hold breath</p>
   <p class="desk">E use (chests, doors, climb out) &middot; Click attack / shoot &middot; Right mouse aim &middot; R reload &middot; B swap battery &middot; M match &middot; Q potion &middot; J journal</p>
   <p class="desk">1–9 select/use inventory &middot; X drop selected item &middot; Better packs add slots &middot; C workbench &middot; T grenade</p>
-  <p class="desk">Sanity: hold Space while still to recover, including while the Collective is close. Shelter helps too. A potion clears a mind that has not broken yet.</p>
+  <p class="desk">Sanity: hold Space while still to recover, including while the collective is close or your mind is empty. Shelter helps too. A potion restores sanity.</p>
   <p class="phone">Turn sideways. The left finger moves — push farther to run. The right finger looks.</p>
   <p class="phone">Tap shoots. Hold aims. Press and hold uses. Tap a chest to open it. Two fingers: tap the light, swipe up for gear.</p>
   <p class="phone">Tap an item to use it or swap to it. Hold the breath button to hold your breath, and hold it while still to recover sanity.</p>
@@ -189,7 +192,7 @@
 <div id="menu" class="loading" hidden>
   <div id="menuMain">
     <h1>ONE NIGHT</h1>
-    <p class="tag">Seven rounds of the dead, then worse things. Survive until dawn.</p>
+    <p class="tag">The dead keep coming. Survive as many rounds as you can.</p>
     <p class="loadNote">LOADING</p>
     <div class="phone" id="menuGestures">
       <p class="big">TAP TO PLAY</p>
@@ -208,13 +211,14 @@
     <div id="menuBoard" hidden></div>
     <div id="menuHow" hidden>
       <h3>THE NIGHT</h3>
-      <p>Live through seven rounds and you see the dawn. Each round sends something different, and each is survived differently. The words at the start of a round tell you what it wants.</p>
+      <p>There is no last round. Each one sends something different, and each is survived differently. The words at the start of a round tell you what it wants. The board remembers how far you got.</p>
       <dl>
         <dt>Dark ghosts</dt><dd>Keep your light off them. Shoot them or outlast them.</dd>
-        <dt>The Observer</dt><dd>Find the bodies and burn each one with a match, before dawn.</dd>
+        <dt>The Observer</dt><dd>Find the bodies and burn each one with a match, before dawn. Burning them wears on your mind.</dd>
         <dt>The Collective</dt><dd>When they come, put your flashlight out, then get away from them. A match is allowed.</dd>
         <dt>The Choir</dt><dd>They hunt by sound. Go quietly, find the nest, kill what sings.</dd>
         <dt>The Consumer</dt><dd>Get the civilians out and kill it before it grows.</dd>
+        <dt>The Slime</dt><dd>It eats what it rolls over and grows. Nothing you carry kills it. Follow the WATER arrow and lead it into the lake. Shoot the small ones before they cling to your legs.</dd>
         <dt>The Labyrinth</dt><dd>Finding the way out wins the round, whatever is in there with you.</dd>
       </dl>
       <h3>BETWEEN ROUNDS</h3>
@@ -222,17 +226,19 @@
       <p class="phone">Some rounds do not end quietly. The screen shows you a gesture, and you make it anywhere, at once: swipe the way the arrow points, tap as fast as you can, press and keep pressing, or lift every finger off the glass. Getting it wrong ends the night.</p>
       <h3>YOUR GEAR</h3>
       <p>Chests are not the only place to look. Some of what stands about can be searched: hold the use key on a car, a crate, a coffin, a hollow stump. What you kill sometimes leaves a bundle where it fell; walk over it. And every round you live through, the night leaves three things and you take one.</p>
-      <p>Every chest has parts in it, some of the dead drop them, and each round you survive salvages a few. Spend them at the workbench: batteries, bullets, grenades, and rebuilds of the gun, the flashlight and the radar. The world waits while the bench is open.</p>
+      <p>Every chest has parts in it, some of the dead drop them, and each round you survive salvages a few. Spend them at the workbench: batteries, bullets, grenades, and rebuilds of the gun, the flashlight and the radar. The world waits while the bench is open. After the flashlight reaches Mk III, save 35 more parts to replace it with a video camera: its broad green beam lasts longer and can expose writing on walls once.</p>
       <p>Coloured chests can hold kits that fit an upgrade on the spot. The first one you open rebuilds the pistol into a gun that keeps firing for as long as you hold it.</p>
+      <h3>ARMOR</h3>
+      <p>Armor is worn, not carried, and lays a shield over your health: it takes every hit first, and grows back once you have gone a few seconds unhurt. There are six kinds, from bone armor (a shield of 25) to the Choir carapace (170). The first three turn up through the early rounds; the heavy ones only once the night has gone on a long while. A better one goes on at once; one no better patches the shield you have.</p>
       <h3>YOUR MIND</h3>
-      <p>Light on a horror wears your sanity down. Hold your breath while standing still to get it back. A potion clears a mind that has not broken yet.</p>
+      <p>Light on a horror wears your sanity down. Hold your breath while standing still to get it back, even when your mind is empty. A potion restores sanity too.</p>
       <div id="menuControls">
       <h3>CONTROLS</h3>
       <dl class="desk">
         <dt>W A S D</dt><dd>Move</dd>
         <dt>Mouse</dt><dd>Look</dd>
         <dt>Shift</dt><dd>Run</dd>
-        <dt>F</dt><dd>Flashlight</dd>
+        <dt>F</dt><dd>Flashlight or video camera</dd>
         <dt>Space</dt><dd>Hold your breath</dd>
         <dt>E</dt><dd>Use: chests, doors, notes, climbing out</dd>
         <dt>Click</dt><dd>Attack or shoot. Right mouse aims</dd>
