@@ -10,6 +10,7 @@ import { buildChild, poseChild, createCollectiveMaterials } from './collective/C
 import { createChoirRound } from './choir/ChoirRound.js';
 import { createConsumerRound } from './consumer/ConsumerRound.js';
 import { createSlimeRound, SLIME } from './slime/SlimeRound.js';
+import { createUnseenRound, UNSEEN } from './unseen/UnseenRound.js';
 import { createJournal } from './lore/journal.js';
 import { createLorePickups } from './lore/pickups.js';
 import { mountLeaderboard, offerScore } from './leaderboard.js';
@@ -327,23 +328,35 @@ const uTime = { value: 0 };
 const atlasTex = pixelTex('./assets/atlas.png');
 const dummy = new THREE.Object3D();
 const billboardTint = new THREE.Color();
+const unseenRustle = {
+  count: { value: 0 },
+  paths: { value: Array.from({ length: UNSEEN.maxCount }, () => new THREE.Vector4()) },
+};
+const looseProps = new Set(['fern', 'bramble', 'web', 'moss', 'trashbag', 'tire', 'gravel', 'ash']
+  .flatMap((name) => atlas.sprites[name] || []));
 
 // lit = shaded by the flashlight like everything else; unlit = glows on its own (torches, fire)
-function billboardLayer(isLit, cap) {
+function billboardLayer(isLit, cap, rustle = null) {
   const geo = new THREE.PlaneGeometry(1, 1); geo.translate(0, 0.5, 0);   // pivot at the base
-  const cells = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3); // cellX, cellY, sway
+  const cells = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4); // cellX, cellY, sway, rustle
   cells.setUsage(THREE.DynamicDrawUsage);
   geo.setAttribute('aCell', cells);
   const mat = isLit ? new THREE.MeshLambertMaterial({ map: atlasTex, alphaTest: 0.5 }) : new THREE.MeshBasicMaterial({ map: atlasTex, alphaTest: 0.5 });
+  mat.customProgramCacheKey = () => rustle ? 'billboard-rustle' : 'billboard';
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uGrid = { value: new THREE.Vector2(atlas.cols, atlas.rows) };
     sh.uniforms.uTime = uTime;
+    if (rustle) {
+      sh.uniforms.uRustleCount = rustle.count;
+      sh.uniforms.uRustlePaths = rustle.paths;
+    }
     const origin = `
       vec3 bbOrigin = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
       vec3 bbToCam = cameraPosition - bbOrigin; bbToCam.y = 0.0; bbToCam = normalize(bbToCam);`;
     let v = sh.vertexShader
       .replace('#include <common>', `#include <common>
-      attribute vec3 aCell; uniform vec2 uGrid; uniform float uTime;`)
+      attribute vec4 aCell; uniform vec2 uGrid; uniform float uTime;
+      ${rustle ? `uniform int uRustleCount; uniform vec4 uRustlePaths[${UNSEEN.maxCount}];` : ''}`)
       .replace('#include <uv_vertex>', `#include <uv_vertex>
       vMapUv = (vec2(aCell.x, uGrid.y - 1.0 - aCell.y) + uv * 0.98 + 0.01) / uGrid;`);
     if (isLit) v = v.replace('#include <defaultnormal_vertex>', origin + `
@@ -353,6 +366,21 @@ function billboardLayer(isLit, cap) {
       float bbSx = length(instanceMatrix[0].xyz);
       float bbSy = length(instanceMatrix[1].xyz);
       float bbSway = sin(uTime * 1.3 + bbOrigin.x * 0.7 + bbOrigin.z * 0.9) * aCell.z * transformed.y * bbSy;
+      ${rustle ? `
+      if (aCell.w > 0.0) {
+        float disturbance = 0.0;
+        for (int i = 0; i < ${UNSEEN.maxCount}; i++) {
+          if (i >= uRustleCount) break;
+          vec4 path = uRustlePaths[i];
+          vec2 wake = path.zw - path.xy;
+          vec2 offset = bbOrigin.xz - path.xy;
+          float along = clamp(dot(offset, wake) / max(dot(wake, wake), 0.001), 0.0, 1.0);
+          float contact = 1.0 - smoothstep(0.55, 3.0, length(offset - along * wake));
+          disturbance = max(disturbance, contact * mix(1.0, 0.55, along));
+        }
+        float shake = sin(uTime * 14.0 + bbOrigin.x * 2.3 + bbOrigin.z * 1.7);
+        bbSway += shake * disturbance * transformed.y * min(1.1, 0.32 * bbSy);
+      }` : ''}
       vec3 bbWorld = bbOrigin + bbRight * (transformed.x * bbSx + bbSway) + vec3(0.0, transformed.y * bbSy, 0.0);
       vec4 mvPosition = viewMatrix * vec4(bbWorld, 1.0);
       gl_Position = projectionMatrix * mvPosition;`);
@@ -368,13 +396,13 @@ function billboardLayer(isLit, cap) {
       dummy.position.set(x, y, z); dummy.rotation.set(0, 0, 0); dummy.scale.set(w, h, 1); dummy.updateMatrix();
       mesh.setMatrixAt(this.n, dummy.matrix);
       mesh.setColorAt(this.n, billboardTint.set(tint));
-      cells.setXYZ(this.n, cell % atlas.cols, Math.floor(cell / atlas.cols), sway);
+      cells.setXYZW(this.n, cell % atlas.cols, Math.floor(cell / atlas.cols), sway, sway > 0 || looseProps.has(cell) ? 1 : 0);
       this.n++;
     },
     commit() { mesh.count = this.n; mesh.instanceMatrix.needsUpdate = true; cells.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; },
   };
 }
-const vegLayer = billboardLayer(true, CAP), glowLayer = billboardLayer(false, 2000);
+const vegLayer = billboardLayer(true, CAP, unseenRustle), glowLayer = billboardLayer(false, 2000);
 const veg = vegLayer.mesh;
 
 // ───────────────────────── walls, floors, roads, water, lava (instanced boxes) ─────────────────────────
@@ -660,11 +688,18 @@ const creatureWorld = {
   kind: MAP_NAME, grid: MAP.grid, groundY: MAP.groundY, ceiling: META.ceiling || 0,
   cellWalkable, solidCell: (i, j) => MAP.grid.solidCell(i, j, opened),
   collide: (pos, r) => collide(pos, r, true),
-  losBlocked(x0, z0, x1, z1) {
+  losBlocked(x0, z0, x1, z1, includeDoors = false) {
     if (MAP.grid) return MAP.blocked(x0, z0, x1, z1, opened);
     let hit = false;                                         // house walls
     if (MAP_NAME === 'rural') forChunksNear(x0, z0, x1, z1, (c) => {
       for (let i = 0; i < c.aabb.length && !hit; i += 4) if (segHitsBox(x0, z0, x1, z1, c.aabb[i], c.aabb[i + 1], c.aabb[i + 2], c.aabb[i + 3])) hit = true;
+      if (!includeDoors || hit) return;
+      const { W, T } = MAP.door;
+      hit = c.doors.some((door) => {
+        if (opened.has(door.id)) return false;
+        const halfX = (door.along === 'x' ? W : T) / 2, halfZ = (door.along === 'x' ? T : W) / 2;
+        return segHitsBox(x0, z0, x1, z1, door.x - halfX, door.z - halfZ, door.x + halfX, door.z + halfZ);
+      });
     });
     return hit;
   },
@@ -860,6 +895,7 @@ const kidClips = await Promise.all([
 ].map((file) => loadClip(file, '../sound_effects/kids/')));
 const drinkBuffer = await loadClip('drinking_potion,_gul_#3-1794631930380.mp3');
 const videoCamBuffer = await loadClip('ongoing_old_video_ca_#4-1794932489169.mp3');
+const unseenScreech = await loadClip('monster_screech_#2-1794944610437.mp3');
 const collectiveStepsBuffer = await loadClip('group_footsteps_movi_#2-1794932719907.mp3');
 const [snowWalkBuffer, snowRunBuffer] = MAP_NAME === 'snow' ? await Promise.all([
   loadClip('Walking_in_snow_#1-1794670709006.mp3'),
@@ -1826,6 +1862,7 @@ function shoot() {
   if (choir.active) { camera.getWorldDirection(aim); choir.shot(camera.position, aim, { damage: GUN.damage }); }
   if (consumer.active) { camera.getWorldDirection(aim); consumer.shot(camera.position, aim, { damage: 3 * GUN.damage, noiseVolume: 1.25 }); }
   if (slime.active) { camera.getWorldDirection(aim); slime.shot(camera.position, aim); }
+  if (unseen.active) { camera.getWorldDirection(aim); unseen.shot(camera.position, aim, { damage: GUN.damage }); }
 }
 function meleeAttack() {
   const item = ITEM_DEFS[bag.activeWeapon], bonuses = bagBonuses();
@@ -1840,6 +1877,7 @@ function meleeAttack() {
   if (collective.active) collective.shot(camera.position, aim);
   if (consumer.active) consumer.shot(camera.position, aim, { range: item.reach, melee: true, damage: damage * 2, noiseVolume: item.noise });
   if (slime.active) slime.shot(camera.position, aim, { range: item.reach, melee: true });
+  if (unseen.active) unseen.shot(camera.position, aim, { range: item.reach, melee: true, damage });
   if (item.maxDurability) {
     const remaining = (bag.durability[bag.activeWeapon] ?? item.maxDurability) - 1;
     if (remaining <= 0) {
@@ -2860,9 +2898,9 @@ let debugAmbient = 0;      // console only: game.debugLight(1.5) floods the map 
 // Each round: survive ROUND.seconds or kill every monster. Inventory carries over between rounds.
 const ROUND = {
   seconds: 300, rest: 6,
-  // Each round draws its monsters at random: ghosts, Observer, Collective, Choir, or Consumer.
-  // Force one with ?monster=ghosts|observer|collective|choir|consumer|slime. The Slime needs open ground and a lake: no caves.
-  types: ['ghosts', 'observer', 'collective', 'choir', 'consumer', 'slime'],
+  // The Unseen open round one. After that the monsters rotate at random.
+  // The Slime needs open ground and a lake.
+  types: ['ghosts', 'observer', 'collective', 'choir', 'consumer', 'slime', 'unseen'],
   frenzy: 60,                          // the last N seconds of a round: clock ticks, ghosts turn vicious
   perRoundMenace: 0.15, frenzyMenace: 0.6,
   sneak: [0, 0.15, 0.35, 0.5, 0.65],   // per round: chance a creeping ghost attacks unlit instead of just staring (always, in a frenzy)
@@ -2874,15 +2912,16 @@ const isObserverRound = () => round.type === 'observer';
 const isChoirRound = () => round.type === 'choir';
 const isConsumerRound = () => round.type === 'consumer';
 const isSlimeRound = () => round.type === 'slime';
+const isUnseenRound = () => round.type === 'unseen';
 const roundSeconds = () => isObserverRound() ? OBS_ROUND.seconds : isCollectiveRound() || isChoirRound() || isConsumerRound() || isSlimeRound() ? Infinity : ROUND.seconds;
 let forcedMonster = ROUND.types.includes(new URLSearchParams(location.search).get('monster')) ? new URLSearchParams(location.search).get('monster') : null;
 // The same monster may come twice in a row, and never a third time.
 const monsterStreak = [];
-function pickMonster() {
+function pickMonster(n) {
   if (forcedMonster) return forcedMonster === 'slime' && !lake.on ? 'ghosts' : forcedMonster;
   const repeat = monsterStreak.length >= 2 && monsterStreak[0] === monsterStreak[1] ? monsterStreak[0] : null;
   const pool = ROUND.types.filter((t) => t !== repeat && (t !== 'slime' || lake.on));
-  const type = pool[(Math.random() * pool.length) | 0];
+  const type = n === 1 ? 'unseen' : pool[(Math.random() * pool.length) | 0];
   monsterStreak.unshift(type);
   if (monsterStreak.length > 2) monsterStreak.pop();
   return type;
@@ -2955,22 +2994,22 @@ function stopSrc(src) {
   try { src.stop(); } catch (e) { /* already stopped */ }
   try { src.disconnect(); } catch (e) { /* already disconnected */ }
 }
-function ghostPlace(g) {
+function creatureSoundPlace(g) {
   const px = camera.position.x, pz = camera.position.z;
   const dx = g.x - px, dz = g.z - pz, dist = Math.hypot(dx, dz) || 1e-6;
   const side = (dx * Math.cos(yaw) + dz * -Math.sin(yaw)) / dist;
   const vol = 0.55 * Math.pow(Math.max(0, 1 - dist / 48), 1.35);
   return { vol: Math.max(0.08, vol), pan: Math.max(-1, Math.min(1, side)) };
 }
-function playGhostBuffer(buffer, g, loop) {
+function playCreatureClip(buffer, g, loop, volume = 1) {
   if (audioCtx.state === 'suspended') audioCtx.resume();
   const src = audioCtx.createBufferSource();
   src.buffer = buffer;
   src.loop = !!loop;
   const gain = audioCtx.createGain();
   const panner = audioCtx.createStereoPanner();
-  const place = ghostPlace(g);
-  gain.gain.value = place.vol * (loop ? 1 : 1.3);
+  const place = creatureSoundPlace(g);
+  gain.gain.value = place.vol * (loop ? 1 : 1.3) * volume;
   panner.pan.value = place.pan;
   src.connect(gain).connect(panner).connect(ghostOut);
   src.start();
@@ -2979,24 +3018,24 @@ function playGhostBuffer(buffer, g, loop) {
 function syncGhostChase(g, on) {
   if (on === !!g.chase) return;
   if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
-  if (on) g.chase = playGhostBuffer(ghostChaseBuffer, g, true);
+  if (on) g.chase = playCreatureClip(ghostChaseBuffer, g, true);
 }
 function updateGhostChase(g) {
   if (!g.chase) return;
-  const place = ghostPlace(g);
+  const place = creatureSoundPlace(g);
   g.chase.gain.gain.value = place.vol * (g.shot ? 0.35 : 1);
   g.chase.panner.pan.value = place.pan;
 }
 function playGhostShot(g) {
   if (g.shot) stopSrc(g.shot.src);
-  g.shot = playGhostBuffer(ghostShotBuffer, g, false);
+  g.shot = playCreatureClip(ghostShotBuffer, g, false);
   const voice = g.shot;
   voice.src.onended = () => { if (g.shot === voice) g.shot = null; };
 }
 function playGhostDeath(g) {
   if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
   if (g.shot) { stopSrc(g.shot.src); g.shot = null; }
-  playGhostBuffer(ghostGoneBuffer, g, false);
+  playCreatureClip(ghostGoneBuffer, g, false);
 }
 function silenceGhost(g) {
   if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
@@ -3029,7 +3068,7 @@ function maybeScare() {
 }
 function vanish(g) {
   if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
-  playGhostBuffer(ghostGoneBuffer, g, false);
+  playCreatureClip(ghostGoneBuffer, g, false);
   const a = Math.random() * Math.PI * 2, d = 30 + Math.random() * 12;
   g.x = camera.position.x + Math.cos(a) * d; g.z = camera.position.z + Math.sin(a) * d;
   g.state = 'wander'; g.mode = 'lurk'; g.away = 12; g.tx = g.x; g.tz = g.z; g.retarget = 0; g.lit = 0; g.creepIn = creepDelay();
@@ -3064,17 +3103,19 @@ function startRound(n) {
   if (choir.active) choir.stop();
   if (consumer.active) consumer.stop();
   if (slime.active) slime.stop();
+  if (unseen.active) unseen.stop();
   if (inv.radarTier < 1) radar.equipped = false;       // a tracker works in any round, so it stays out
   setHuntSilence(false);                 // an Observer round can end mid-hunt: bring the world's sound back
   setDusk(false);
   round.n = n; round.t = 0; round.rest = 0; round.announced = false;
   lore.spawnRound(n);
-  round.type = pickMonster();
+  round.type = pickMonster(n);
   if (round.type === 'observer') { startObserverRound(); return; }
   if (round.type === 'collective') { startCollectiveRound(); return; }
   if (round.type === 'choir') { startChoirRound(); return; }
   if (round.type === 'consumer') { startConsumerRound(); return; }
   if (round.type === 'slime') { startSlimeRound(); return; }
+  if (round.type === 'unseen') { unseen.start(n, camera.position, yaw); return; }
   const count = ghostCount(n), r = mulberry(CFG.seed ^ (n * 7919));
   const bruteCount = n < 3 ? 0 : Math.min(count, Math.max(1, Math.floor(count * Math.min(0.38, 0.14 + (n - 3) * 0.04))));
   const brutes = new Set();
@@ -3095,11 +3136,12 @@ function endGame(won) {
   if (choir.active) choir.stop();
   if (consumer.active) consumer.stop();
   if (slime.active) slime.stop();
+  if (unseen.active) unseen.stop();
   setHuntSilence(false);
   syncTick(false);
   if (!won) playClip(dyingBuffer, 0.9);
   document.getElementById('title').textContent = won ? 'DAWN' : deathCause === 'time' ? 'TOO LATE' : 'YOU DIED';
-  document.getElementById('sub').textContent = won ? `You reached round ${round.n}.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', blast: 'You were standing too close.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', slime: 'The slime rolled over you.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.`, sanity: 'Your mind was empty for too long.', cutscene: cutsceneLine }[deathCause] || `The dead took you in round ${round.n}.`);
+  document.getElementById('sub').textContent = won ? `You reached round ${round.n}.` : ({ drowned: `You drowned in round ${round.n}.`, burned: `You burned in round ${round.n}.`, observer: 'It was right behind you.', blast: 'You were standing too close.', choir: 'The Choir found you by sound.', consumer: 'The Consumer caught your scent.', slime: 'The slime rolled over you.', unseen: 'The Unseen struck from behind.', collective: { shot: 'You hurt one of them. All of them came.', light: 'You kept your light on.', dark: 'You let it go dark.', ran: 'You ran.', approached: 'You went too close.' }[collective.S.reason] || 'They took you together.', time: `Dawn came with ${obsRound.total - obsRound.burned} of the bodies still unburned.`, sanity: 'Your mind was empty for too long.', cutscene: cutsceneLine }[deathCause] || `The dead took you in round ${round.n}.`);
   document.getElementById('go').textContent = TOUCH ? 'Tap to play again' : 'Click to play again';
   // Dying is a scene of its own (cinema/Cutscenes.js): the death screen waits until it has played. A win goes straight there.
   if (won || !cutscenes.playDeath(deathCause, showEndScreen, cutsceneFrom)) showEndScreen();
@@ -3120,6 +3162,7 @@ function roundWon(cleared, line) {
   if (choir.active) choir.stop();
   if (consumer.active) consumer.stop();
   if (slime.active) slime.stop();
+  if (unseen.active) unseen.stop();
   banner(`ROUND ${round.n} SURVIVED`, line || (cleared ? 'Every ghost is gone' : 'You outlasted them'));
   addParts(3); toast(`Salvaged 3 parts (${inv.parts}). C opens the workbench`);
   round.rest = ROUND.rest; round.pickIn = 1.6;          // and in a moment, the survivor's pick
@@ -3195,7 +3238,7 @@ function updateMonsters(dt, inControl, beamOn) {
   if (!inControl) {
     for (const g of ghosts) if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
   } else {
-    if (!round.announced) { round.announced = true; if (isObserverRound()) announceObserver(); else if (isCollectiveRound()) announceCollective(); else if (isChoirRound()) announceChoir(); else if (isConsumerRound()) announceConsumer(); else if (isSlimeRound()) announceSlime(); else { banner(META.label, `Round ${round.n}. ${ghosts.length} dark ghosts are out there. Keep your light off them`); if (MAP_HINT[MAP_NAME]) toast(MAP_HINT[MAP_NAME]); } }
+    if (!round.announced) { round.announced = true; if (isObserverRound()) announceObserver(); else if (isCollectiveRound()) announceCollective(); else if (isChoirRound()) announceChoir(); else if (isConsumerRound()) announceConsumer(); else if (isSlimeRound()) announceSlime(); else if (isUnseenRound()) announceUnseen(); else { banner(META.label, `Round ${round.n}. ${ghosts.length} dark ghosts are out there. Keep your light off them`); if (MAP_HINT[MAP_NAME]) toast(MAP_HINT[MAP_NAME]); } }
     if (round.pickIn > 0 && (round.pickIn -= dt) <= 0 && !finished) picker.open(pickOffers());
     if (round.rest > 0) {
       round.rest -= dt;
@@ -3224,6 +3267,10 @@ function updateMonsters(dt, inControl, beamOn) {
       if (consumer.dead) roundWon(true, 'The Consumer is dead. The survivors escape.');
     } else if (isSlimeRound()) {
       round.t += dt;
+    } else if (isUnseenRound()) {
+      round.t += dt;
+      if (!unseen.monsters.length) roundWon(true, 'The last of the Unseen has fallen.');
+      else if (round.t >= ROUND.seconds) roundWon(false, 'You outlasted the Unseen.');
     } else {
       round.t += dt;
       const alive = ghostsAlive();
@@ -3678,6 +3725,7 @@ function explode(g) {
     at(consumer.x, consumer.z, () => consumer.shot(from, dir, { range: R + 2, damage: 18 }));
   }
   if (slime.active) slime.blast(x, z, R);
+  if (unseen.active) unseen.blast(x, z, R);
   if (collective.active && ['appear', 'warning', 'dispersal', 'last'].includes(collective.phase)) {
     const low = new THREE.Vector3(x, MAP.groundY(x, z) + 0.7, z);        // they are small: the blast reaches them at their own height
     for (const k of collective.kids) at(k.x, k.z, () => collective.shot(low, dir));
@@ -4163,6 +4211,54 @@ function updateConsumer(dt, inControl) {
   updateConsumerAtmosphere(dt, inControl && playing);
 }
 
+const unseenVoices = new Map();
+function silenceUnseen(monster) {
+  const voice = unseenVoices.get(monster);
+  if (!voice) return;
+  stopClip(voice, 0.08);
+  unseenVoices.delete(monster);
+}
+const unseen = createUnseenRound({
+  scene,
+  world: { ...creatureWorld, losBlocked: (x0, z0, x1, z1) => creatureWorld.losBlocked(x0, z0, x1, z1, true) },
+  hooks: {
+    damage: damagePlayer,
+    screech(monster, attack) {
+      if (unseenVoices.has(monster) && !attack) return;
+      silenceUnseen(monster);
+      const volume = attack ? 1.08 : 0.52;
+      const voice = playCreatureClip(unseenScreech, monster, false, volume);
+      voice.volume = volume;
+      voice.src.playbackRate.value = attack ? 1.08 : 0.87 + Math.random() * 0.14;
+      unseenVoices.set(monster, voice);
+      voice.src.onended = () => {
+        voice.src.disconnect(); voice.gain.disconnect(); voice.panner.disconnect();
+        if (unseenVoices.get(monster) === voice) unseenVoices.delete(monster);
+      };
+    },
+    silence: silenceUnseen,
+  },
+});
+function announceUnseen() {
+  banner('THE UNSEEN', `Round ${round.n}. ${unseen.monsters.length} are watching.`);
+  toast('Watch for moving branches. A match reveals their shape. Face them to stop an attack.');
+}
+function updateUnseen(dt, inControl, cameraView) {
+  unseen.update(dt, camera, {
+    inControl, yaw,
+    matchRange: match.t > 0 && matchLight.intensity > 0.4 ? CFG.match.distance : 0,
+    cameraRange: cameraView ? 28 : 0,
+  });
+  unseenRustle.count.value = inControl ? unseen.monsters.length : 0;
+  if (!inControl) return;
+  unseen.monsters.forEach((m, i) => unseenRustle.paths.value[i].set(m.x, m.z, m.trailX, m.trailZ));
+  for (const [monster, voice] of unseenVoices) {
+    const { vol, pan } = creatureSoundPlace(monster);
+    voice.gain.gain.value = vol * 1.3 * voice.volume;
+    voice.panner.pan.value = pan;
+  }
+}
+
 function updateClock() {
   const left = Math.max(0, roundSeconds() - round.t), m = Math.floor(left / 60), s = Math.floor(left % 60);
   const time = `${m}:${String(s).padStart(2, '0')}`;
@@ -4178,6 +4274,7 @@ function updateClock() {
   } else if (isConsumerRound()) {
     text = `${roundTag()} · THE CONSUMER · CIVILIANS ${consumer.civilians} · SAVED ${consumer.rescued} · ${consumer.health}/${consumer.maxHealth} HP`;
   } else if (isObserverRound()) text = `${roundTag()} · ${time} · BODIES ${obsRound.burned}/${obsRound.total}${obsRound.sense ? ' · ' + obsRound.sense : ''}`;
+  else if (isUnseenRound()) text = `${roundTag()} · ${time} · UNSEEN ${unseen.monsters.length}`;
   else text = `${roundTag()} · ${time} · GHOSTS ${ghostsAlive()}`;
   if (clockEl.textContent !== text) clockEl.textContent = text;
 }
@@ -4195,6 +4292,7 @@ function nearestHostileDistance() {
   }
   if (consumer.active && !consumer.dead) consider(consumer.x, consumer.z);
   if (slime.active) { consider(slime.x, slime.z); for (const l of slime.littles) consider(l.x, l.z); }
+  for (const monster of unseen.monsters) consider(monster.x, monster.z);
   return nearest;
 }
 
@@ -4680,8 +4778,9 @@ function frame(now) {
   halo.angle = cameraViewActive ? 0.98 : 0.62; halo.distance = cameraViewActive ? 32 : 26; halo.color.copy(spot.color);
   spot.intensity = beam;
   halo.intensity = beam * 0.18;
-  updateMonsters(dt, inControl, beam > 1);
-  updateLabyrinth(inControl);
+  updateMonsters(dt, inControl && !finished, beam > 1);
+  updateUnseen(dt, inControl && !finished, cameraViewActive && beam > 1 && videoFlicker.amount < 0.8);
+  updateLabyrinth(inControl && !finished);
   const dreadAim = collective.active && ['appear', 'warning', 'dispersal', 'last'].includes(collective.phase) && flashlight.equipped;
   const aimOffset = dreadAim ? Math.sin(uTime.value * 2.3) * 0.38 + Math.sin(uTime.value * 0.53 + 1.4) * 0.16 : 0;
   spot.target.position.set(bobX * 4 + swayX + aimOffset + runFX, -0.35 + bobY * 5 + swayY + runFY + (dreadAim ? Math.sin(uTime.value * 1.7) * 0.13 : 0), -10);
@@ -4729,7 +4828,7 @@ function renderView(sc, cam, hands, sharp = false) {
   visionUniforms.uCore.value = core; visionUniforms.uStain.value = stain;
 }
 refreshChunks(true);
-// ?round=N starts at round N; ?monster=ghosts|observer|collective|choir|consumer|slime forces the monster for every round
+// ?round=N starts at round N; ?monster=<type> forces a type from ROUND.types for every round.
 startRound(Math.max(1, Math.min(99, Number(new URLSearchParams(location.search).get('round')) || 1)));
 updateClock();
 // ───────────────────────── title screen ─────────────────────────
@@ -4851,4 +4950,4 @@ if (LAB) buildLabDead();
 mountLeaderboard();
 
 // small debug handle for the console
-window.game = { title, damagePlayer, armor, wearArmor, endlessHurt, rollArmorTier, cutscenes, picker, pickOffers, drops, dropBundle, salvage, salvageIn, die(cause) { deathCause = cause; endGame(false); }, bench, GUN, applyKit, addParts, throwGrenade, grenades, craftGear, gearRecipes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, slime, SLIME, lake, eaten, slimeTravel, newWorld, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };
+window.game = { title, damagePlayer, armor, wearArmor, endlessHurt, rollArmorTier, cutscenes, picker, pickOffers, drops, dropBundle, salvage, salvageIn, die(cause) { deathCause = cause; endGame(false); }, bench, GUN, applyKit, addParts, throwGrenade, grenades, craftGear, gearRecipes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, slime, SLIME, unseen, unseenRustle, lake, eaten, slimeTravel, newWorld, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };

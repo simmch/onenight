@@ -161,7 +161,7 @@ export const LIGHT_TIERS = [
   { name: 'Flashlight', life: 1, recharge: 0, cost: 0, note: '' },
   { name: 'Flashlight Mk II', life: 1.5, recharge: 0, cost: 6, note: 'A battery lasts half as long again' },
   { name: 'Flashlight Mk III', life: 2, recharge: 1 / 240, cost: 10, note: 'A battery lasts twice as long, and creeps back up while the light is off' },
-  { name: 'Spectral video camera', icon: SPRITES.camera.url, sprite: SPRITES.camera.tex, life: 5, recharge: 0, cost: 35, camera: true, note: 'Replaces the flashlight with a green, grainy camera: five times the base battery life, a wider beam, and brief messages on walls that vanish after you look away' },
+  { name: 'Spectral video camera', icon: SPRITES.camera.url, sprite: SPRITES.camera.tex, life: 5, recharge: 0, cost: 35, camera: true, note: 'Five times the base battery life and a wider beam. Reveals fleeting messages on walls and silhouettes of the Unseen.' },
 ];
 export const RADAR_TIERS = [
   { name: 'Radar', range: 32, cost: 6, note: 'Finds bodies and the Choir. Only wakes in those rounds' },
