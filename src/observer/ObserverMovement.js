@@ -65,6 +65,7 @@ export class ObserverMovement {
         if (a < x0 || a > x1 || b < z0 || b > z1) continue;
         const n = idx(a, b);
         if (prev[n] !== -1 || !W.cellWalkable(a, b)) continue;
+        if (W.canStep && !W.canStep(i, j, a, b)) continue;
         prev[n] = c; q.push(n);
       }
     }

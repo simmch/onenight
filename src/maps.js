@@ -1,12 +1,17 @@
+import { createInteriorMap, INTERIOR_META } from './interiors/InteriorMaps.js';
+import { BAYOU_META, createBayou } from './world/Bayou.js';
+import { doorBounds, segmentHits } from './world/Cover.js';
+
 // World generation for every map. Pure data (no rendering, no audio), so it can be checked in Node.
 // A chunk is: props/glow [x, z, width, height, cell, sway, y] billboards (glow = self-lit), col [x, z, r] circle colliders,
 // aabb [x0, z0, x1, z1] wall colliders, boxes {layer: [x, y, z, sx, sy, sz, rotY]}, lights [x, y, z, strength, kind],
 // vents [x, z, period, phase], doors, houses [x0, z0, x1, z1] interiors, secrets (sealed cave walls) and one optional chest.
 
-export const MAP_NAMES = ['forest', 'rural', 'cave', 'snow', 'hell', 'labyrinth'];
+export const MAP_NAMES = ['forest', 'rural', 'cave', 'snow', 'hell', 'labyrinth', 'swamp', ...Object.keys(INTERIOR_META)];
 export const MAP_META = {
-  forest: { label: 'THE WOODS', fog: 0x000000, fogDensity: 0.04, ambient: [0x000000, 0], eerie: 1, weather: null,
-            ground: ['#4d5c36', '#566640', '#45522f', '#5e5a3c', '#4f5e3a', '#665c42'] },
+  forest: { label: 'THE FOG-SHROUDED PINES', fog: 0x030708, fogDensity: 0.075, beamRange: 24, ambient: [0x000000, 0], eerie: 1, weather: null,
+            ground: ['#394132', '#414637', '#34392d', '#423f30', '#36372d', '#4b4231'],
+            hint: 'Trees break sightlines. The logging winch opens a path across the old cut.' },
   rural:  { label: 'THE OUTSKIRTS', fog: 0x000000, fogDensity: 0.045, ambient: [0x000000, 0], eerie: 0.45, weather: 'rain',
             ground: ['#3d4a2e', '#46523a', '#38412b', '#4b4634', '#3f4a30', '#54503a'] },
   cave:   { label: 'THE CAVES', fog: 0x000000, fogDensity: 0.05, ambient: [0x000000, 0], eerie: 0, weather: 'drips', ceiling: 4.4,
@@ -17,10 +22,13 @@ export const MAP_META = {
             ground: ['#57302a', '#653a30', '#472620', '#70402e', '#532e27', '#7a462c'] },
   labyrinth: { label: 'THE LABYRINTH', fog: 0x000000, fogDensity: 0.05, ambient: [0x000000, 0], eerie: 0.7, weather: null, ceiling: 4.2,
             ground: ['#4c4844', '#57524c', '#423f3b', '#5e574e', '#4a4541', '#655c50'] },
+  swamp: BAYOU_META, ...INTERIOR_META,
 };
 export const SOLID = 0, FLOOR = 1, LIQUID = 2, SECRET = 3;
 
 export function createMap(name, env) {
+  if (Object.hasOwn(INTERIOR_META, name)) return createInteriorMap(name, env);
+  if (name === 'swamp') return createBayou(env);
   const { seed, S, atlas, hash2, mulberry, noise, chestChance } = env;
   const meta = MAP_META[name];
   const key = (a, b) => a + ',' + b;
@@ -59,28 +67,50 @@ export function createMap(name, env) {
   }
 
   // ───────────────────────── forest ─────────────────────────
+  const forestCover = new Map();
+  const forestDoor = { W: 4, H: 2.55, T: 0.16 };
   function forestChunk(cx, cz) {
     const c = blank(), r = rngFor(cx, cz, 1), ox = cx * S, oz = cz * S;
+    c.cover = []; c.controls = [];
     const add = (x, z, w, h, cell, sway, rad) => { c.props.push(x, z, w, h, cell, sway, 0); if (rad) c.col.push(x, z, rad); };
     const chest = c.chest = openChest(cx, cz);
     if (chest) c.col.push(chest.x, chest.z, 0.4);
     const nearChestSq = (x, z) => chest ? (x - chest.x) ** 2 + (z - chest.z) ** 2 : Infinity;
-    // trees: jittered 4 m grid, thinned by a low-frequency "clearing" field
-    const G = 4;
+    const G = S / 6;
     for (let i = 0; i < S / G; i++) for (let j = 0; j < S / G; j++) {
       const x = ox + (i + 0.15 + r() * 0.7) * G, z = oz + (j + 0.15 + r() * 0.7) * G;
-      const density = noise(x, z, 38, 2);                 // 0 = clearing, 1 = thicket
-      if (r() > 0.25 + density * 0.75) continue;
+      const density = noise(x, z, 31, 2);
+      if (r() > (density < 0.38 ? 0.035 : 0.34 + density * 0.72)) continue;
       if (x * x + z * z < 16) continue;                   // keep spawn clear
+      const loggingZ = Math.round((z + 15) / 80) * 80 - 15, loggingX = Math.round(x / 80) * 80;
+      if (Math.abs(x - loggingX) < 2.35 && Math.abs(z - loggingZ) < 13) continue;
       if (nearChestSq(x, z) < 6) continue;                // and leave a small clearing around a chest
-      const roll = r(), bleak = noise(x, z, 60, 3);
-      if (roll < 0.12 + bleak * 0.25) {
+      const roll = r();
+      if (roll < 0.1) {
         const h = 4 + r() * 3; add(x, z, h * 0.95, h, pick(r, 'dead'), 0.004, 0.3);
         if (hash2(Math.floor(x), Math.floor(z), 79) < 0.012) c.cameraWords.push({ id: `forest:${Math.floor(x)},${Math.floor(z)}:birthday`, x, y: 1.8, z: z + 0.18, rotation: 0, line: (hash2(x, z, 80) * 4) | 0, chalk: hash2(x, z, 81) > 0.52 });
       }
-      else if (roll < 0.55)           { const h = 6 + r() * 4;   add(x, z, h * 0.72, h, pick(r, 'fir'),  0.006, 0.35); }
-      else if (roll < 0.8)            { const h = 6 + r() * 4.5; add(x, z, h * 0.75, h, pick(r, 'pine'), 0.006, 0.35); }
-      else                            { const h = 5 + r() * 3;   add(x, z, h,        h, pick(r, 'oak'),  0.005, 0.4); }
+      else {
+        const h = 7 + r() * 6, width = 0.32 + h * 0.036;
+        add(x, z, h * 0.58, h, pick(r, roll < 0.52 ? 'fir' : 'pine'), 0.007, 0.52 * width);
+        box(c, 'bark', x, h * 0.19, z, width, h * 0.39, width, r() * Math.PI);
+        c.cover.push(x - width / 2, z - width / 2, x + width / 2, z + width / 2);
+      }
+    }
+    const gx = Math.round((ox + S / 2) / 80) * 80, gz = Math.round((oz + S / 2 + 15) / 80) * 80 - 15;
+    const owns = (x, z) => x >= ox && x < ox + S && z >= oz && z < oz + S;
+    const gate = `logging:${gx},${gz}`;
+    if (owns(gx, gz)) {
+      c.doors.push({ id: gate, x: gx, y: 0, z: gz, along: 'x', style: 'wood', mode: 'locked' });
+      for (const side of [-1, 1]) {
+        box(c, 'bark', gx + 2.08 * side, 1.6, gz, 0.29, 3.2, 0.3);
+        box(c, 'wood', gx + 4.55 * side, 1.03, gz, 5.1, 2.06, 0.16);
+        c.aabb.push(gx + 4.55 * side - 2.55, gz - 0.08, gx + 4.55 * side + 2.55, gz + 0.08);
+      }
+    }
+    if (owns(gx + 1.48, gz + 3)) {
+      c.controls.push({ target: gate, x: gx + 1.48, y: 0, z: gz + 3, label: 'Crank the logging winch' });
+      put(c, r, 'sign', gx + 1.8, gz + 4, 0.8, 1.68);
     }
     // stumps and boulders
     for (let n = 0; n < 3; n++) {
@@ -96,10 +126,26 @@ export function createMap(name, env) {
       if (r() > (patch - 0.32) * 2.6) continue;
       if (nearChestSq(x, z) < 3.2) continue;
       if (x * x + z * z < 5) continue;                    // none on top of the spawn point, where the cutscene camera lies
+      if (Math.abs(x) < 1.3 && z > -13 && z < 0) continue;
       const h = 0.8 + r() * 0.5 + patch * 0.6;
       add(x, z, 0.8 + r() * 0.5, h, pick(r, r() < 0.2 ? 'drygrass' : 'grass'), 0.05 + r() * 0.05, 0);
     }
+    if (forestCover.size >= 400 && !forestCover.has(key(cx, cz))) forestCover.clear();
+    forestCover.set(key(cx, cz), { cover: c.cover, aabb: c.aabb, doors: c.doors });
     return c;
+  }
+  function forestBlocked(x0, z0, x1, z1, opened, swallowed) {
+    for (let a = Math.floor((Math.min(x0, x1) - 8) / S); a <= Math.floor((Math.max(x0, x1) + 8) / S); a++) {
+      for (let b = Math.floor(Math.min(z0, z1) / S); b <= Math.floor(Math.max(z0, z1) / S); b++) {
+        const chunk = forestCover.get(key(a, b)) || forestChunk(a, b);
+        for (const list of [chunk.cover, chunk.aabb]) for (let i = 0; i < list.length; i += 4) {
+          if (swallowed?.((list[i] + list[i + 2]) / 2, (list[i + 1] + list[i + 3]) / 2)) continue;
+          if (segmentHits(x0, z0, x1, z1, list[i], list[i + 1], list[i + 2], list[i + 3])) return true;
+        }
+        if (chunk.doors.some((d) => !opened?.has(d.id) && !swallowed?.(d.x, d.z) && segmentHits(x0, z0, x1, z1, ...doorBounds(d, forestDoor)))) return true;
+      }
+    }
+    return false;
   }
 
   // ───────────────────────── snow mountain ─────────────────────────
@@ -611,11 +657,11 @@ export function createMap(name, env) {
     name, meta, label: meta.label, generateChunk, spawnChest,
     groundY: name === 'snow' ? snowY : () => 0,
     grid: isGrid ? { CELL, cellType, solidCell, cellOf, lo: cellLo, secretId, liquid: name === 'hell' ? 'lava' : 'water' } : null,
-    blocked: isGrid ? gridBlocked : () => false,
-    door: { W: DOOR_W, H: DOOR_H, T: WALL_T }, wallH: WALL_H,
+    blocked: isGrid ? gridBlocked : name === 'forest' ? forestBlocked : () => false,
+    door: name === 'forest' ? forestDoor : { W: DOOR_W, H: DOOR_H, T: WALL_T }, wallH: WALL_H,
     // the labyrinth only: its current maze, whether a point lies outside the outer wall, and a fresh maze on demand
     // a new seed has been set (hash2 reads it live): forget everything worked out under the old one
-    reseed() { blockCache.clear(); regions.clear(); },
+    reseed() { blockCache.clear(); regions.clear(); forestCover.clear(); },
     labyrinth: name === 'labyrinth' ? { state: lab, outside: labOutside, regen: () => setLab(lab.gen + 1) } : null,
   };
 }

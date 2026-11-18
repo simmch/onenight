@@ -123,14 +123,14 @@ export function createTitleScreen(kit) {
     if (what === 'play') play(); else show(what === 'back' ? null : what);
   });
   addEventListener('keydown', (e) => {
-    if (!state.active || leaving || e.target.tagName === 'INPUT') return;
+    if (!state.active || leaving || e.target.matches?.('input, select')) return;
     if (e.code === 'Escape' && !panel.hidden) show(null);
   });
   if (touch) {
     // A phone has no buttons here. The title is the middle of three pages: a tap plays, a swipe left brings the
     // instructions in from the right, a swipe right brings the leaderboard in from the left, and the opposite swipe goes back.
     let finger = null;
-    menu.addEventListener('pointerdown', (e) => { finger = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), field: !!(e.target.closest && e.target.closest('input, button, #board')) }; });
+    menu.addEventListener('pointerdown', (e) => { finger = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), field: !!(e.target.closest && e.target.closest('input, select, button, #board')) }; });
     const lift = (e) => {
       if (!finger || e.pointerId !== finger.id) return;
       const f = finger, dx = e.clientX - f.x, dy = e.clientY - f.y; finger = null;

@@ -9,6 +9,8 @@
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: "Courier New", monospace; color: #b9b3a3; }
   canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; }
   #hud { position: fixed; top: 14px; left: 16px; font-size: 14px; letter-spacing: 2px; opacity: .55; pointer-events: none; }
+  #facilityStatus:not([hidden]) { display: block; margin-top: 4px; font-size: 9px; color: #e0c293; text-shadow: 0 1px 2px #000, 0 0 5px #000; }
+  #locationName:not([hidden]) { display: block; margin-bottom: 6px; font-size: 11px; color: #e6dfc8; }
   #stamina { margin-top: 10px; width: 148px; height: 8px; border: 1px solid rgba(185,179,163,.45); background: rgba(0,0,0,.45); }
   #staminaFill { height: 100%; width: 100%; background: #b9b3a3; transform: scaleX(1); transform-origin: left center; }
   #stamina.low #staminaFill { background: #a36a55; }
@@ -90,6 +92,9 @@
   #menu .loadNote { display: none; font-size: 12px; letter-spacing: 4px; opacity: .6; }
   #menu.loading { background: #000; }
   #menu.loading nav { display: none; }
+  #menu.loading .mapSelect { display: none; }
+  .mapSelect { display: flex; flex-direction: column; gap: 6px; align-self: flex-start; margin: 0 0 12px; max-width: 100%; color: #b9b3a3; font-size: 11px; letter-spacing: 3px; }
+  .mapSelect select { max-width: 100%; padding: 8px 28px 8px 9px; border: 1px solid #756f61; border-radius: 0; background: #111311; color: #e6dfc8; font: 12px "Courier New", monospace; color-scheme: dark; }
   #menu.loading .loadNote { display: block; }
   #menuPanel { justify-content: flex-start; padding-top: clamp(14px, 7vh, 70px); padding-bottom: 16px; overflow: auto; }
   #menuPanel h2 { font-size: 20px; letter-spacing: 8px; font-weight: normal; color: #d8d2c0; margin: 0 0 12px; }
@@ -153,7 +158,7 @@
 <script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
 </head>
 <body>
-<div id="hud"><span id="clock"></span><div id="stamina" hidden><div id="staminaFill"></div></div><div id="sanity" hidden title="Hold Space while still to recover sanity. During the Collective that works even while they are close."><span>SANITY</span><div id="sanityBar"><div id="sanityFill"></div></div><span id="sanityState">CLEAR</span></div></div>
+<div id="hud"><span id="locationName" hidden></span><span id="clock"></span><span id="facilityStatus" hidden></span><div id="stamina" hidden><div id="staminaFill"></div></div><div id="sanity" hidden title="Hold Space while still to recover sanity. During the Collective that works even while they are close."><span>SANITY</span><div id="sanityBar"><div id="sanityFill"></div></div><span id="sanityState">CLEAR</span></div></div>
 <div id="status" hidden>
   <div class="row" id="shieldRow" hidden><img id="shieldIcon" alt="Armor"><div id="shield"><div id="shieldFill"></div></div></div>
   <div class="row"><span class="lbl">HP</span><div id="hp"><div id="hpFill"></div></div></div>
@@ -194,6 +199,9 @@
     <h1>ONE NIGHT</h1>
     <p class="tag">The dead keep coming. Survive as many rounds as you can.</p>
     <p class="loadNote">LOADING</p>
+    <label class="mapSelect" for="mapSelect">STARTING LOCATION
+      <select id="mapSelect"><option value="">RANDOM LOCATION</option></select>
+    </label>
     <div class="phone" id="menuGestures">
       <p class="big">TAP TO PLAY</p>
       <p>&larr; SWIPE LEFT &middot; INSTRUCTIONS</p>
@@ -211,17 +219,19 @@
     <div id="menuBoard" hidden></div>
     <div id="menuHow" hidden>
       <h3>THE NIGHT</h3>
-      <p>There is no last round. Each one sends something different, and each is survived differently. The words at the start of a round tell you what it wants. The board remembers how far you got.</p>
+      <p>There is no last round. Every three rounds you survive, the night moves you somewhere new with your gear. The words at the start of a round tell you what it wants. The board remembers how far you got.</p>
       <dl>
         <dt>Dark ghosts</dt><dd>Keep your light off them. Shoot them or outlast them.</dd>
         <dt>The Unseen</dt><dd>Watch for shaking branches and listen for screeches. A lit match or the Spectral video camera reveals their silhouettes. They watch for about ten seconds, then strike from behind. Turn to face them when you hear them close. Outlast them or kill them all.</dd>
         <dt>The Observer</dt><dd>Find the bodies and burn each one with a match, before dawn. Burning them wears on your mind.</dd>
-        <dt>The Collective</dt><dd>When they come, put your flashlight out, then get away from them. A match is allowed.</dd>
+        <dt>The Collective</dt><dd>When they come, switch off your flashlight and walk away slowly. Stay near working lights or use a match in the dark.</dd>
         <dt>The Choir</dt><dd>They hunt by sound. Go quietly, find the nest, kill what sings.</dd>
-        <dt>The Consumer</dt><dd>Get the civilians out and kill it before it grows.</dd>
-        <dt>The Slime</dt><dd>It eats what it rolls over and grows. Nothing you carry kills it. Follow the WATER arrow and lead it into the lake. Shoot the small ones before they cling to your legs.</dd>
+        <dt>The Consumer</dt><dd>Listen for its footsteps and ceiling scrapes. Get the civilians out and kill it before it grows.</dd>
+        <dt>The Slime</dt><dd>Follow WATER outdoors and lure it into the lake. In a building, follow DELUGE, pull the valve and lure it into the flooded bay. Shoot the small ones before they cling to your legs.</dd>
         <dt>The Labyrinth</dt><dd>Finding the way out wins the round, whatever is in there with you.</dd>
       </dl>
+      <h3>ROUTES AND SHORTCUTS</h3>
+      <p>Pull levers to raise locked gates. Hold the use control to move heavy doors or breach boarded apartments. Breaching doors and sprinting over debris can draw sound-hunting enemies. Watch for local warning sounds. Some routes have an emergency switch or a quieter bypass.</p>
       <h3>BETWEEN ROUNDS</h3>
       <p class="desk">Some rounds do not end quietly. If a key appears on the screen, do what it says at once: press it, hammer it, hold it, or touch nothing at all. Getting it wrong ends the night.</p>
       <p class="phone">Some rounds do not end quietly. The screen shows you a gesture, and you make it anywhere, at once: swipe the way the arrow points, tap as fast as you can, press and keep pressing, or lift every finger off the glass. Getting it wrong ends the night.</p>
@@ -230,7 +240,7 @@
       <p>Every chest has parts in it, some of the dead drop them, and each round you survive salvages a few. Spend them at the workbench: batteries, bullets, grenades, and rebuilds of the gun, the flashlight and the radar. The world waits while the bench is open. After the flashlight reaches Mk III, save 35 more parts to replace it with a video camera: its broad green beam lasts longer and can expose writing on walls once.</p>
       <p>Coloured chests can hold kits that fit an upgrade on the spot. The first one you open rebuilds the pistol into a gun that keeps firing for as long as you hold it.</p>
       <h3>ARMOR</h3>
-      <p>Armor is worn, not carried, and lays a shield over your health: it takes every hit first, and grows back once you have gone a few seconds unhurt. There are six kinds, from bone armor (a shield of 25) to the Choir carapace (170). The first three turn up through the early rounds; the heavy ones only once the night has gone on a long while. A better one goes on at once; one no better patches the shield you have.</p>
+      <p>Armor gives you a shield that takes every hit first and grows back after a few seconds unhurt. The workbench can craft and equip the next armor tier. Bone armor costs 28 parts and gives 25 shield points. Higher tiers cost more, up to 135 parts for the 170-point Choir carapace. Armor you find equips automatically if it is stronger and patches your shield otherwise.</p>
       <h3>YOUR MIND</h3>
       <p>Light on a horror wears your sanity down. Hold your breath while standing still to get it back, even when your mind is empty. A potion restores sanity too.</p>
       <div id="menuControls">
@@ -290,7 +300,7 @@
     <button type="button" class="desk" data-menu="back">BACK</button>
   </div>
 </div>
-<script>if (!/[?&](nointro|notitle)\b/.test(location.search)) { document.getElementById('overlay').style.display = 'none'; document.getElementById('menu').hidden = false; }</script>
+<script>if (!history.state?.oneNightTravel && !/[?&](nointro|notitle)\b/.test(location.search)) { document.getElementById('overlay').style.display = 'none'; document.getElementById('menu').hidden = false; }</script>
 <div id="touch">
   <button type="button" id="breath" aria-pressed="false">BREATH</button>
   <div id="stick" aria-hidden="true"><div id="stickKnob"></div></div>

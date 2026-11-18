@@ -187,7 +187,7 @@ export function createUnseenRound({ scene, world, hooks, rng = Math.random }) {
         m.state = 'stalk'; m.goal = null; m.retarget = 0;
       }
       if ((m.state === 'charge' || m.state === 'windup') && (!behind() || !clear())) retreat(m, player, dx, dz);
-      if (m.state === 'stalk' && elapsed >= UNSEEN.observe && nextAttack <= 0 && distance < 12 && behind() && clear()) {
+      if (m.state === 'stalk' && elapsed >= UNSEEN.observe && nextAttack <= 0 && distance < Math.max(4, 12 * (world.exposure?.(player.x, player.z) ?? 1)) && behind() && clear()) {
         m.state = 'charge'; m.motor.reset();
       }
       if (m.state === 'charge' && distance <= UNSEEN.reach && nextAttack <= 0) {

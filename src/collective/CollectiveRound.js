@@ -1,28 +1,32 @@
 import * as THREE from 'three';
+import { createRouteFixtures, nearPassage, planPassages } from './CollectiveRoutes.js';
 import { createCollectiveMaterials, buildChild, poseChild } from './CollectiveModel.js';
 
 // THE COLLECTIVE. Thirty of them. As the round begins they run in and take uneven places around you.
 // They approach and close around the player before the warning starts. The rest of the rules:
-//   1. never hurt one   2. the light cannot stay on   3. keep a match burning   4. walk away slowly.
+//   1. never hurt one   2. put away your flashlight   3. stay in light   4. walk away slowly.
 // Break any rule and all thirty come at once. Keep them and they drift off one by one, except the last.
 export const COLLECTIVE = {
   count: 30,
   spawn: [26, 38],            // metres out when they start running in
   ring: [3.6, 7.4],           // uneven places around you, still inside a match's reach
   close: 9,                   // close enough that the surround counts and the light timer starts
+  gatherLimit: 30,            // a wall or held beam cannot postpone the warning forever
   warn: 20,                   // seconds after the group closes in to put the light out
   separate: 10,               // then this long to move off before a match is required
   departDistance: 5.5,
   noLight: 5,                 // after that, how long you may stand unlit
   approach: 2.6,              // closer than this to one of them provokes them
   leaveEvery: [0.5, 1.1], leaveTo: 46, whisperSwitch: 10,
+  indoorLeaveLimit: 9, indoorPursuitLimit: 24,
   lastWatch: 5, lastNear: 4,  // the last one: how long it watches, how close is too close
-  escape: 32,                 // metres from where they surrounded you, once they have all gone
+  escape: 32, indoorEscape: 14, // how far to get from the ring once they have gone
   speed: { run: 5.0, crawl: 3.3, walk: 1.2, keep: 1.6, leave: 1.3 },
   crawlers: 0.4, capture: 1.15,
 };
 const rand = ([a, b]) => a + Math.random() * (b - a);
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
 // ctx: { scene, camera, world (the creature world from main.js), audio: { ctx, dest, walk, run, loud, whisper, hug },
 //        hooks: { capture(), say(text), provoked(reason) } }
@@ -35,7 +39,33 @@ export function createCollective(ctx) {
   const companionShade = new THREE.Color(0x45484a);
   const S = { phase: 'idle', t: 0, center: { x: 0, z: 0 }, warnT: 0, dark: 0, sinceOff: 0, nextLeave: 0, last: null, lastT: 0,
               aggroT: 0, reason: '', captureT: -1, escaped: false, whisper: null, whisperStage: 0, loudPlayed: false, warned: false, syncPhase: 0, field: null, fieldT: 0,
-              formation: 'ring', gapAngle: null, gapClosed: false, gapCommit: 0, burstClock: Math.random() * 1.8, lookAwayT: 7, distanceEcho: null, distanceEchoT: 0, distanceEchoNext: 9, companion: null, currentRound: 0, aimX: 0, aimY: 0, lastFlashlight: null, wasMoving: false, wasSurrounded: false, wasRunning: false, wasWalkingAway: false, walkAwayGap: 0, homeSaid: false, runWarned: false, runClearAt: 0, speechUntil: 0 };
+              formation: 'ring', gapAngle: null, gapClosed: false, routes: [], routeOrigin: null, palm: null, bell: null, burstClock: Math.random() * 1.8, lookAwayT: 7, distanceEcho: null, distanceEchoT: 0, distanceEchoNext: 9, companion: null, currentRound: 0, aimX: 0, aimY: 0, lastFlashlight: null, wasMoving: false, wasSurrounded: false, wasRunning: false, wasWalkingAway: false, walkAwayGap: 0, homeSaid: false, runWarned: false, runClearAt: 0, speechUntil: 0 };
+
+  const fixtures = createRouteFixtures(scene, world, {
+    say: hooks.say,
+    crank: hooks.crank,
+    ring(point) {
+      callAway(point);
+      hooks.bell();
+      hooks.say('At the bell, you hear more feet begin to move.');
+    },
+  });
+
+  function callAway(point) {
+    S.bell = point;
+    S.nextLeave = 0;
+    for (const k of kids) {
+      if (k.gone || k.mode !== 'leave') continue;
+      k.leaveDir = Math.atan2(point.x - k.x, point.z - k.z);
+      k.turnT = 0.35;
+    }
+  }
+
+  function usedLever(control) {
+    if (S.phase !== 'dispersal' || !S.routes.some(r => r.lever && r.lever.target === control.target)) return;
+    callAway(control);
+    hooks.say('The gate unlocks. The children turn toward the clank.');
+  }
 
   // ── sound: two of them echo the player's footsteps. Spoken lines use one voice so they never pile up. ──
   const voices = Array.from({ length: 2 }, () => {
@@ -131,9 +161,11 @@ export function createCollective(ctx) {
   function start() {
     clear();
     S.phase = 'gather'; S.t = 0; S.escaped = false; S.captureT = -1; S.reason = '';
-    S.warnT = 0; S.whisperStage = 0; S.loudPlayed = false; S.warned = false; S.gapClosed = false; S.gapCommit = 0; S.gapAngle = null; S.expected = C.count; S.burstClock = Math.random() * 1.8; S.lookAwayT = 5 + Math.random() * 4; S.distanceEchoNext = 7 + Math.random() * 8; S.lastFlashlight = null; S.wasMoving = false; S.wasSurrounded = false; S.wasRunning = false; S.wasWalkingAway = false; S.walkAwayGap = 0; S.homeSaid = false; S.runWarned = false; S.runClearAt = 0;
+    S.field = null; S.fieldT = 0; S.last = null; S.walked = 0;
+    S.warnT = 0; S.whisperStage = 0; S.loudPlayed = false; S.warned = false; S.gapClosed = false; S.gapAngle = null; S.routes = []; S.routeOrigin = null; S.palm = null; S.bell = null; S.expected = C.count; S.burstClock = Math.random() * 1.8; S.lookAwayT = 5 + Math.random() * 4; S.distanceEchoNext = 7 + Math.random() * 8; S.lastFlashlight = null; S.wasMoving = false; S.wasSurrounded = false; S.wasRunning = false; S.wasWalkingAway = false; S.walkAwayGap = 0; S.homeSaid = false; S.runWarned = false; S.runClearAt = 0;
   }
   function clear() {
+    fixtures.clear();
     for (const k of kids) { k.c.root.removeFromParent(); k.afterImage?.removeFromParent(); k.lagImage?.removeFromParent(); }
     kids.length = 0;
     S.distanceEcho?.removeFromParent(); S.distanceEcho = null; S.distanceEchoT = 0;
@@ -143,43 +175,48 @@ export function createCollective(ctx) {
     for (const v of voices) { voiceFor(v, null); v.gain.gain.value = 0; }
   }
   // uneven places around the player: random angles and distances, with just enough gap that they don't stack
-  function ringSlots(n, formation, yaw = 0) {
-    const angles = [], minGap = 0.09;
-    const crowdAngle = Math.random() * Math.PI * 2;
-    const gap = formation === 'blocked exit' ? wrap(crowdAngle + Math.PI) : crowdAngle;
-    S.gapAngle = ['ring', 'crescent', 'blocked exit'].includes(formation) ? gap : null;
+  function ringSlots(n, formation) {
+    const gap = Math.random() * Math.PI * 2;
+    S.gapAngle = gap;
+    const slots = [];
     for (let i = 0; i < n; i++) {
-      let a, guard = 0;
-      if (formation === 'crescent') a = gap + 0.62 + Math.random() * (Math.PI * 2 - 1.24);
-      else if (formation === 'ring') a = gap + 0.42 + Math.random() * (Math.PI * 2 - 0.84);
-      else if (formation === 'corridor') { const axis = crowdAngle; a = axis + (Math.random() < 0.5 ? -1 : 1) * (Math.PI / 2 + (Math.random() - 0.5) * 0.5); }
-      else if (formation === 'cross') { const arm = (Math.random() * 4) | 0; a = crowdAngle + arm * Math.PI / 2 + (Math.random() - 0.5) * 0.32; }
-      else if (formation === 'blocked exit') a = crowdAngle + (Math.random() - 0.5) * 1.05;
-      else a = Math.random() * Math.PI * 2;
-      while (guard++ < 28 && angles.some((b) => Math.abs(wrap(a - b)) < minGap)) {
-        if (formation === 'crescent') a = gap + 0.62 + Math.random() * (Math.PI * 2 - 1.24);
-        else if (formation === 'ring') a = gap + 0.42 + Math.random() * (Math.PI * 2 - 0.84);
-        else a = Math.random() * Math.PI * 2;
+      const fraction = (i + Math.random() * 0.7) / n;
+      let angle;
+      if (formation === 'corridor') angle = gap + (i % 2 ? 1 : -1) * (Math.PI / 2 + (fraction - 0.5) * 0.95);
+      else if (formation === 'cross') angle = gap + Math.PI / 4 + (i % 4) * Math.PI / 2 + (fraction - 0.5) * 0.38;
+      else if (formation === 'blocked exit') angle = gap + Math.PI + (fraction - 0.5) * 2.3;
+      else {
+        const opening = formation === 'crescent' ? 1.1 : 0.60;
+        angle = gap + opening + fraction * (Math.PI * 2 - 2 * opening);
       }
-      angles.push(a);
+      slots.push({ a: wrap(angle), r: rand(C.ring) + (Math.random() < 0.28 ? 1.1 : 0) });
     }
-    return angles.map((a) => ({ a, r: rand(C.ring) + (Math.random() < 0.28 ? 1.1 : 0) }));
+    return slots;
   }
   function appear(info) {
     const p = P(); S.center = { x: p.x, z: p.z }; S.phase = 'appear'; S.t = 0; S.warnT = 0;
     S.loudPlayed = false;
     S.formation = ['ring', 'crescent', 'corridor', 'cross', 'blocked exit'][(Math.random() * 5) | 0];
-    const slots = ringSlots(C.count, S.formation, info.yaw);
+    const slots = ringSlots(C.count, S.formation);
     const roles = ['crawler', 'backward', 'pivot', 'face', 'sentinel', 'peripheral'];
+    const approaches = world.grid ? buildField() : [];
+    const spawns = approaches.flatMap(([i, j, steps]) => {
+      const x = i * world.grid.CELL, z = j * world.grid.CELL;
+      const d = Math.hypot(x - p.x, z - p.z);
+      return steps >= 3 && steps <= 13 && d >= 9 && d <= C.spawn[1] && world.walkable(x, z, 0.35) ? [{ x, z }] : [];
+    });
+    const remaining = spawns.slice();
     for (let i = 0; i < C.count; i++) {
       const slot = slots[i];
       const from = i === C.count - 1 ? info.yaw : Math.random() * Math.PI * 2; // one waits behind the player, facing away
-      let spot = null;
-      for (let tries = 0; tries < 10 && !spot; tries++) {
+      const list = remaining.length ? remaining : spawns;
+      const index = Math.floor(Math.random() * list.length);
+      let spot = world.grid && list.length ? (remaining.length ? remaining.splice(index, 1)[0] : list[index]) : null;
+      for (let tries = 0; tries < 10 && !spot && !world.grid; tries++) {
         const d = rand(C.spawn), aa = from + (Math.random() - 0.5) * 1.4, x = p.x + Math.sin(aa) * d, z = p.z + Math.cos(aa) * d;
         if (world.walkable(x, z, 0.35)) spot = { x, z };
       }
-      if (!spot) spot = walkableNear(p.x + Math.sin(from) * 30, p.z + Math.cos(from) * 30, p.x, p.z);
+      if (!spot && !world.grid) spot = walkableNear(p.x + Math.sin(from) * 30, p.z + Math.cos(from) * 30, p.x, p.z);
       if (!spot || Math.hypot(spot.x - p.x, spot.z - p.z) < 8) continue;
       const c = buildChild(M, Math.random);
       scene.add(c.root);
@@ -198,6 +235,7 @@ export function createCollective(ctx) {
                   role, crawler: role === 'crawler', startsBack: i === C.count - 1, anchored: false, litFreeze: false, headYaw: 0, revealT: 0, decoyT: 0, gone: false, leaveDir: 0, turnT: 0, delay: Math.random() * 1.6, index: i });
     }
     S.expected = kids.length;
+    if (!S.expected) { S.phase = 'done'; S.escaped = true; return; }
     draw(0, info);
     hooks.say('Something is running toward you.');
   }
@@ -228,11 +266,48 @@ export function createCollective(ctx) {
       return;
     }
   }
+  function prepareRoutes() {
+    const origin = { x: P().x, z: P().z };
+    const routes = planPassages(world, origin, S.gapAngle, hooks.levers?.() || []);
+    const turn = routes.length ? wrap(routes[0].angle - S.gapAngle) : 0;
+    for (const k of kids) {
+      k.slot = wrap(k.slot + turn);
+      k.guide = null;
+      // Clear the walking lane itself, including the outside of a bend.
+      for (let i = 0; i < 24; i++) {
+        const offset = Math.ceil(i / 2) * (i % 2 ? 1 : -1) * Math.PI / 12;
+        const angle = k.slot + offset;
+        const x = origin.x + Math.sin(angle) * k.r, z = origin.z + Math.cos(angle) * k.r;
+        if (routes.some(r => nearPassage(x, z, origin, r)) || !world.walkable(x, z, 0.35)) continue;
+        k.slot = angle;
+        break;
+      }
+    }
+    for (const route of routes) {
+      const guides = kids.filter(k => !k.guide && k.role === 'ordinary').sort((a, b) =>
+        Math.abs(wrap(a.slot - route.angle)) - Math.abs(wrap(b.slot - route.angle)));
+      for (const k of guides.slice(0, 2)) k.guide = route;
+    }
+    S.routes = routes;
+    S.routeOrigin = origin;
+    if (routes.length) S.gapAngle = routes[0].angle;
+    fixtures.show(routes);
+  }
+
+  const formationTell = {
+    ring: 'A pair in the ring points through a gap.',
+    crescent: 'Follow the hands at the tips of the crescent.',
+    corridor: 'Look down the aisle between the two rows.',
+    cross: 'Hands point between the four ranks.',
+    'blocked exit': 'Two hands point away from the crowded exit.',
+  };
+
   function beginWarning() {
     if (S.loudPlayed) return;
     S.phase = 'warning'; S.warnT = 0; S.loudPlayed = true;
     once(ctx.audio.loud, 1.1);
-    hooks.say('Put the light out within 20 seconds.');
+    prepareRoutes();
+    hooks.say('Put your flashlight away within 20 seconds.');
   }
   function slotOf(k) {
     const x = S.center.x + Math.sin(k.slot) * k.r, z = S.center.z + Math.cos(k.slot) * k.r;
@@ -250,6 +325,7 @@ export function createCollective(ctx) {
 
   function provoke(reason) {
     if (S.phase === 'aggro' || S.phase === 'captured' || S.phase === 'idle' || S.phase === 'gather' || S.phase === 'done') return;
+    fixtures.clear();
     S.phase = 'aggro'; S.aggroT = 0; S.reason = reason;
     stopLoop(S.whisper, 0.15); S.whisper = null;
     once(ctx.audio.hug, 1.0, 0, true);                    // and then they come
@@ -259,15 +335,74 @@ export function createCollective(ctx) {
     }
     hooks.provoked(reason);
   }
-  // 20 seconds are up and the light is out: the quieter whisper, and 10 seconds to start walking away
+  // With the flashlight away, give the player ten seconds to clear the gathering.
   function beginDispersal(live, yaw = 0) {
     stopLoop(S.whisper, 0.3); S.whisper = null;
     if (S.whisperStage === 0) once(ctx.audio.whisper, 1.1);
     S.whisperStage = 1;
     S.phase = 'dispersal'; S.sinceOff = 0; S.dark = 0; S.warned = false; S.walkWarned = false; S.nextLeave = rand([1.2, 2]);
-    S.last = live[(Math.random() * live.length) | 0];
+    if (Math.hypot(P().x - S.routeOrigin.x, P().z - S.routeOrigin.z) > 2.5) prepareRoutes();
+    S.center = { x: P().x, z: P().z };
+    // Children stranded in a corridor yield first. The watcher stays outside the indicated path.
+    const inLane = k => S.routes.some(route => nearPassage(k.x, k.z, S.routeOrigin, route));
+    const visible = live.filter(k => !['peripheral', 'fragment', 'decoy'].includes(k.role));
+    const watchers = visible.filter(k => !inLane(k) && distTo(k) < C.close);
+    const candidates = visible.length ? visible : live;
+    S.last = watchers.length ? watchers[(Math.random() * watchers.length) | 0]
+      : candidates.reduce((nearest, k) => distTo(k) < distTo(nearest) ? k : nearest);
+    S.last.returnToRing = !watchers.length;
+    for (const k of live) {
+      k.inPassage = inLane(k);
+      if (k !== S.last && (k.mode === 'decoyHidden' || (k.inPassage && distTo(k) < 3.5))) {
+        depart(k, Math.atan2(k.x - P().x, k.z - P().z));
+      }
+    }
     S.leaveHeading = wrap(yaw);
-    hooks.say('Walk away. Slowly. Keep a match lit.');
+    S.escapeX = P().x; S.escapeZ = P().z; S.walked = 0;
+    hooks.say('Walk away slowly. Keep a match lit in the dark.');
+  }
+
+  function depart(k, heading) {
+    k.mode = 'leave';
+    k.leaveT = 0;
+    k.turnT = 0.45 + (k.index % 4) * 0.12;
+    k.leaveDir = heading;
+  }
+
+  function updatePassageChildren(dt, info, live) {
+    const p = P();
+    // Only offer a pause once there is ample time or space to clear the ring.
+    const fromRing = Math.hypot(p.x - S.center.x, p.z - S.center.z);
+    if (!S.palm && !S.bell && info.moving && !info.running && fromRing > 2 &&
+        (S.sinceOff < 5 || fromRing >= C.departDistance)) {
+      const direction = Math.hypot(info.moveX, info.moveZ);
+      const child = live.find(k => {
+        if (k === S.last || k.mode !== 'stand' || k.role !== 'ordinary') return false;
+        const dx = k.x - p.x, dz = k.z - p.z, d = Math.hypot(dx, dz);
+        return d >= 4.6 && d < 8.5 && dx * info.moveX + dz * info.moveZ > d * direction * 0.87
+          && !world.losBlocked(p.x, p.z, k.x, k.z, true);
+      });
+      if (child) {
+        S.palm = { child, waited: 0, age: 0 };
+        hooks.say('A child holds up one hand. Give it a moment or walk around.');
+      }
+    }
+    const palm = S.palm;
+    for (const k of live) {
+      if (!k.inPassage || k === S.last || k === palm?.child || k.mode !== 'stand' || distTo(k) > 4.4) continue;
+      depart(k, Math.atan2(k.x - p.x, k.z - p.z));
+    }
+    if (!palm || palm.child.mode !== 'stand') return;
+    palm.age += dt;
+    palm.waited = info.moving ? 0 : palm.waited + dt;
+    if (S.bell || palm.waited >= 0.8 || palm.age >= 4) {
+      depart(palm.child, Math.atan2(palm.child.x - p.x, palm.child.z - p.z) + Math.PI / 2);
+    }
+  }
+
+  function routeAction(dt, info) {
+    const available = info.available && ['dispersal', 'last'].includes(S.phase);
+    return fixtures.action(dt, P(), info.yaw, available, info.held, S.phase === 'dispersal');
   }
 
   function adoptLast(info) {
@@ -282,7 +417,12 @@ export function createCollective(ctx) {
     if (target) { k.x = target.x; k.z = target.z; }
     k.mode = 'companion'; k.gone = false; k.speed = 0; k.turnT = 0; k.c.root.visible = false;
     k.c.root.position.set(k.x, world.groundY(k.x, k.z), k.z);
-    const originals = new Map(), materials = new Set();
+    setCompanion(k, S.currentRound || info.round || 1, k.c.root.scale.x);
+  }
+
+  function setCompanion(k, bornRound, size) {
+    k.c.root.scale.setScalar(size);
+    const originals = new Map();
     k.c.root.traverse((o) => {
       if (!o.isMesh) return;
       if (!originals.has(o.material)) {
@@ -290,10 +430,20 @@ export function createCollective(ctx) {
         if (material.color) material.userData.collectiveBaseColor = material.color.clone();
         originals.set(o.material, material);
       }
-      o.material = originals.get(o.material); materials.add(o.material);
+      o.material = originals.get(o.material);
     });
-    S.companion = { k, materials: [...materials], bornRound: S.currentRound || info.round || 1, lastRound: S.currentRound || info.round || 1 };
+    S.companion = { k, materials: [...originals.values()], bornRound, lastRound: bornRound };
     hooks.mark?.();
+  }
+
+  function restoreCompanion(saved) {
+    if (!saved || S.companion) return;
+    const { x, z } = P();
+    const point = walkableNear(x + 5, z + 7, x, z) || { x, z };
+    const c = buildChild(M, Math.random);
+    c.root.visible = false;
+    scene.add(c.root);
+    setCompanion({ ...point, c, heading: 0, headYaw: 0, phase: 0, speed: 0 }, saved.bornRound, saved.size);
   }
 
   function updateFollower(dt, info) {
@@ -336,24 +486,31 @@ export function createCollective(ctx) {
   // A flow field over the cave grid toward the player, rebuilt twice a second, so thirty of them can find you through the tunnels.
   function buildField() {
     const G = world.grid, pi = G.cellOf(P().x), pj = G.cellOf(P().z), R = 22, W = 2 * R + 1, d = new Int16Array(W * W).fill(-1);
-    const idx = (i, j) => (j - pj + R) * W + (i - pi + R), q = [[pi, pj]]; d[idx(pi, pj)] = 0;
+    const idx = (i, j) => (j - pj + R) * W + (i - pi + R), q = [[pi, pj, 0]]; d[idx(pi, pj)] = 0;
     for (let h = 0; h < q.length; h++) {
-      const [i, j] = q[h];
-      for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const [i, j, steps] = q[h];
+      for (const [a, b] of DIRS) {
         const ni = i + a, nj = j + b;
         if (Math.abs(ni - pi) > R || Math.abs(nj - pj) > R || d[idx(ni, nj)] !== -1 || !world.cellWalkable(ni, nj)) continue;
-        d[idx(ni, nj)] = d[idx(i, j)] + 1; q.push([ni, nj]);
+        if (world.canStep && !world.canStep(i, j, ni, nj)) continue;
+        d[idx(ni, nj)] = steps + 1; q.push([ni, nj, steps + 1]);
       }
     }
     S.field = { d, pi, pj, R, W };
+    return q;
   }
   function fieldStep(k) {
     const F = S.field, G = world.grid; if (!F) return null;
     const ci = G.cellOf(k.x), cj = G.cellOf(k.z), at = (i, j) => (Math.abs(i - F.pi) > F.R || Math.abs(j - F.pj) > F.R) ? -1 : F.d[(j - F.pj + F.R) * F.W + (i - F.pi + F.R)];
     const here = at(ci, cj);
-    if (here <= 1) return null;                            // in the player's cell or next to it: go straight
+    if (here <= 0) return null;                            // in the player's cell: go straight
     let best = null, bd = here;
-    for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const v = at(ci + a, cj + b); if (v >= 0 && v < bd) { bd = v; best = { x: (ci + a) * G.CELL, z: (cj + b) * G.CELL }; } }
+    for (const [a, b] of DIRS) {
+      const ni = ci + a, nj = cj + b, v = at(ni, nj);
+      if (v >= 0 && v < bd && (!world.canStep || world.canStep(ci, cj, ni, nj))) {
+        bd = v; best = { x: ni * G.CELL, z: nj * G.CELL };
+      }
+    }
     return best;
   }
 
@@ -396,7 +553,18 @@ export function createCollective(ctx) {
     return !world.losBlocked(P().x, P().z, k.x, k.z);
   }
 
-  // info: { inControl, yaw, flashlightOn, matchLit, running, moving, clock }
+  function approachSlot(k, slot, speed, dt) {
+    const blocked = world.grid && world.losBlocked(k.x, k.z, slot.x, slot.z);
+    const waypoint = blocked ? fieldStep(k) : null;
+    moveKid(k, waypoint?.x ?? slot.x, waypoint?.z ?? slot.z, speed, dt);
+    return Math.hypot(slot.x - k.x, slot.z - k.z);
+  }
+
+  function capturePlayer() {
+    S.captureT = 0; S.phase = 'captured'; hooks.capture();
+  }
+
+  // info: { inControl, yaw, flashlightOn, matchLit, roomLit, running, moving, clock }
   function update(dt, info) {
     if (S.phase === 'idle' || S.phase === 'done') { stopGroupSteps(); return; }
     if (!info.inControl) { for (const v of voices) v.gain.gain.setTargetAtTime(0, ac.currentTime, 0.05); stopGroupSteps(); S.wasRunning = !!(info.running && info.moving); return; }
@@ -435,17 +603,29 @@ export function createCollective(ctx) {
       S.wasRunning = !!(info.running && info.moving);
       return;
     }
+    if (world.grid && ['appear', 'surround', 'warning', 'aggro'].includes(ph) && (S.fieldT -= dt) <= 0) {
+      buildField(); S.fieldT = 0.5;
+    }
 
     // ── the rules (once they have you surrounded) ──
     const live = kids.filter((k) => !k.gone);
-    let nearest = Infinity;                               // the ones still standing their ground; those walking off don't count
-    for (const k of live) if (k.mode !== 'leave' && k.mode !== 'vanish') nearest = Math.min(nearest, distTo(k));
-    const ruled = ph === 'dispersal' || ph === 'last';     // during the first 20 seconds only a shot sets them off
+    if (ph === 'dispersal') updatePassageChildren(dt, info, live);
+    const ruled = ph === 'dispersal' || ph === 'last';
     if (ruled) {
+      const stepX = p.x - S.escapeX, stepZ = p.z - S.escapeZ;
+      const limit = ph === 'last' ? C.lastNear : C.approach;
+      const approached = S.sinceOff > C.separate && live.some((k) => {
+        if (k.mode === 'leave' || k.mode === 'vanish' || distTo(k) >= limit) return false;
+        if (!world.grid) return true;
+        // A child that never reached the ring cannot block the player's escape down a corridor.
+        if (k !== S.last && Math.hypot(k.x - S.center.x, k.z - S.center.z) > C.close) return false;
+        const movingTowardChild = stepX * (k.x - p.x) + stepZ * (k.z - p.z) > 0.001;
+        return movingTowardChild && !world.losBlocked(p.x, p.z, k.x, k.z);
+      });
       const running = !!(info.running && info.moving);
       const runPunish = S.runWarned && ac.currentTime >= S.runClearAt;
       if (running && runPunish) provoke('ran');
-      else if ((ph === 'last' || S.sinceOff > C.separate) && nearest < (ph === 'last' ? C.lastNear : C.approach)) provoke('approached');   // the 10 seconds are for getting clear of them
+      else if (approached) provoke('approached');
       else if ((ph === 'dispersal' || ph === 'last') && info.flashlightOn) provoke('light');
     }
     if (ph === 'appear' || ph === 'surround' || ph === 'warning') {
@@ -464,18 +644,23 @@ export function createCollective(ctx) {
       }
     }
 
-    if (!S.gapClosed && S.gapAngle != null && info.moving && Number.isFinite(info.moveX) && Number.isFinite(info.moveZ)) {
-      const committed = Math.atan2(info.moveX, info.moveZ);
-      if (Math.abs(wrap(committed - S.gapAngle)) < 0.52) {
-        S.gapCommit += dt;
-      } else S.gapCommit = 0;
-      if (S.gapCommit >= 0.35) {
+    if (S.phase === 'dispersal' && !S.gapClosed) {
+      const route = S.routes.find(r => {
+        const dx = p.x - S.routeOrigin.x, dz = p.z - S.routeOrigin.z;
+        const forward = dx * Math.sin(r.angle) + dz * Math.cos(r.angle);
+        return forward > 2.5 && Math.hypot(dx, dz) >= C.departDistance && nearPassage(p.x, p.z, S.routeOrigin, r, 2.3);
+      });
+      if (route) {
         S.gapClosed = true;
-        const blocker = kids.filter((k) => !k.gone && !['sentinel', 'pivot'].includes(k.role)).sort((a, b) => Math.abs(wrap(a.slot - S.gapAngle)) - Math.abs(wrap(b.slot - S.gapAngle)))[0];
-        if (blocker) { blocker.slot = S.gapAngle; blocker.r = 5.2; blocker.anchored = false; }
-        hooks.say('The opening closes behind you.');
+        // Only close the opening once the player has physically crossed it.
+        const flank = live.filter(k => k.guide === route && k !== S.last && distTo(k) < 14);
+        const x = (S.routeOrigin.x + route.turn.x) / 2, z = (S.routeOrigin.z + route.turn.z) / 2;
+        for (const k of flank) depart(k, Math.atan2(x - k.x, z - k.z));
+        const cue = flank.length ? 'They close ranks behind you. ' : '';
+        const landmark = { lamp: 'A crank lamp waits ahead.', bell: 'A bell rope hangs ahead.', lever: 'A gate lever waits ahead.' };
+        hooks.say(cue + landmark[route.kind]);
       }
-    } else S.gapCommit = 0;
+    }
 
     // Starting to run gets told to stop. Surrounded with the light still on, starting to walk does too.
     const startedRunning = !!(info.running && info.moving) && !S.wasRunning;
@@ -498,7 +683,11 @@ export function createCollective(ctx) {
     if (ph === 'warning') {
       S.warnT += dt;
       if (S.whisperStage === 0 && S.warnT >= C.whisperSwitch && info.flashlightOn) { once(ctx.audio.whisper, 1.1); S.whisperStage = 1; }
-      if (S.warnT >= C.warn) {
+      if (S.warnT - dt < 3 && S.warnT >= 3 && S.routes.length) {
+        const tell = { bell: 'Lamp or bell. Watch their hands.', lever: 'Lamp or gate lever. Watch their hands.' }[S.routes[1]?.kind] || 'Look for the crank lamp.';
+        hooks.say(formationTell[S.formation] + ' ' + tell);
+      }
+      if (S.warnT >= C.warn || (S.warnT >= 4 && !info.flashlightOn && info.moving && !info.running)) {
         if (info.flashlightOn) { provoke('light'); draw(dt, info); return; }
         beginDispersal(live, info.yaw);
       }
@@ -509,47 +698,51 @@ export function createCollective(ctx) {
         if (k.mode === 'decoyHidden') continue;
         if (distTo(k) < C.close) near++;
         if (k.delay > 0) { k.delay -= dt; k.speed = 0; if (!k.litFreeze && !k.startsBack) faceTo(k, p.x, p.z, dt); continue; }
-        const s = slotOf(k), d = moveKid(k, s.x, s.z, k.role === 'crawler' ? SP.crawl : SP.run, dt);
+        const s = slotOf(k), d = approachSlot(k, s, k.role === 'crawler' ? SP.crawl : SP.run, dt);
         if ((k.role === 'sentinel' || k.role === 'pivot') && d < 0.55) k.anchored = true;
         if (k.role === 'face') faceTo(k, p.x, p.z, dt, 12);
         if (d < 1.15 && distTo(k) < C.close) held++;
       }
-      // the timer waits until they have actually closed in, not on a clock
-      if (S.expected && ((held >= S.expected - 5 && near >= S.expected - 6) || (S.t > 16 && near >= S.expected * 0.6))) beginWarning();
+      if (held >= S.expected - 5 && near >= S.expected - 6 || S.t > 16 && near >= S.expected * 0.6 || S.t >= C.gatherLimit) beginWarning();
     } else if (S.phase === 'surround' || S.phase === 'warning') {
       for (const k of kids) {
         if (k.mode === 'decoyHidden') continue;
-        const s = slotOf(k), d = moveKid(k, s.x, s.z, d2speed(k, s), dt);
+        const s = slotOf(k), d = approachSlot(k, s, d2speed(k, s), dt);
         if (d < 0.3 && !k.litFreeze && !['backward', 'pivot'].includes(k.role)) faceTo(k, p.x, p.z, dt, k.role === 'face' ? 12 : 1.7);
         if (k.role === 'face' && !k.litFreeze) faceTo(k, p.x, p.z, dt, 12);
         if (S.phase === 'warning' && !k.litFreeze) faceTo(k, p.x, p.z, dt, 0.8 + Math.min(1, S.warnT / C.warn) * 4.2);
       }
     } else if (S.phase === 'dispersal' || S.phase === 'last') {
-      // keep a match burning: a few seconds' grace, then darkness is not allowed to last
       S.sinceOff += dt;
-      if (S.phase === 'dispersal' && S.sinceOff > C.separate && Math.hypot(p.x - S.center.x, p.z - S.center.z) < C.departDistance) {
+      const moved = Math.hypot(p.x - S.escapeX, p.z - S.escapeZ);
+      if (moved < 1) S.walked += moved;
+      S.escapeX = p.x; S.escapeZ = p.z;
+      const fromRing = Math.hypot(p.x - S.center.x, p.z - S.center.z);
+      if (S.phase === 'dispersal' && S.sinceOff > C.separate && fromRing < C.departDistance) {
         provoke('approached'); draw(dt, info); return;
       }
-      if (S.phase === 'dispersal' && S.sinceOff > C.separate - 3 && Math.hypot(p.x - S.center.x, p.z - S.center.z) < C.departDistance && !S.walkWarned) {
+      if (S.phase === 'dispersal' && S.sinceOff > C.separate - 3 && fromRing < C.departDistance && !S.walkWarned) {
         S.walkWarned = true; hooks.say('Keep walking. Slowly.');
       }
-      if (info.matchLit) { S.dark = 0; S.warned = false; }
+      fixtures.update(dt, p);
+      if (info.matchLit || info.roomLit || fixtures.lit) { S.dark = 0; S.warned = false; }
       else if (S.sinceOff > C.separate) {
         S.dark += dt;
         if (S.dark > 1.5 && !S.warned) { S.warned = true; hooks.say('Strike a match (M). Don\'t let it go dark.'); }
-        if (S.dark > C.noLight) provoke('dark');
+        if (S.dark > C.noLight) { provoke('dark'); draw(dt, info); return; }
       }
       if (S.phase === 'dispersal') {
         S.nextLeave -= dt;
         if (S.nextLeave <= 0) {
           const stay = kids.filter((k) => k.mode === 'stand' || k.mode === 'arrive');
-          const pick = stay.filter((k) => k !== S.last);
+          const pick = stay.filter((k) => k !== S.last && k !== S.palm?.child);
           if (pick.length) {
             const k = pick[(Math.random() * pick.length) | 0];
-            k.mode = 'leave'; k.turnT = 0.45 + (k.index % 4) * 0.12; k.leaveDir = S.leaveHeading + (Math.random() - 0.5) * 0.12;
+            const direction = S.bell ? Math.atan2(S.bell.x - k.x, S.bell.z - k.z) : S.leaveHeading;
+            depart(k, direction + (Math.random() - 0.5) * 0.12);
             if (!S.homeSaid && ctx.audio.goHome) { once(ctx.audio.goHome, 1); S.homeSaid = true; }
           }
-          S.nextLeave = rand(C.leaveEvery);
+          S.nextLeave = S.bell ? rand([0.15, 0.35]) : rand(C.leaveEvery);
         }
         if (kids.every((k) => k === S.last || k.gone || (k.mode === 'leave' && distTo(k) > 16))) { S.phase = 'last'; S.lastT = 0; S.last.mode = 'watch'; }
       }
@@ -560,30 +753,41 @@ export function createCollective(ctx) {
           const tx = k.x + Math.sin(k.leaveDir) * 5, tz = k.z + Math.cos(k.leaveDir) * 5;
           moveKid(k, tx, tz, k.mode === 'vanish' ? 0.9 : SP.leave, dt);
           if (k.mode === 'vanish') k.vanishT += dt;
-          const out = k.mode === 'vanish' ? distTo(k) > 14 || k.vanishT > 6 : distTo(k) > C.leaveTo;      // the last one walks off into the dark
-          if (out) { k.gone = true; k.c.root.visible = false; }
+          else k.leaveT += dt;
+          const out = k.mode === 'vanish' ? distTo(k) > 14 || k.vanishT > 6
+            : distTo(k) > C.leaveTo || k.leaveT >= (world.grid ? C.indoorLeaveLimit : 22);
+          if (out) {
+            k.gone = true; k.c.root.visible = false;
+            if (k === S.last) hooks.say('Keep walking until you are clear.');
+          }
+        } else if (k === S.last && k.returnToRing && fromRing > 3 && Math.hypot(k.x - S.center.x, k.z - S.center.z) > 0.8) {
+          const waypoint = world.grid && world.losBlocked(k.x, k.z, S.center.x, S.center.z) ? fieldStep(k) : null;
+          moveKid(k, waypoint?.x ?? S.center.x, waypoint?.z ?? S.center.z, SP.keep, dt);
         } else if (k.mode === 'watch') { k.speed = 0; if (!k.litFreeze) faceTo(k, p.x, p.z, dt, 2); }
         else { k.speed = 0; if (!k.litFreeze) faceTo(k, p.x, p.z, dt); k.mode = 'stand'; }
       }
       if (S.phase === 'last' && S.last.mode === 'watch') {
         // the last one: motionless, facing you. Keep walking. After a while it turns and is gone. Nothing else.
         S.lastT += dt;
-        if (S.lastT >= C.lastWatch && distTo(S.last) > C.lastNear + 1) {
+        const lastOutOfSight = world.grid && world.losBlocked(p.x, p.z, S.last.x, S.last.z);
+        if (S.lastT >= C.lastWatch && (distTo(S.last) > C.lastNear + 1 || lastOutOfSight || (world.grid && S.lastT > 10))) {
           S.last.mode = 'vanish'; S.last.turnT = 2.2; S.last.leaveDir = Math.atan2(S.last.x - p.x, S.last.z - p.z); S.last.vanishT = 0;
         }
       }
-      if (S.phase === 'last' && S.last.gone && Math.hypot(p.x - S.center.x, p.z - S.center.z) >= C.escape) { S.phase = 'done'; S.escaped = true; adoptLast(info); }
+      const escapeDistance = world.grid ? C.indoorEscape : C.escape;
+      const clearOfRing = fromRing >= escapeDistance || !!world.grid && S.walked >= C.escape && fromRing >= C.departDistance * 1.5;
+      if (S.phase === 'last' && S.last.gone && clearOfRing) { S.phase = 'done'; S.escaped = true; adoptLast(info); }
     } else if (S.phase === 'aggro') {
       S.aggroT += dt;
-      if (world.grid && (S.fieldT -= dt) <= 0) { buildField(); S.fieldT = 0.5; }
       S.syncPhase += dt * 10;                              // in step with one another
       for (const k of kids) {
         if (S.aggroT < 1.3) { k.speed = 0; if (!k.litFreeze) faceTo(k, p.x, p.z, dt, 12); continue; }   // they all turn to you first
         const wp = world.grid ? fieldStep(k) : null;
         moveKid(k, wp ? wp.x : p.x, wp ? wp.z : p.z, k.crawler ? SP.crawl : SP.run, dt);
         if (distTo(k) < 3 && !k.litFreeze) faceTo(k, p.x, p.z, dt, 12);
-        if (distTo(k) < C.capture && S.captureT < 0) { S.captureT = 0; S.phase = 'captured'; hooks.capture(); }
+        if (distTo(k) < C.capture && S.captureT < 0 && (!world.grid || !world.losBlocked(p.x, p.z, k.x, k.z))) { capturePlayer(); break; }
       }
+      if (S.captureT < 0 && world.grid && S.aggroT >= C.indoorPursuitLimit) capturePlayer();
     } else if (S.phase === 'captured') {
       S.captureT += dt;
       for (const k of kids) { if (distTo(k) < 5) { moveKid(k, p.x, p.z, 4, dt); if (!k.litFreeze) faceTo(k, p.x, p.z, dt, 14); } }
@@ -611,7 +815,7 @@ export function createCollective(ctx) {
         if (k.role === 'crawler' && k.speed > 0.1) state = 'crawl';
         if (k.mode === 'watch') state = 'still';
         if (S.phase === 'captured' && distTo(k) < 2.5) state = 'lunge';
-        const sentinelStill = k.role === 'sentinel' && k.anchored && S.phase !== 'aggro' && S.phase !== 'captured';
+        const sentinelStill = k.role === 'sentinel' && k.anchored && ['appear', 'warning', 'surround'].includes(S.phase);
         if (sentinelStill) {
           if (!k.sentinelSettled) poseChild(k.c, 'still', t, k0);
           k.sentinelSettled = true;
@@ -620,8 +824,31 @@ export function createCollective(ctx) {
           poseChild(k.c, state, t, k0, { a: S.captureT / 0.4 });
           const toPlayer = Math.atan2(p.x - k.x, p.z - k.z);
           if (k.role === 'face') k.heading += wrap(toPlayer - k.heading) * Math.min(1, dt * 12);
+          let gaze = toPlayer;
+          if (S.phase === 'warning' && k.guide) {
+            gaze = Math.atan2(k.guide.turn.x - k.x, k.guide.turn.z - k.z);
+            k.heading += wrap(gaze - k.heading) * Math.min(1, dt * 8);
+            k.c.j.shR.rotation.x = -1.48;
+            // Point with the right hand. The left mimes the fixture at the end of the path.
+            const beat = k0 * 3;
+            if (k.guide.kind === 'lamp') {
+              k.c.j.shL.rotation.x = -0.72 + 0.25 * Math.cos(beat);
+              k.c.j.elL.rotation.x = -0.6;
+              k.c.j.shL.rotation.z = 0.28 * Math.sin(beat);
+            } else {
+              k.c.j.shL.rotation.x = -1.85 + 0.58 * Math.cos(beat);
+              k.c.j.elL.rotation.x = -0.75;
+            }
+          } else if (k === S.palm?.child && k.mode === 'stand') {
+            k.c.j.shL.rotation.x = -1.3;
+            k.c.j.elL.rotation.x = -1.4;
+          } else if (k.mode === 'watch' && S.phase === 'last') {
+            // The final child acknowledges a peaceful departure with a small wave.
+            k.c.j.shR.rotation.z = -2.45;
+            k.c.j.elR.rotation.z = -0.35 + Math.sin(S.lastT * 4) * 0.22;
+          }
           if (!(k.startsBack && k.delay > 0)) {
-            const wantedHead = Math.max(-1.35, Math.min(1.35, wrap(toPlayer - k.heading)));
+            const wantedHead = Math.max(-1.35, Math.min(1.35, wrap(gaze - k.heading)));
             k.headYaw += wrap(wantedHead - k.headYaw) * Math.min(1, dt * 12);
             k.c.j.head.rotation.y = k.headYaw;
           }
@@ -693,7 +920,8 @@ export function createCollective(ctx) {
   }
 
   return {
-    start, update, updateFollower, shot, provoke, clear, speak,
+    start, update, updateFollower, restoreCompanion, shot, provoke, clear, speak, routeAction, usedLever,
+    saveCompanion: () => S.companion && { bornRound: S.companion.bornRound, size: S.companion.k.c.root.scale.x },
     get phase() { return S.phase; },
     get active() { return S.phase !== 'idle'; },
     get encounter() { return S.phase !== 'idle' && S.phase !== 'gather' && S.phase !== 'done'; },

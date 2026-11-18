@@ -78,7 +78,7 @@ export function poseCorpse(c, spec, rng) {
   c.spec = spec;
 }
 
-// Where to put them. world: { grid, kind, ceiling, groundY, walkable(x, z, r), trees(x, z, radius) -> [[x, z, h, r]], cellWalkable(i, j), solidCell(i, j) }
+// Where to put them. world: { grid, kind, ceiling, roofY, groundY, walkable(x, z, r), trees(x, z, radius) -> [[x, z, h, r]], cellWalkable(i, j), solidCell(i, j) }
 // Three rings out from the player, spread round the compass, each body a different pose where the map allows.
 export function placeBodies(world, center, rng, count = 3) {
   const kinds = ['hang', 'ground', 'lean'].sort(() => rng() - 0.5);
@@ -126,6 +126,7 @@ function reachable(world, center) {                        // cells you can walk
     for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const a = i + di, b = j + dj, k = a + ',' + b;
       if (seen.has(k) || Math.abs(a - si) > 30 || Math.abs(b - sj) > 30 || !world.cellWalkable(a, b)) continue;
+      if (world.canStep && !world.canStep(i, j, a, b)) continue;
       seen.add(k); q.push([a, b]);
     }
   }
@@ -138,7 +139,12 @@ function onGrid(world, reach, kind, x, z, rng) {
     if (!reach.has(a + ',' + b)) continue;
     const cx = a * G.CELL, cz = b * G.CELL;
     if (kind === 'hang') {
-      if (world.ceiling) return { kind, x: cx + (rng() - 0.5) * 1.2, z: cz + (rng() - 0.5) * 1.2, facing: rng() * 6.28, anchorY: world.ceiling };
+      if (world.ceiling) {
+        const x = cx + (rng() - 0.5) * 1.2, z = cz + (rng() - 0.5) * 1.2;
+        if (world.roofY && !world.walkable(x, z, 0.35)) continue;
+        const anchorY = world.roofY ? world.roofY(x, z) - world.groundY(x, z) : world.ceiling;
+        return { kind, x, z, facing: rng() * 6.28, anchorY };
+      }
       const trees = world.trees(cx, cz, 2.5);            // hell has no ceiling, only the burnt trees
       if (trees.length) { const [tx, tz, th, tr] = trees[0]; return { kind, x: tx + tr + 0.75, z: tz, facing: rng() * 6.28, anchorY: Math.max(2.9, Math.min(3.3, th * 0.65)) }; }
       return null;

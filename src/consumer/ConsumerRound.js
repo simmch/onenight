@@ -7,6 +7,7 @@ const CIVILIAN_RESCUE_TIME = 4.2;
 const CIVILIAN_SPEED = [1.85, 2.55];
 const CONSUMER_MODEL = './assets/monsters/devil.glb';
 const CONSUMER_HEIGHT = 2.9; // metres from feet to crown once fitted
+const MAX_CONSUMER_SCALE = 3.3;
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
 function createCitizenFrames() {
@@ -38,14 +39,15 @@ const SOUL_MAT = new THREE.MeshStandardMaterial({ color: 0x1b0714, emissive: 0x7
 
 async function loadConsumerModel() {
   const gltf = await new GLTFLoader().loadAsync(CONSUMER_MODEL);
-  const root = new THREE.Group();
+  const root = new THREE.Group(), rig = new THREE.Group();
+  root.name = 'Consumer';
   const body = gltf.scene;
   const box = new THREE.Box3().setFromObject(body);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
-  body.position.sub(center);
-  body.position.y += size.y * 0.5;                         // feet on the ground
-  body.scale.setScalar(CONSUMER_HEIGHT / Math.max(0.001, size.y));
+  const fit = CONSUMER_HEIGHT / Math.max(0.001, size.y);
+  body.scale.multiplyScalar(fit);
+  body.position.set(-center.x * fit, -box.min.y * fit, -center.z * fit);
   body.traverse((o) => {
     if (!o.isMesh) return;
     o.castShadow = true;
@@ -58,18 +60,12 @@ async function loadConsumerModel() {
       }
     }
   });
-  root.add(body);
+  rig.add(body); root.add(rig);
+  const bounds = new THREE.Box3().setFromObject(rig);
   const distortion = new THREE.Mesh(new THREE.TorusGeometry(1, 0.035, 5, 32),
     new THREE.MeshBasicMaterial({ color: 0x751b35, transparent: true, opacity: 0, depthWrite: false }));
   distortion.rotation.x = -Math.PI / 2; distortion.position.y = 0.035; root.add(distortion);
-  // The mesh is rigid; empty joints keep the old animation hooks from throwing.
-  const joint = () => new THREE.Group();
-  return {
-    root, body, distortion, growthSacs: [],
-    parts: { torso: joint(), head: joint(), jaw: joint(), leftArm: joint(), rightArm: joint(), extraArm: joint(), drag: joint(), leftLeg: joint(), rightLeg: joint() },
-    mats: { eye: { emissiveIntensity: 1.6 }, raw: null },
-    hitT: 0,
-  };
+  return { root, body: rig, bounds, contactRadius: Math.max(size.x, size.z) * fit * 0.32, distortion, hitT: 0 };
 }
 
 export async function createConsumerRound({ scene, camera, world, hooks = {}, audio = {} } = {}) {
@@ -86,7 +82,7 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
   const S = {
     active: false, dead: false, round: 1, time: 0, pos: new THREE.Vector3(), heading: 0,
     health: 0, maxHealth: 0, eaten: 0, rescued: 0, killed: 0, sizeScale: 1,
-    surface: 'ground', surfaceT: 0, stompIn: 0.3, stompAge: -1, contactIn: 0,
+    surface: 'ground', surfaceT: 0, stompIn: 0.15, stompAge: -1,
     mode: 'stalk', target: null, eatT: 0, playerSound: null, footstepIn: 0.2, breathIn: 1.3,
     attackT: 0, attackHit: false, rescueId: null, rescueProgress: 0,
     vision: new THREE.Vector3(),
@@ -94,6 +90,19 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
   const aliveCitizens = () => citizens.reduce((n, c) => n + (c.alive ? 1 : 0), 0);
   const say = (text) => hooks.say?.(text);
   const ground = (x, z) => world.groundY(x, z);
+  const blocked = (ax, az, bx, bz) => !!world.losBlocked?.(ax, az, bx, bz);
+  const separated = (ax, az, bx, bz) => blocked(ax, az, bx, bz) ||
+    !!world.roofY && Math.abs(ground(ax, az) - ground(bx, bz)) > 1.25;
+  const bodyRadius = () => model.contactRadius * S.sizeScale;
+  const movementRadius = () => Math.min(1.1, 0.42 * S.sizeScale);
+  const scaleNow = () => Math.min(MAX_CONSUMER_SCALE, 1 + (S.round - 1) * 0.018 + S.eaten * 0.12);
+  const localRay = new THREE.Ray(), inverseRig = new THREE.Matrix4();
+  const paddedBounds = new THREE.Box3(), hitPoint = new THREE.Vector3();
+  function fitBody() {
+    const { x, z } = S.pos;
+    const roomHeight = world.roofY ? world.roofY(x, z) - ground(x, z) - 0.18 : Infinity;
+    model.root.scale.set(S.sizeScale, Math.min(S.sizeScale, roomHeight / CONSUMER_HEIGHT), S.sizeScale);
+  }
   const place = (x, z, min, max, rng, avoidX = NaN, avoidZ = NaN, avoidR = 0) => {
     for (let i = 0; i < 60; i++) {
       const a = rng() * Math.PI * 2, d = min + rng() * (max - min);
@@ -176,8 +185,8 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
   function grow() {
     const gain = 6 + S.round;
     S.maxHealth += gain; S.health = Math.min(S.maxHealth, S.health + gain);
-    S.sizeScale = Math.min(3.3, 1 + (S.round - 1) * 0.018 + S.eaten * 0.12);
-    model.root.scale.setScalar(S.sizeScale);
+    S.sizeScale = scaleNow();
+    fitBody();
     if (S.surface === 'ceiling' && S.sizeScale >= 1.25) { S.surface = 'ground'; S.surfaceT = 0.8; }
     model.distortion.material.opacity = Math.min(0.48, 0.14 + S.eaten * 0.035);
     hooks.growth?.(S.eaten, S.sizeScale, S.maxHealth);
@@ -215,7 +224,7 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
     for (const c of citizens) {
       if (!c.alive || c.beingEaten) continue;
       const dx = c.x - px, dz = c.z - pz, d = Math.hypot(dx, dz);
-      if (d > best || d < 1e-4 || (dx * fx + dz * fz) / d < -0.35) continue;
+      if (d > best || d < 1e-4 || (dx * fx + dz * fz) / d < -0.35 || separated(px, pz, c.x, c.z)) continue;
       best = d; target = c;
     }
     if (!target) return null;
@@ -228,7 +237,8 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
 
   function updateCitizens(dt, info) {
     const rescue = citizens.find((c) => c.alive && c.id === S.rescueId);
-    const rescueValid = rescue && info.interacting && !info.moving && Math.hypot(rescue.x - info.x, rescue.z - info.z) < 2.6 && Math.hypot(S.pos.x - info.x, S.pos.z - info.z) > 8;
+    const rescueValid = rescue && info.interacting && !info.moving && Math.hypot(rescue.x - info.x, rescue.z - info.z) < 2.6 &&
+      !separated(info.x, info.z, rescue.x, rescue.z) && Math.hypot(S.pos.x - info.x, S.pos.z - info.z) > 8;
     if (S.rescueId && !rescueValid) { S.rescueId = null; S.rescueProgress = 0; }
     if (rescueValid) {
       S.rescueProgress += dt; rescue.beingEaten = false;
@@ -277,39 +287,42 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
     const gy = ground(S.pos.x, S.pos.z);
     const targetY = S.surface === 'ground'
       ? gy
-      : gy + (world.ceiling || 4.8) - 0.08;
+      : (world.roofY?.(S.pos.x, S.pos.z) ?? gy + world.ceiling) - 0.08;
     const xTilt = S.surface === 'ceiling' ? Math.PI : 0;
     model.root.position.y += (targetY - model.root.position.y) * Math.min(1, dt * 3.2);
     model.root.rotation.x += wrap(xTilt - model.root.rotation.x) * Math.min(1, dt * 3.5);
     model.root.rotation.z += wrap(-model.root.rotation.z) * Math.min(1, dt * 3.5);
   }
 
-  function resolvePlayerContact(impact) {
-    if (S.surface !== 'ground') return false;
-    const player = camera.position, minDistance = 0.82 * S.sizeScale + 0.36;
+  function playerAtBodyHeight(player) {
+    const feet = model.root.position.y;
+    const head = feet + Math.cos(model.root.rotation.x) * CONSUMER_HEIGHT * model.root.scale.y;
+    return player.y > Math.min(feet, head) - 0.3 && player.y < Math.max(feet, head) + 0.3;
+  }
+
+  function resolvePlayerContact() {
+    const player = camera.position, minDistance = bodyRadius() + 0.36;
+    if (S.surface !== 'ground' || !playerAtBodyHeight(player)) return;
     let dx = player.x - S.pos.x, dz = player.z - S.pos.z, distance = Math.hypot(dx, dz);
-    if (distance >= minDistance) return false;
-    if (distance < 1e-4) { dx = Math.sin(S.heading); dz = Math.cos(S.heading); distance = 1; }
-    const nx = dx / distance, nz = dz / distance;
+    if (distance >= minDistance || blocked(player.x, player.z, S.pos.x, S.pos.z)) return;
+    const nx = distance > 1e-4 ? dx / distance : Math.sin(S.heading);
+    const nz = distance > 1e-4 ? dz / distance : Math.cos(S.heading);
     player.x += nx * (minDistance - distance); player.z += nz * (minDistance - distance);
     world.collide?.(player, 0.3);
     distance = Math.hypot(player.x - S.pos.x, player.z - S.pos.z);
     if (distance < minDistance) {
       S.pos.x -= nx * (minDistance - distance); S.pos.z -= nz * (minDistance - distance);
-      world.collide?.(S.pos, Math.min(1.35, 0.58 * S.sizeScale)); mover.reset();
+      world.collide?.(S.pos, movementRadius()); mover.reset();
     }
-    if (impact && S.contactIn <= 0) { hooks.bump?.(S.pos.x, S.pos.z, S.sizeScale); S.contactIn = 0.65; }
-    return true;
   }
 
-  function updateStomp(dt, moving) {
-    if (S.contactIn > 0) S.contactIn -= dt;
-    if (moving && S.surface === 'ground') {
+  function updateStomp(dt, speed) {
+    if (speed > 0.15) {
       S.stompIn -= dt;
       if (S.stompIn <= 0) {
-        S.stompIn = Math.max(0.64, 0.96 - S.sizeScale * 0.09);
-        S.stompAge = 0;
-        hooks.stomp?.(S.pos.x, S.pos.z, S.sizeScale);
+        S.stompIn = THREE.MathUtils.clamp((1.9 + S.sizeScale * 0.22) / speed, 0.3, 0.95);
+        if (S.surface === 'ground') S.stompAge = 0;
+        hooks.stomp?.(S.pos.x, S.pos.z, S.sizeScale, S.surface);
       }
     }
     if (S.stompAge >= 0) {
@@ -344,7 +357,7 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
       if (!victim) { wisp.visible = false; continue; }
       const t = (S.time * 0.46 + i / soulWisps.length) % 1;
       const arc = Math.sin(t * Math.PI);
-      const hx = S.pos.x, hy = model.root.position.y + 2.85 * S.sizeScale, hz = S.pos.z;
+      const hx = S.pos.x, hy = model.root.position.y + 2.85 * model.root.scale.y * Math.cos(model.root.rotation.x), hz = S.pos.z;
       wisp.visible = true;
       wisp.position.set(
         victim.x + (hx - victim.x) * t + Math.sin(S.time * 4 + i * 1.9) * arc * 0.55,
@@ -368,12 +381,13 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
     }
     if (!info.holdingBreath) {
       S.breathIn -= dt;
-      if (S.breathIn <= 0) { noise(px, pz, info.moving ? 0.27 : 0.2, 'breathing'); S.breathIn = 1.4; }
+      if (S.breathIn <= 0) { noise(px, pz, (info.moving ? 0.27 : 0.2) * (info.ambientNoise ?? 1), 'breathing'); S.breathIn = 1.4; }
     }
     updateCitizens(dt, { ...info, x: px, z: pz });
     let playerDistance = Math.hypot(px - S.pos.x, pz - S.pos.z);
-    let goal = null, speed = 0, state = 'stalk', moving = false;
-    const attackReach = 3.5 + S.sizeScale * 0.35;
+    let goal = null, speed = 0, state = 'stalk', moveSpeed = 0;
+    const attackReach = 2.9 + bodyRadius();
+    mover.r = movementRadius();
     let nearest = null, nearestDistance = 56;
     for (const c of citizens) {
       if (!c.alive) continue;
@@ -392,55 +406,68 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
       else if (S.attackT > 0.28) { state = 'lunge'; speed = 11.5 + S.eaten * 0.15; goal = { x: px, z: pz }; }
       else { state = 'recover'; speed = 0; }
       if (goal && speed > 0) {
-        mover.r = Math.min(1.1, 0.42 * S.sizeScale);
-        const moved = mover.update(dt, S.pos, goal, speed);
-        moving = moved.speed > 0.15;
+        moveSpeed = mover.update(dt, S.pos, goal, speed).speed;
       }
       playerDistance = Math.hypot(px - S.pos.x, pz - S.pos.z);
       if (!S.attackHit && S.attackT <= 0.28) {
         S.attackHit = true;
-        const hitRange = 2.6 + S.sizeScale * 0.7;
-        if (playerDistance <= hitRange) {
+        const hitRange = 2.35 + bodyRadius();
+        if (playerDistance <= hitRange && playerAtBodyHeight(camera.position) && !blocked(px, pz, S.pos.x, S.pos.z)) {
           hooks.damage?.(13 + S.eaten * 2.5 + Math.min(7, S.round), 'consumer');
           hooks.bump?.(S.pos.x, S.pos.z, S.sizeScale);
           if (!S.active) return;
         }
       }
       if (S.attackT <= 0) S.mode = 'stalk';
+    } else if (world.facility && S.playerSound?.age < 5 && S.playerSound.kind === 'chemical trail' && !S.target?.beingEaten) {
+      S.mode = 'trackTrail'; state = 'stalk';
+      const moved = mover.update(dt, S.pos, S.playerSound, 3.1);
+      S.heading = Math.atan2(moved.vx || S.playerSound.x - S.pos.x, moved.vz || S.playerSound.z - S.pos.z);
+      moveSpeed = moved.speed;
     } else if (mealNearby) {
       S.mode = 'feed'; S.target = nearest; state = 'scurry';
       goal = { x: nearest.x, z: nearest.z };
       speed = 3.15 + S.eaten * 0.1;
-      mover.r = Math.min(1.1, 0.42 * S.sizeScale);
       const moved = mover.update(dt, S.pos, goal, speed);
       S.heading = Math.atan2(moved.vx || goal.x - S.pos.x, moved.vz || goal.z - S.pos.z);
-      moving = moved.speed > 0.15;
-      if (Math.hypot(nearest.x - S.pos.x, nearest.z - S.pos.z) < 1.45) {
+      moveSpeed = moved.speed;
+      if (Math.hypot(nearest.x - S.pos.x, nearest.z - S.pos.z) < 1.45 && !separated(S.pos.x, S.pos.z, nearest.x, nearest.z)) {
         nearest.beingEaten = true; S.mode = 'consume'; S.eatT = 3.6; state = 'consume';
         say('The Consumer has someone. It is vulnerable while it feeds.');
       }
     } else {
       S.target = null; S.mode = 'huntPlayer';
-      if (playerDistance < attackReach) {
+      if (playerDistance < attackReach && !blocked(px, pz, S.pos.x, S.pos.z)) {
+        if (S.surface === 'ceiling' && !playerAtBodyHeight(camera.position)) { S.surface = 'ground'; S.surfaceT = 7; }
         S.mode = 'attackPlayer'; S.attackT = 1.08; S.attackHit = false; state = 'windup';
       } else {
         state = 'hunt'; goal = { x: px, z: pz };
+        if (world.facility) {
+          const identified = playerDistance < 7 ||
+            playerDistance < (world.exposure?.(px, pz) ?? 1) * 29 && !separated(px, pz, S.pos.x, S.pos.z);
+          if (identified) S.playerSeen = goal;
+          else goal = S.playerSound?.age < 5 ? S.playerSound : S.playerSeen;
+          if (!goal || Math.hypot(goal.x - S.pos.x, goal.z - S.pos.z) < 1.4) {
+            if (!S.search || Math.hypot(S.search.x - S.pos.x, S.search.z - S.pos.z) < 1.6) S.search = place(S.pos.x, S.pos.z, 4, 11, Math.random);
+            goal = S.search;
+            state = 'scurry';
+          }
+        }
         speed = Math.min(7.6, 4.35 + S.round * 0.08 + S.eaten * 0.18);
-        mover.r = Math.min(1.1, 0.42 * S.sizeScale);
         const moved = mover.update(dt, S.pos, goal, speed);
         S.heading = Math.atan2(moved.vx || goal.x - S.pos.x, moved.vz || goal.z - S.pos.z);
-        moving = moved.speed > 0.15;
+        moveSpeed = moved.speed;
       }
     }
     if (S.playerSound?.age > 11) S.playerSound = null;
-    if (S.mode !== 'attackPlayer') resolvePlayerContact(false);
-    playerDistance = Math.hypot(camera.position.x - S.pos.x, camera.position.z - S.pos.z);
-    updateStomp(dt, moving);
+    fitBody();
+    if (S.mode !== 'attackPlayer') resolvePlayerContact();
     model.root.visible = true;
     surfacePose(dt);
     model.root.position.x = S.pos.x; model.root.position.z = S.pos.z;
     model.root.rotation.y = S.heading;
-    animateModel(dt, state, speed);
+    animateModel(dt, state, moveSpeed);
+    updateStomp(dt, moveSpeed);
     updateSoulWisps();
   }
 
@@ -454,39 +481,65 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
       const t = cx * dir.x + cy * dir.y + cz * dir.z;
       if (t <= 0 || t >= bestT) return;
       const mx = cx - dir.x * t, my = cy - dir.y * t, mz = cz - dir.z * t;
-      if (mx * mx + mz * mz <= radius * radius && Math.abs(my) <= radius * 1.8 && !world.losBlocked?.(origin.x, origin.z, x, z)) {
+      if (mx * mx + mz * mz <= radius * radius && Math.abs(my) <= radius * 1.8 && !blocked(origin.x, origin.z, x, z)) {
         best = target; bestT = t; targetKind = kind;
       }
     };
     for (const c of citizens) if (c.alive) checkTarget(c, c.x, ground(c.x, c.z) + 0.8, c.z, spread * 0.72, 'citizen');
-    const consumerY = model.root.position.y + (S.surface === 'ceiling' ? -2.55 : 1.72) * S.sizeScale;
-    checkTarget(S, S.pos.x, consumerY, S.pos.z, spread * S.sizeScale * 0.9, 'consumer');
-    if (!best) return false;
-    const damage = options.damage ?? 1;
-    if (targetKind === 'citizen') removeCitizen(best, 'killed');
-    else {
-      S.health -= damage;
-      model.hitT = 0.35;
-      if (S.health <= 0) {
-        S.health = 0; S.dead = true; S.mode = 'dead'; model.root.visible = false;
-        say('The Consumer collapses. The survivors scatter into the dark.');
-      } else say(`The Consumer takes the hit. ${S.health}/${S.maxHealth}`);
+    // Testing in the rig's space keeps the volume fitted as the mesh leans, inverts and grows.
+    model.body.updateWorldMatrix(true, false);
+    inverseRig.copy(model.body.matrixWorld).invert();
+    localRay.set(origin, dir).applyMatrix4(inverseRig);
+    const bounds = options.melee ? paddedBounds.copy(model.bounds).expandByScalar(0.18 / S.sizeScale) : model.bounds;
+    const intersection = bounds.containsPoint(localRay.origin)
+      ? hitPoint.copy(localRay.origin)
+      : localRay.intersectBox(bounds, hitPoint);
+    if (intersection) {
+      hitPoint.applyMatrix4(model.body.matrixWorld);
+      if (origin.distanceTo(hitPoint) <= bestT && !blocked(origin.x, origin.z, hitPoint.x, hitPoint.z)) {
+        best = S; targetKind = 'consumer';
+      }
     }
+    if (!best) return false;
+    if (targetKind === 'citizen') removeCitizen(best, 'killed');
+    else hurt(options.damage ?? 1);
+    return true;
+  }
+
+  function hurt(damage) {
+    S.health = Math.max(0, S.health - damage);
+    model.hitT = 0.35;
+    if (S.health === 0) {
+      S.dead = true; S.mode = 'dead'; model.root.visible = false;
+      say('The Consumer collapses. The survivors scatter into the dark.');
+    } else say(`The Consumer takes the hit. ${S.health}/${S.maxHealth}`);
+  }
+
+  function blast(origin, radius) {
+    if (!S.active || S.dead) return false;
+    noise(origin.x, origin.z, 2.6, 'explosion');
+    model.body.updateWorldMatrix(true, false);
+    inverseRig.copy(model.body.matrixWorld).invert();
+    hitPoint.copy(origin).applyMatrix4(inverseRig);
+    model.bounds.clampPoint(hitPoint, hitPoint).applyMatrix4(model.body.matrixWorld);
+    if (origin.distanceToSquared(hitPoint) > radius * radius || blocked(origin.x, origin.z, hitPoint.x, hitPoint.z)) return false;
+    hurt(18);
     return true;
   }
 
   function start({ round = 1, center = camera.position } = {}) {
     stop(); S.active = true; S.dead = false; S.round = Math.max(1, round); S.time = 0;
-    S.eaten = S.rescued = S.killed = 0; S.sizeScale = 1 + (S.round - 1) * 0.018;
-    S.maxHealth = S.health = 18 + S.round * 3; S.playerSound = null; S.mode = 'stalk';
-    S.surface = 'ground'; S.surfaceT = 3 + Math.random() * 4; S.stompIn = 0.3; S.stompAge = -1; S.contactIn = 0; S.rescueId = null; S.rescueProgress = 0;
+    S.eaten = S.rescued = S.killed = 0; S.sizeScale = scaleNow();
+    S.maxHealth = S.health = 18 + S.round * 3; S.playerSound = S.playerSeen = S.search = null; S.mode = 'stalk';
+    S.surface = 'ground'; S.surfaceT = 3 + Math.random() * 4; S.stompIn = 0.15; S.stompAge = -1; S.rescueId = null; S.rescueProgress = 0;
     S.eatT = 0; S.attackT = 0; S.attackHit = false; S.footstepIn = 0.2; S.breathIn = 1.3;
     const rng = (() => { let a = ((S.round * 0x45d9f3b) ^ Math.floor(center.x * 43 + center.z * 61) ^ 0x71c09eab) | 0; return () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; })();
     const spawn = place(center.x, center.z, 26, 38, rng);
     S.pos.set(spawn.x, 0, spawn.z); S.heading = Math.atan2(center.x - spawn.x, center.z - spawn.z);
-    model.root.scale.setScalar(S.sizeScale); model.root.visible = true;
+    fitBody(); model.root.visible = true;
     model.root.position.set(S.pos.x, ground(S.pos.x, S.pos.z), S.pos.z);
     model.root.rotation.set(0, S.heading, 0);
+    model.body.position.y = 0; model.body.rotation.set(0, 0, 0); model.hitT = 0;
     model.distortion.material.opacity = 0; mover.reset();
     const count = CIVILIAN_COUNT + Math.min(10, S.round * 2);
     for (let i = 0; i < count; i++) {
@@ -505,7 +558,7 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
   }
 
   return {
-    start, stop, update, shot, noise, worldAction,
+    start, stop, update, shot, blast, noise, worldAction,
     get active() { return S.active; }, get dead() { return S.dead; },
     get health() { return S.health; }, get maxHealth() { return S.maxHealth; },
     get sizeScale() { return S.sizeScale; }, get mode() { return S.mode; }, get surface() { return S.surface; },

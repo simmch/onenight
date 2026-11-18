@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ObserverMovement } from '../observer/ObserverMovement.js';
 
 function makeSingerTexture() {
   const canvas = document.createElement('canvas');
@@ -123,6 +124,7 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
       guardA: a, guardR: radius,
       orbit: (rng() < 0.5 ? -1 : 1) * (role === 'roamer' ? 0.07 + rng() * 0.12 : 0.025 + rng() * 0.075),
       phase: rng() * Math.PI * 2, roleDelay: 0, speedFactor: 0.78 + rng() * 0.48,
+      mover: world.canStep ? new ObserverMovement(world, role === 'crawler' ? 0.3 : 0.28) : null,
     };
   }
 
@@ -246,7 +248,7 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
         // Snow, woods and the outskirts carry footsteps farther. The other maps stay as they are.
         const carry = info.environment === 'snow' || info.environment === 'forest' || info.environment === 'rural' ? 1.7 : 1;
         const volume = info.holdingBreath ? (info.running ? 0.14 : 0.045) : info.running ? 1 : 0.42;
-        noise(info.x, info.z, volume * surface * Math.max(0.5, 1 - clutter / 5) * carry, info.running ? 'running' : 'footstep');
+        noise(info.x, info.z, volume * surface * Math.max(0.5, 1 - clutter / 5) * carry * (info.surfaceNoise ?? 1), info.running ? 'running' : 'footstep');
         C.footstepIn = info.running ? Math.max(0.25, 0.46 - C.round * 0.012) : 0.72;
       }
     } else C.footstepIn = Math.min(C.footstepIn, 0.18);
@@ -254,7 +256,7 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
     if (!info.holdingBreath) {
       C.breathIn -= dt;
       if (C.breathIn <= 0) {
-        noise(info.x, info.z, info.running ? 0.52 : info.moving ? 0.32 : 0.2, 'breathing');
+        noise(info.x, info.z, (info.running ? 0.52 : info.moving ? 0.32 : 0.2) * (info.ambientNoise ?? 1), 'breathing');
         C.breathIn = Math.max(0.8, 1.6 - C.round * 0.06);
       }
     } else C.breathIn = 0.5;
@@ -262,7 +264,15 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
 
   function moveSinger(s, tx, tz, speed, dt) {
     let dx = tx - s.x, dz = tz - s.z, dist = Math.hypot(dx, dz);
-    if (dist < 0.15) return 0;
+    if (dist < 0.15 || speed <= 0) return 0;
+    if (s.mover && s.suspicion > 0.2 && world.cellWalkable(world.grid.cellOf(tx), world.grid.cellOf(tz))) {
+      const motion = s.mover.update(dt, s, { x: tx, z: tz }, speed);
+      if (motion.speed > 0.05) {
+        const sign = s.role === 'backstep' ? -1 : 1;
+        s.mesh.userData.faceX = motion.vx * sign; s.mesh.userData.faceZ = motion.vz * sign;
+      }
+      return motion.speed * dt;
+    }
     dx /= dist; dz /= dist;
     // The backward singer keeps its face pointed at the sound while stepping away from it.
     const backwards = s.role === 'backstep' && s.suspicion > 0.2;
@@ -349,7 +359,7 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
       else s.mesh.rotation.z = Math.sin(C.t * 2 + s.phase) * 0.025;
 
       const dPlayer = Math.hypot(px - s.x, pz - s.z);
-      if (dPlayer < 1.45 && s.suspicion > 0.25 && s.attackT <= 0) {
+      if (dPlayer < 1.45 && s.suspicion > 0.25 && s.attackT <= 0 && (!world.canStep || !world.losBlocked(px, pz, s.x, s.z))) {
         s.attackT = Math.max(0.62, 1.45 - C.round * 0.07);
         playAt(audio.queenAttack, s.x, s.z, 0.95);
         hooks.damage?.(7 + Math.min(9, C.round * 1.35), 'choir');

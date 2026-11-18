@@ -205,7 +205,7 @@ export function createWorkbench({ onOpen, onClose, recipes, craft, parts, gear, 
   const style = document.createElement('style'); style.textContent = CSS; document.head.append(style);
   const el = document.createElement('div'); el.id = 'bench'; el.hidden = true;
   el.innerHTML = `<div class="wbox"><div class="whead"><span>WORKBENCH</span><span class="wparts"><img alt="Parts" src="${SPRITES.parts.url}"><span class="wn"></span></span></div>` +
-    `<div class="wgear"></div><div class="wlist"></div><div class="wsay"></div><div class="wfoot">${touch ? 'SLIDE A ROW RIGHT » TO BUILD · SWIPE LEFT TO PUT THE BENCH AWAY' : '1–9 BUILD · C / ESC CLOSE'}</div></div>`;
+    `<div class="wgear"></div><div class="wlist"></div><div class="wsay"></div><div class="wfoot">${touch ? 'SLIDE A ROW RIGHT » TO BUILD · SWIPE LEFT TO PUT THE BENCH AWAY' : '1–9 / 0 BUILD · C / ESC CLOSE'}</div></div>`;
   if (touch) el.classList.add('touch');
   document.body.append(el);
   const list = el.querySelector('.wlist'), say = el.querySelector('.wsay');
@@ -217,7 +217,7 @@ export function createWorkbench({ onOpen, onClose, recipes, craft, parts, gear, 
     list.replaceChildren();
     rows.forEach((r, i) => {
       const b = document.createElement('button'); b.type = 'button'; b.className = 'wrow' + (r.ok ? '' : ' no');
-      const n = document.createElement('span'); n.className = 'n'; n.textContent = touch ? '»' : String(i + 1);
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = touch ? '»' : i < 10 ? String((i + 1) % 10) : '';
       const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = r.name;
       if (r.tag) { const t = document.createElement('i'); t.textContent = r.tag; nm.append(t); }
       const cost = document.createElement('span'); cost.className = 'wcost';
@@ -275,7 +275,7 @@ export function createWorkbench({ onOpen, onClose, recipes, craft, parts, gear, 
     e.stopImmediatePropagation(); e.preventDefault();
     if (e.repeat) return;
     if (e.code === 'KeyC' || e.code === 'Escape') api.close();
-    else if (/^(Digit|Numpad)[1-9]$/.test(e.code)) build(Number(e.code.slice(-1)) - 1);
+    else if (/^(Digit|Numpad)[0-9]$/.test(e.code)) build((Number(e.code.slice(-1)) || 10) - 1);
   }, true);
   addEventListener('keyup', (e) => { if (!el.hidden) e.stopImmediatePropagation(); }, true);
   return api;
@@ -363,12 +363,12 @@ export function createPicker({ onOpen, onClose, onTake, touch = false }) {
 // Tiers 1–3 are what turns up in rounds 1–20; tiers 4–6 take over past round 20, when the night has gone on too long.
 export const ARMOR_TIERS = [
   null,
-  { name: 'Bone armor', a: '', shield: 25, regen: 4, delay: 6, colors: ['#c9bfa3', '#9c927a', '#e6dfc8', '#6a6152'] },
-  { name: 'Leather coat', a: 'a ', shield: 40, regen: 5, delay: 6, colors: ['#7a5232', '#5a3b22', '#a87445', '#c9a94e'] },
-  { name: 'Chain vest', a: 'a ', shield: 60, regen: 6, delay: 5.5, colors: ['#8a8f9c', '#5b6070', '#c3c8d4', '#434a5c'] },
-  { name: 'Riot plate', a: '', shield: 90, regen: 8, delay: 5.5, colors: ['#3d4a5e', '#273041', '#6b7f9e', '#c9a94e'] },
-  { name: "Warden's mail", a: '', shield: 125, regen: 10, delay: 5, colors: ['#5d2a2a', '#3e1a1a', '#9c4a3a', '#d9b86c'] },
-  { name: 'Choir carapace', a: 'a ', shield: 170, regen: 13, delay: 4.5, colors: ['#2c2a3e', '#181726', '#6f5a9e', '#b8e0c8'] },
+  { name: 'Bone armor', a: '', shield: 25, regen: 4, delay: 6, cost: 28, colors: ['#c9bfa3', '#9c927a', '#e6dfc8', '#6a6152'] },
+  { name: 'Leather coat', a: 'a ', shield: 40, regen: 5, delay: 6, cost: 40, colors: ['#7a5232', '#5a3b22', '#a87445', '#c9a94e'] },
+  { name: 'Chain vest', a: 'a ', shield: 60, regen: 6, delay: 5.5, cost: 55, colors: ['#8a8f9c', '#5b6070', '#c3c8d4', '#434a5c'] },
+  { name: 'Riot plate', a: '', shield: 90, regen: 8, delay: 5.5, cost: 75, colors: ['#3d4a5e', '#273041', '#6b7f9e', '#c9a94e'] },
+  { name: "Warden's mail", a: '', shield: 125, regen: 10, delay: 5, cost: 100, colors: ['#5d2a2a', '#3e1a1a', '#9c4a3a', '#d9b86c'] },
+  { name: 'Choir carapace', a: 'a ', shield: 170, regen: 13, delay: 4.5, cost: 135, colors: ['#2c2a3e', '#181726', '#6f5a9e', '#b8e0c8'] },
 ];
 // how likely each tier is to be what turns up, by round (index = tier; 0 unused)
 export function armorWeights(round) {
