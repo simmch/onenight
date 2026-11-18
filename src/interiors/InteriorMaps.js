@@ -227,7 +227,9 @@ export function createInteriorMap(name, { S, atlas, hash2, chestChance }) {
     const dx = (a - i) * 0.04, dz = (b - j) * 0.04;
     return Math.abs(groundY(x - dx, z - dz) - groundY(x + dx, z + dz)) <= 0.6;
   }
-  const grid = { CELL, cellOf, lo, cellType: (i, j) => cell(i, j).type, solidCell, secretId: (i, j) => 'wall:' + id(i, j), liquid: 'water' };
+  const delugeWater = (i, j, opened) => !!opened?.has(trapId(i - wrap(i), j - wrap(j))) && cell(i, j).zone === 'deluge';
+  const cellType = (i, j, opened) => delugeWater(i, j, opened) ? LIQUID : cell(i, j).type;
+  const grid = { CELL, cellOf, lo, cellType, solidCell, secretId: (i, j) => 'wall:' + id(i, j), liquid: 'water' };
   const spawnChest = { id: 'interior:origin', tier: 'common', x: 0.62, z: -5.1 };
   const blockedCache = new Map();
 
@@ -401,10 +403,7 @@ export function createInteriorMap(name, { S, atlas, hash2, chestChance }) {
       const i = cellOf(x), j = Math.round((z / CELL - 9) / SIDE) * SIDE, a = i - wrap(i);
       return { id: trapId(a, j), x: a * CELL, z: (j + 9) * CELL, r: 5.6 };
     },
-    slimeWater: (x, z, opened) => {
-      const i = cellOf(x), j = cellOf(z);
-      return cell(i, j).zone === 'deluge' && opened.has(trapId(i - wrap(i), j - wrap(j)));
-    },
+    slimeWater: (x, z, opened) => delugeWater(cellOf(x), cellOf(z), opened),
     reseed() { blockedCache.clear(); districts.clear(); },
     darkAt: (x, z) => !poweredAt(cellOf(x), cellOf(z)),
   };

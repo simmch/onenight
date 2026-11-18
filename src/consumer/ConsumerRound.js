@@ -1,12 +1,10 @@
 import * as THREE from 'three';
-import { GLTFLoader } from '../../vendor/loaders/GLTFLoader.js';
 import { ObserverMovement } from '../observer/ObserverMovement.js';
+import { buildConsumerModel, CONSUMER_HEIGHT } from './ConsumerModel.js';
 
 const CIVILIAN_COUNT = 26;
 const CIVILIAN_RESCUE_TIME = 4.2;
 const CIVILIAN_SPEED = [1.85, 2.55];
-const CONSUMER_MODEL = './assets/monsters/devil.glb';
-const CONSUMER_HEIGHT = 2.9; // metres from feet to crown once fitted
 const MAX_CONSUMER_SCALE = 3.3;
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
@@ -37,40 +35,9 @@ const CITIZEN_GEO = new THREE.PlaneGeometry(0.78, 1.55);
 const SOUL_GEO = new THREE.IcosahedronGeometry(0.065, 0);
 const SOUL_MAT = new THREE.MeshStandardMaterial({ color: 0x1b0714, emissive: 0x70203c, emissiveIntensity: 1.1, roughness: 1 });
 
-async function loadConsumerModel() {
-  const gltf = await new GLTFLoader().loadAsync(CONSUMER_MODEL);
-  const root = new THREE.Group(), rig = new THREE.Group();
-  root.name = 'Consumer';
-  const body = gltf.scene;
-  const box = new THREE.Box3().setFromObject(body);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-  const fit = CONSUMER_HEIGHT / Math.max(0.001, size.y);
-  body.scale.multiplyScalar(fit);
-  body.position.set(-center.x * fit, -box.min.y * fit, -center.z * fit);
-  body.traverse((o) => {
-    if (!o.isMesh) return;
-    o.castShadow = true;
-    o.frustumCulled = false;
-    if (o.material) {
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      for (const m of mats) {
-        if (m.emissive) m.emissiveIntensity = Math.max(m.emissiveIntensity || 0, 0.35);
-        m.side = THREE.DoubleSide;
-      }
-    }
-  });
-  rig.add(body); root.add(rig);
-  const bounds = new THREE.Box3().setFromObject(rig);
-  const distortion = new THREE.Mesh(new THREE.TorusGeometry(1, 0.035, 5, 32),
-    new THREE.MeshBasicMaterial({ color: 0x751b35, transparent: true, opacity: 0, depthWrite: false }));
-  distortion.rotation.x = -Math.PI / 2; distortion.position.y = 0.035; root.add(distortion);
-  return { root, body: rig, bounds, contactRadius: Math.max(size.x, size.z) * fit * 0.32, distortion, hitT: 0 };
-}
-
-export async function createConsumerRound({ scene, camera, world, hooks = {}, audio = {} } = {}) {
-  const model = await loadConsumerModel();
-  model.root.visible = false; model.root.rotation.order = 'YXZ'; scene.add(model.root);
+export function createConsumerRound({ scene, camera, world, hooks = {}, audio = {} } = {}) {
+  const model = buildConsumerModel();
+  model.root.visible = false; scene.add(model.root);
   const mover = new ObserverMovement(world, 0.42);
   const citizens = [];
   const stompRing = new THREE.Mesh(new THREE.RingGeometry(0.45, 0.72, 32),
@@ -96,12 +63,11 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
   const bodyRadius = () => model.contactRadius * S.sizeScale;
   const movementRadius = () => Math.min(1.1, 0.42 * S.sizeScale);
   const scaleNow = () => Math.min(MAX_CONSUMER_SCALE, 1 + (S.round - 1) * 0.018 + S.eaten * 0.12);
-  const localRay = new THREE.Ray(), inverseRig = new THREE.Matrix4();
-  const paddedBounds = new THREE.Box3(), hitPoint = new THREE.Vector3();
+  const feedingMouth = new THREE.Vector3();
   function fitBody() {
     const { x, z } = S.pos;
     const roomHeight = world.roofY ? world.roofY(x, z) - ground(x, z) - 0.18 : Infinity;
-    model.root.scale.set(S.sizeScale, Math.min(S.sizeScale, roomHeight / CONSUMER_HEIGHT), S.sizeScale);
+    model.root.scale.set(S.sizeScale, Math.max(0.18, Math.min(S.sizeScale, roomHeight / CONSUMER_HEIGHT)), S.sizeScale);
   }
   const place = (x, z, min, max, rng, avoidX = NaN, avoidZ = NaN, avoidR = 0) => {
     for (let i = 0; i < 60; i++) {
@@ -336,28 +302,26 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
   }
 
   function animateModel(dt, state, speed) {
-    const gait = S.time * (state === 'hunt' || state === 'lunge' ? 9.5 : 6.2), moving = speed > 0.15 ? 1 : 0;
-    const consume = state === 'consume', windup = state === 'windup', lunge = state === 'lunge';
-    // The devil mesh is one piece: lean and bob the whole body instead of moving limbs.
-    const lean = consume ? 0.55 + Math.sin(S.time * 17) * 0.08 : windup ? -0.35 : lunge ? 0.45 : 0.08 + Math.sin(gait * 2) * 0.04 * moving;
-    const sway = Math.sin(gait) * 0.08 * moving + Math.sin(S.time * 1.8) * 0.03;
-    const hit = Math.max(0, model.hitT); if (model.hitT > 0) model.hitT = Math.max(0, model.hitT - dt);
-    model.body.rotation.x = lean;
-    model.body.rotation.z = sway + hit * Math.sin(S.time * 40) * 0.25;
-    model.body.position.y = Math.abs(Math.sin(gait)) * 0.05 * moving;
     const growth = Math.min(1, S.eaten / 9);
+    model.hitT = Math.max(0, model.hitT - dt);
+    model.pose(dt, {
+      time: S.time, state, speed, size: S.sizeScale, growth, hit: model.hitT,
+      ceiling: (1 - Math.cos(model.root.rotation.x)) * 0.5,
+      feed: state === 'consume' ? THREE.MathUtils.clamp(1 - S.eatT / 3.6, 0, 1) : 0,
+    });
     model.distortion.visible = S.surface === 'ground';
     model.distortion.material.opacity = growth * 0.4 * (0.82 + Math.sin(S.time * 2.3) * 0.18);
   }
 
   function updateSoulWisps() {
     const victim = S.mode === 'consume' && S.target?.alive ? S.target : null;
+    if (victim) model.mouth.getWorldPosition(feedingMouth);
     for (let i = 0; i < soulWisps.length; i++) {
       const wisp = soulWisps[i];
       if (!victim) { wisp.visible = false; continue; }
       const t = (S.time * 0.46 + i / soulWisps.length) % 1;
       const arc = Math.sin(t * Math.PI);
-      const hx = S.pos.x, hy = model.root.position.y + 2.85 * model.root.scale.y * Math.cos(model.root.rotation.x), hz = S.pos.z;
+      const { x: hx, y: hy, z: hz } = feedingMouth;
       wisp.visible = true;
       wisp.position.set(
         victim.x + (hx - victim.x) * t + Math.sin(S.time * 4 + i * 1.9) * arc * 0.55,
@@ -486,19 +450,9 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
       }
     };
     for (const c of citizens) if (c.alive) checkTarget(c, c.x, ground(c.x, c.z) + 0.8, c.z, spread * 0.72, 'citizen');
-    // Testing in the rig's space keeps the volume fitted as the mesh leans, inverts and grows.
-    model.body.updateWorldMatrix(true, false);
-    inverseRig.copy(model.body.matrixWorld).invert();
-    localRay.set(origin, dir).applyMatrix4(inverseRig);
-    const bounds = options.melee ? paddedBounds.copy(model.bounds).expandByScalar(0.18 / S.sizeScale) : model.bounds;
-    const intersection = bounds.containsPoint(localRay.origin)
-      ? hitPoint.copy(localRay.origin)
-      : localRay.intersectBox(bounds, hitPoint);
-    if (intersection) {
-      hitPoint.applyMatrix4(model.body.matrixWorld);
-      if (origin.distanceTo(hitPoint) <= bestT && !blocked(origin.x, origin.z, hitPoint.x, hitPoint.z)) {
-        best = S; targetKind = 'consumer';
-      }
+    const hitPoint = model.rayHit(origin, dir, bestT, options.melee ? 0.18 : 0.045);
+    if (hitPoint && !blocked(origin.x, origin.z, hitPoint.x, hitPoint.z)) {
+      best = S; targetKind = 'consumer';
     }
     if (!best) return false;
     if (targetKind === 'citizen') removeCitizen(best, 'killed');
@@ -518,10 +472,7 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
   function blast(origin, radius) {
     if (!S.active || S.dead) return false;
     noise(origin.x, origin.z, 2.6, 'explosion');
-    model.body.updateWorldMatrix(true, false);
-    inverseRig.copy(model.body.matrixWorld).invert();
-    hitPoint.copy(origin).applyMatrix4(inverseRig);
-    model.bounds.clampPoint(hitPoint, hitPoint).applyMatrix4(model.body.matrixWorld);
+    const hitPoint = model.closestPoint(origin);
     if (origin.distanceToSquared(hitPoint) > radius * radius || blocked(origin.x, origin.z, hitPoint.x, hitPoint.z)) return false;
     hurt(18);
     return true;
@@ -539,8 +490,9 @@ export async function createConsumerRound({ scene, camera, world, hooks = {}, au
     fitBody(); model.root.visible = true;
     model.root.position.set(S.pos.x, ground(S.pos.x, S.pos.z), S.pos.z);
     model.root.rotation.set(0, S.heading, 0);
-    model.body.position.y = 0; model.body.rotation.set(0, 0, 0); model.hitT = 0;
-    model.distortion.material.opacity = 0; mover.reset();
+    model.reset(); model.hitT = 0;
+    animateModel(0.05, 'stalk', 0);
+    mover.reset();
     const count = CIVILIAN_COUNT + Math.min(10, S.round * 2);
     for (let i = 0; i < count; i++) {
       const p = place(center.x, center.z, 12, 72, rng, spawn.x, spawn.z, 8);

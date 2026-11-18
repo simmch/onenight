@@ -322,7 +322,7 @@ export function createCutscenes(kit) {
         if (!stage) {
           stage = createTreadmill(kit, { seed: 0xc4a5e });
           runCam = new THREE.PerspectiveCamera(70, 1, 0.05, 120); runCam.rotation.order = 'YXZ';
-          runSpot = new THREE.SpotLight(0xfff0cc, 0, kit.L.distance, kit.L.angle, kit.L.penumbra, kit.L.decay);
+          runSpot = new THREE.SpotLight(0xffd49c, 0, kit.L.distance, kit.L.angle, kit.L.penumbra, kit.L.decay);
           runSpot.position.set(0.22, -0.18, 0); runSpot.target.position.set(0, -0.35, -10);
           runCam.add(runSpot, runSpot.target); stage.scene.add(runCam);
         }
@@ -550,7 +550,7 @@ export function createCutscenes(kit) {
         S.cam.y = -0.55 * knees - 0.85 * down; S.cam.pitch = -0.35 * knees * (1 - down) + 0.12 * down; S.cam.roll = 1.2 * down; S.cam.yaw = 0.25 * down;
         if (at(1.42)) { A.thump(110, 36, 0.4, 1); S.shake = 0.9; S.beam = 0; S.torch = false; }
         const [fx, fz] = spotAt(S.yaw0 + 0.5, 1.7);          // where the flashlight came to rest, still on
-        glow.color.set(0xfff0cc); glow.distance = 9; glow.position.set(fx, S.gy + 0.12, fz);
+        glow.color.set(0xffd49c); glow.distance = 9; glow.position.set(fx, S.gy + 0.12, fz);
         glow.intensity = t < 1.42 ? 0 : 3.2 * (t > 4.6 ? beamStutter(t) * Math.max(0, 1 - (t - 4.6) / 1.2) : 1);
         for (const b of [1.9, 2.9, 4.1, 5.6]) if (at(b)) beat();
         kit.hurt(0.85 * (1 - ease(1.5, 5, t)) + 0.15);
@@ -662,7 +662,7 @@ export function createCutscenes(kit) {
         S.cam.y = -0.2 * ease(0, 0.5, t) + S.top * ease(0.6, 7, t); S.cam.pitch = lerp(0, -1.45, ease(0.1, 1.6, t)); S.cam.yaw = t * 0.12; S.cam.roll = Math.sin(t * 0.5) * 0.04;
         S.beam = 0; S.torch = false;
         const [fx, fz] = spotAt(S.yaw0 + 1.2, 0.9);
-        glow.color.set(0xfff0cc); glow.distance = 13; glow.position.set(fx, S.gy + 0.3, fz); glow.intensity = 6 * (1 - ease(4.5, 7, t) * 0.8);
+        glow.color.set(0xffd49c); glow.distance = 13; glow.position.set(fx, S.gy + 0.3, fz); glow.intensity = 6 * (1 - ease(4.5, 7, t) * 0.8);
         if (S.cause === 'time') { S.dawned = true; kit.dawn(ease(2, 7, t)); }
         if (at(2.2)) caption(S.cause === 'time' ? 'The sun comes up without you.' : 'It gets quiet.', 3);
         if (at(6.2)) fade(1, 1.4);

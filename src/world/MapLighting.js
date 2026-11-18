@@ -1,15 +1,15 @@
 // The light records in generated chunks are [x, y, z, strength, kind].
 export const MAP_LIGHTS = [
-  { color: 0xff873e, range: 6.3, intensity: 13, decay: 1.65 },                         // flame
+  { color: 0xff7a30, range: 6.3, intensity: 13, decay: 1.65 },                         // flame
   { color: 0xf54d21, range: 5.6, intensity: 10, decay: 1.7 },                          // lava
-  { color: 0xa5c4ed, range: 5.4, intensity: 14, decay: 1.65 },                         // way out
+  { color: 0xe0c39a, range: 5.4, intensity: 14, decay: 1.65 },                         // way out
   { color: 0xfa6c46, range: 4.9, intensity: 28, decay: 1.65, spread: 0.46, drift: 1.2 }, // emergency
-  { color: 0xb6cec4, range: 5.6, intensity: 29, decay: 1.65, spread: 0.54, drift: 0.75 }, // fluorescent
-  { color: 0x97accf, range: 6.2, intensity: 19, decay: 1.6, spread: 0.4, drift: 1 },    // skylight
-  { color: 0x6abbbb, range: 5.2, intensity: 29, decay: 1.65, spread: 0.49, drift: 0.7 }, // bulkhead
-  { color: 0xe3d299, range: 5.0, intensity: 29, decay: 1.65, spread: 0.58, drift: 0.56 }, // backrooms
-  { color: 0x65bbad, range: 3.7, intensity: 15, decay: 1.6 },                          // aisle LEDs
-  { color: 0x7e9ec8, range: 5.9, intensity: 24, decay: 1.6, spread: 0.31, drift: 1.9 }, // moon through a window
+  { color: 0xe2d2a8, range: 5.6, intensity: 29, decay: 1.65, spread: 0.54, drift: 0.75 }, // fluorescent
+  { color: 0xc9b49a, range: 6.2, intensity: 19, decay: 1.6, spread: 0.4, drift: 1 },    // skylight
+  { color: 0xa8b892, range: 5.2, intensity: 29, decay: 1.65, spread: 0.49, drift: 0.7 }, // bulkhead
+  { color: 0xf0cf88, range: 5.0, intensity: 29, decay: 1.65, spread: 0.58, drift: 0.56 }, // backrooms
+  { color: 0xb8b884, range: 3.7, intensity: 15, decay: 1.6 },                          // aisle LEDs
+  { color: 0xb4a69a, range: 5.9, intensity: 24, decay: 1.6, spread: 0.31, drift: 1.9 }, // moon through a window
 ];
 const ease = (a, b, x) => {
   const k = Math.max(0, Math.min(1, (x - a) / (b - a)));

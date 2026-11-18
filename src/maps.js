@@ -9,14 +9,14 @@ import { doorBounds, segmentHits } from './world/Cover.js';
 
 export const MAP_NAMES = ['forest', 'rural', 'cave', 'snow', 'hell', 'labyrinth', 'swamp', ...Object.keys(INTERIOR_META)];
 export const MAP_META = {
-  forest: { label: 'THE FOG-SHROUDED PINES', fog: 0x030708, fogDensity: 0.075, beamRange: 24, ambient: [0x000000, 0], eerie: 1, weather: null,
+  forest: { label: 'THE FOG-SHROUDED PINES', fog: 0x080504, fogDensity: 0.075, beamRange: 24, ambient: [0x000000, 0], eerie: 1, weather: null,
             ground: ['#394132', '#414637', '#34392d', '#423f30', '#36372d', '#4b4231'],
             hint: 'Trees break sightlines. The logging winch opens a path across the old cut.' },
   rural:  { label: 'THE OUTSKIRTS', fog: 0x000000, fogDensity: 0.045, ambient: [0x000000, 0], eerie: 0.45, weather: 'rain',
             ground: ['#3d4a2e', '#46523a', '#38412b', '#4b4634', '#3f4a30', '#54503a'] },
   cave:   { label: 'THE CAVES', fog: 0x000000, fogDensity: 0.05, ambient: [0x000000, 0], eerie: 0, weather: 'drips', ceiling: 4.4,
             ground: ['#55555e', '#62616b', '#4b4b55', '#6a655c', '#585762', '#726b62'] },
-  snow:   { label: 'THE MOUNTAIN', fog: 0x04060a, fogDensity: 0.05, ambient: [0x000000, 0], eerie: 0.35, weather: 'snow', terrain: true,
+  snow:   { label: 'THE MOUNTAIN', fog: 0x090607, fogDensity: 0.05, ambient: [0x000000, 0], eerie: 0.35, weather: 'snow', terrain: true,
             ground: ['#cfd9e6', '#dfe7f0', '#c2cedd', '#e9eff5', '#d5deea', '#b9c6d8'] },
   hell:   { label: 'HELL', fog: 0x0b0100, fogDensity: 0.042, ambient: [0xff3a14, 0.12], eerie: 0, weather: 'embers',
             ground: ['#57302a', '#653a30', '#472620', '#70402e', '#532e27', '#7a462c'] },

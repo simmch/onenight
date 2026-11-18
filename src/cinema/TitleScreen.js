@@ -26,9 +26,9 @@ export function createTitleScreen(kit) {
   stage.scene.add(body.root);
   const torch = new THREE.Mesh(BOX, new THREE.MeshLambertMaterial({ color: 0x2a2a2e }));
   torch.scale.set(0.05, 0.05, 0.22); torch.position.set(0, -0.36, 0.08); j.elR.add(torch);
-  const lens = new THREE.Mesh(BOX, new THREE.MeshBasicMaterial({ color: 0xfff0cc }));
+  const lens = new THREE.Mesh(BOX, new THREE.MeshBasicMaterial({ color: 0xffd49c }));
   lens.scale.set(0.045, 0.045, 0.02); lens.position.set(0, -0.36, 0.2); j.elR.add(lens);
-  const beam = new THREE.SpotLight(0xfff0cc, 0, 42, 0.42, 0.5, 1.35);
+  const beam = new THREE.SpotLight(0xffd49c, 0, 42, 0.42, 0.5, 1.35);
   beam.position.set(-0.26, 1.12, 0.5); body.root.add(beam, beam.target);
   // the beam itself, hanging in the night air: a faint cone that fades toward its far end
   const CONE = 7, coneGeo = new THREE.ConeGeometry(Math.tan(0.2) * CONE, CONE, 20, 1, true);
@@ -36,7 +36,7 @@ export function createTitleScreen(kit) {
   const shade = new Float32Array(coneGeo.attributes.position.count * 3);
   for (let i = 0; i < shade.length / 3; i++) shade[i * 3] = shade[i * 3 + 1] = shade[i * 3 + 2] = Math.pow(1 - coneGeo.attributes.position.getZ(i) / CONE, 1.6);
   coneGeo.setAttribute('color', new THREE.BufferAttribute(shade, 3));
-  const cone = new THREE.Mesh(coneGeo, new THREE.MeshBasicMaterial({ color: 0xfff0cc, vertexColors: true, transparent: true, opacity: 0.07, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }));
+  const cone = new THREE.Mesh(coneGeo, new THREE.MeshBasicMaterial({ color: 0xffd49c, vertexColors: true, transparent: true, opacity: 0.07, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }));
   cone.position.copy(beam.position); body.root.add(cone);
   const aim = new THREE.Vector3();
   const spill = new THREE.PointLight(0xffe2b0, 0, 5.5, 2);                 // what comes back off the ground onto them

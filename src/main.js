@@ -24,13 +24,14 @@ import { createLorePickups } from './lore/pickups.js';
 import { mountLeaderboard, offerScore } from './leaderboard.js';
 import { createTitleScreen } from './cinema/TitleScreen.js';
 import { createCutscenes } from './cinema/Cutscenes.js';
+import { createMapFall } from './cinema/MapFall.js';
 import { GUN_TIERS, LIGHT_TIERS, RADAR_TIERS, COSTS, PARTS_IN_CHEST, SPRITES, createWorkbench, createPicker, ARMOR_TIERS, ARMOR_ICONS, rollArmorTier } from './gear/upgrades.js';
 
-// A same-tab reload lets the destination build its own geometry, weather and audio from scratch.
-// The checkpoint belongs to this history entry, and the URL still describes how to start a fresh run.
+// The checkpoint carries the run and the fall across the destination's fresh scene load.
 const TRAVEL_STATE = 'oneNightTravel';
 const arriving = history.state?.[TRAVEL_STATE];
 const arrival = arriving && MAP_NAMES.includes(arriving.map) && arriving.run ? arriving : null;
+let mapFall = null;
 
 // ───────────────────────── config ─────────────────────────
 const CFG = {
@@ -51,7 +52,7 @@ const CFG = {
   chestReach: 2.2,
 };
 console.log('seed', CFG.seed);
-// The title location selector and URL supply the opening map only.
+// A ?map= link still opens that place. Otherwise the first night is a random one.
 const requestedMap = new URLSearchParams(location.search).get('map');
 const MAP_NAME = arrival?.map ?? (MAP_NAMES.includes(requestedMap) ? requestedMap : MAP_NAMES[(Math.random() * MAP_NAMES.length) | 0]);
 const META = MAP_META[MAP_NAME];
@@ -101,7 +102,7 @@ scene.fog = new THREE.FogExp2(META.fog, META.fogDensity);
 // NOTE: no ambient light on purpose (hell has a faint red glow). The flashlight is the only light you can rely on.
 scene.add(new THREE.AmbientLight(META.ambient[0], META.ambient[1]));
 // Dusk: some Observer rounds on the open maps start before full dark. A cool sky light, a dim violet haze, thinner fog.
-const DUSK = { maps: ['rural', 'snow'], chance: 0.4, sky: 0x9a8fc8, ground: 0x3a2a20, intensity: 1.8, fog: 0x2e2a40, fogDensity: 0.028 };
+const DUSK = { maps: ['rural', 'snow'], chance: 0.4, sky: 0xc89a7a, ground: 0x3a2618, intensity: 1.8, fog: 0x3a2a26, fogDensity: 0.028 };
 const duskLight = new THREE.HemisphereLight(DUSK.sky, DUSK.ground, 0);
 scene.add(duskLight);
 let isDusk = false;
@@ -138,19 +139,22 @@ addEventListener('resize', resize); resize();
 
 // ───────────────────────── flashlight ─────────────────────────
 const L = { ...CFG.light, distance: META.beamRange ?? CFG.light.distance };
-const spot = new THREE.SpotLight(0xfff0cc, 0, L.distance, L.angle, L.penumbra, L.decay);
+const spot = new THREE.SpotLight(0xffd49c, 0, L.distance, L.angle, L.penumbra, L.decay);
 spot.position.set(0.22, -0.18, 0);
 spot.target.position.set(0, -0.35, -10);
 camera.add(spot, spot.target);
 // Dim wider cone so the fringe around the beam has something soft to show.
-const halo = new THREE.SpotLight(0xfff0cc, 0, 26, 0.62, 1, 1.8);
+const halo = new THREE.SpotLight(0xffd49c, 0, 26, 0.62, 1, 1.8);
 halo.position.copy(spot.position);
 halo.target = spot.target;
 camera.add(halo);
 
 const texLoader = new THREE.TextureLoader();
+const arrivalTextures = [];
 function pixelTex(url) {
-  const t = texLoader.load(url);
+  let settled;
+  if (arrival?.fall) arrivalTextures.push(new Promise(resolve => { settled = resolve; }));
+  const t = texLoader.load(url, settled, undefined, settled);
   t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -226,6 +230,7 @@ const visionMat = new THREE.ShaderMaterial({
       float core = mix(uCore, 0.46, uVideo);                        // the camera sees wide: its blur starts far out, near the rim of the lens
       float fringe = smoothstep(core, core + mix(uSoft, 0.3, uVideo), d);
       vec3 color = mix(sharp, blur, fringe);
+      color *= mix(vec3(1.1, 1.0, 0.8), vec3(1.0), uVideo);     // a warm grade over everything; the video camera keeps its green
       float lift = clamp(uStain, 0.0, 1.0);
       color.r = mix(color.r, min(1.0, color.r * 0.45 + 0.62), lift);
       color.g = mix(color.g, color.g * 0.38, lift);
@@ -555,7 +560,7 @@ const poolSpots = Array.from({ length: MAP.interior ? 3 : 0 }, () => {
   scene.add(light, light.target);
   return light;
 });
-const towerBeam = MAP_NAME === 'prison' ? new THREE.SpotLight(0xbecad9, 0, 13, 0.17, 0.60, 1.55) : null;
+const towerBeam = MAP_NAME === 'prison' ? new THREE.SpotLight(0xd8c8ac, 0, 13, 0.17, 0.60, 1.55) : null;
 if (towerBeam) scene.add(towerBeam, towerBeam.target);
 const near = { lights: [], vents: [], houses: [], doors: [], secrets: [], links: [], controls: [], hazards: [], towers: [] };
 let glowStatic = 0;
@@ -783,7 +788,7 @@ function collide(pos, PR = 0.3, creature = false) {
     for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
       if (!di && !dj) continue;
       const i = ci + di, j = cj + dj;
-      if (creature ? !cellWalkable(i, j) : swim.in ? G.cellType(i, j) !== LIQUID : G.solidCell(i, j, opened)) pushOutBox(pos, G.lo(i), G.lo(j), G.lo(i + 1), G.lo(j + 1), PR);
+      if (creature ? !cellWalkable(i, j) : swim.in ? G.cellType(i, j, opened) !== LIQUID : G.solidCell(i, j, opened)) pushOutBox(pos, G.lo(i), G.lo(j), G.lo(i + 1), G.lo(j + 1), PR);
     }
   }
 }
@@ -1668,9 +1673,10 @@ function useInventorySlot(index) {
   else if (slot.id === 'swift_boots') toast('Swift boots active: faster sprint, louder steps');
   else if (slot.id === 'steady_charm') toast('Steady ring active: melee hits deal a little more damage');
 }
-function dropInventorySlot() {
-  const slots = inventorySlots(), slot = slots[bag.selected];
+function dropInventorySlot(index = bag.selected) {
+  const slots = inventorySlots(), slot = slots[index];
   if (!slot) return;
+  bag.selected = index;
   if (slot.id === 'pistol') { toast('Keep the pistol. You may need it.'); return; }
   if (slot.id === 'radar') { toast('The radar is bound to your pack'); return; }
   if (slot.id === 'ammo') { inv.mag = 0; inv.reserve = 0; }
@@ -1717,7 +1723,7 @@ const swordMesh = handSprite('./assets/items/longsword.png', 0.48, 0xffffff);
 const matchMesh = handSprite('./assets/items/match_lit.png', 0.26, 0xffffff);
 // Both lights always exist at zero intensity, so striking or firing never recompiles shaders.
 const matchLight = new THREE.PointLight(0xff9a3c, 0, CFG.match.distance, 1.6);
-const muzzle = new THREE.PointLight(0xffd9a0, 0, 30, 1.4);
+const muzzle = new THREE.PointLight(0xffc27a, 0, 30, 1.4);
 muzzle.position.set(0.3, -0.15, -0.9);
 camera.add(matchLight, muzzle);
 
@@ -1843,9 +1849,33 @@ function useWords(text) {
 function toast(text) { ui.toast.textContent = useWords(text); ui.toast.style.opacity = 1; toastTimer = 3; }
 function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
 let inventoryHudSignature = '';
+let inventoryDrag = null;
+function inventoryPointerOutside(x, y) {
+  const bounds = ui.inventory.getBoundingClientRect();
+  return x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom;
+}
+function moveInventoryDrag(x, y) {
+  if (!inventoryDrag) return;
+  inventoryDrag.ghost.style.left = `${x}px`;
+  inventoryDrag.ghost.style.top = `${y}px`;
+  inventoryDrag.ghost.classList.toggle('outside', inventoryPointerOutside(x, y));
+}
+function endInventoryDrag(x, y, cancel = false) {
+  const drag = inventoryDrag;
+  if (!drag) return;
+  inventoryDrag = null;
+  drag.ghost.remove();
+  if (!cancel && inventoryPointerOutside(x, y)) dropInventorySlot(drag.index);
+  else bag.selected = drag.index;
+  inventoryHudSignature = '';
+}
 function renderInventoryHud(inControl) {
-  ui.inventory.hidden = !inControl;
-  if (!inControl) return;
+  const show = (inControl || (!TOUCH && started && !playing && !finished && !intro.active)) && !journal.isOpen && !bench.isOpen && !picker.isOpen && !helpOpen;
+  ui.inventory.hidden = !show;
+  if (!show) {
+    if (inventoryDrag) endInventoryDrag(inventoryDrag.x, inventoryDrag.y, true);
+    return;
+  }
   const slots = inventorySlots();
   bag.selected = Math.max(0, Math.min(bag.selected, Math.max(0, bag.capacity - 1)));
   const weaponDef = ITEM_DEFS[bag.activeWeapon];
@@ -1854,7 +1884,7 @@ function renderInventoryHud(inControl) {
   const surge = bag.staminaUntil > uTime.value ? ` · WIND ${Math.ceil(bag.staminaUntil - uTime.value)}s` : '';
   const signature = `${bag.capacity}|${bag.selected}|${weapon}|${worn}|${slots.map((slot) => `${slot.id}:${slot.label}:${slot.active ? 1 : 0}`).join('|')}`;
   setText(ui.inventoryMeta, `PACK ${slots.length}/${bag.capacity} · WEP ${weapon} · ARM ${worn}${surge}`);
-  if (signature === inventoryHudSignature) return;
+  if (inventoryDrag || signature === inventoryHudSignature) return;
   inventoryHudSignature = signature;
   ui.inventorySlots.replaceChildren();
   for (let i = 0; i < bag.capacity; i++) {
@@ -1862,9 +1892,34 @@ function renderInventoryHud(inControl) {
     cell.className = `inventory-slot${slot ? '' : ' empty'}${i === bag.selected ? ' selected' : ''}${slot?.active ? ' active' : ''}`;
     const keyLabel = document.createElement('b'); keyLabel.textContent = String(i + 1); cell.append(keyLabel);
     if (slot) {
-      const img = document.createElement('img'); img.src = slot.icon; img.alt = '';
+      const img = document.createElement('img'); img.src = slot.icon; img.alt = ''; img.draggable = false;
       const label = document.createElement('span'); label.textContent = slot.label;
       cell.title = `${i + 1}: ${slot.label}`; cell.append(img, label);
+      if (!TOUCH) cell.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || inventoryDrag) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const ghost = document.createElement('div');
+        ghost.id = 'inventoryDrag';
+        const icon = document.createElement('img'); icon.src = slot.icon; icon.alt = '';
+        ghost.append(icon);
+        document.body.append(ghost);
+        inventoryDrag = { index: i, ghost, x: e.clientX, y: e.clientY };
+        bag.selected = i;
+        moveInventoryDrag(e.clientX, e.clientY);
+        cell.setPointerCapture(e.pointerId);
+        const move = (ev) => { if (!inventoryDrag) return; inventoryDrag.x = ev.clientX; inventoryDrag.y = ev.clientY; moveInventoryDrag(ev.clientX, ev.clientY); };
+        const up = (ev) => {
+          cell.removeEventListener('pointermove', move);
+          cell.removeEventListener('pointerup', up);
+          cell.removeEventListener('pointercancel', up);
+          endInventoryDrag(ev.clientX, ev.clientY);
+        };
+        cell.addEventListener('pointermove', move);
+        cell.addEventListener('pointerup', up);
+        cell.addEventListener('pointercancel', up);
+      });
+      cell.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
     } else {
       const label = document.createElement('span'); label.textContent = 'empty'; cell.append(label);
     }
@@ -2396,6 +2451,7 @@ function updateItems(dt, bobX, bobY, inControl, raised) {
 
 let lightConfirmAt = -1e9;
 addEventListener('keydown', (e) => {
+  if (mapFall?.active) return;
   keys[e.code] = true;
   actionKey(e);
   if (e.code === 'Space') e.preventDefault();
@@ -2435,15 +2491,17 @@ overlay.addEventListener('click', () => {
   }
   renderer.domElement.requestPointerLock();
 });
+let helpOpen = false;
 document.addEventListener('pointerlockchange', () => {
+  if (mapFall?.active) return;
   playing = document.pointerLockElement === renderer.domElement;
   if (!playing && cutscenes.dying) cutscenes.skipDeath();          // Esc while dying: straight to the death screen
-  overlay.style.display = playing || journal.isOpen || bench.isOpen || picker.isOpen || cutscenes.dying ? 'none' : 'flex';
-  if (playing) { started = true; stopIntroSong(); }
+  overlay.style.display = playing || journal.isOpen || bench.isOpen || picker.isOpen || helpOpen || cutscenes.dying ? 'none' : 'flex';
+  if (playing) { started = true; overlay.classList.remove('map-arrival'); stopIntroSong(); }
   else { holdingBreath = false; gun.aiming = false; syncFootsteps(null); }
   if (!playing && !finished) document.getElementById('go').textContent = started ? 'Paused. Click to resume' : 'Click to begin';
 });
-document.addEventListener('pointerlockerror', () => { if (!journal.isOpen && !bench.isOpen && !picker.isOpen && !finished) { playing = false; overlay.style.display = 'flex'; } });
+document.addEventListener('pointerlockerror', () => { if (!mapFall?.active && !journal.isOpen && !bench.isOpen && !picker.isOpen && !helpOpen && !finished) { playing = false; overlay.style.display = 'flex'; } });
 addEventListener('mousemove', (e) => {
   if (!playing || intro.active) return;
   const sens = 0.0022 * (1 - gun.ads * 0.4);
@@ -2478,6 +2536,7 @@ function beginTouch() {
   try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); } catch (err) {}
   playing = true;
   started = true;
+  overlay.classList.remove('map-arrival');
   stopIntroSong();
   overlay.style.display = 'none';
   dispatchEvent(new Event('resize'));          // the touch layout refits itself on resize (fitTouch lives inside the TOUCH block)
@@ -2866,7 +2925,7 @@ const facilityView = facility?.state;
 const wetWeather = MAP_NAME === 'glasshouse' ? noiseBed(mapBus, 'bandpass', 400, 0.55, 0) : null;
 const polarWind = MAP_NAME === 'offshore' ? noiseBed(mapBus, 'bandpass', 330, 0.65, 0) : null;
 const reflectionCamera = MAP_NAME === 'taxidermy' ? new THREE.PerspectiveCamera(68, 1, 0.045, 58) : null;
-const reflectionLight = reflectionCamera ? new THREE.PointLight(0xb1c6bf, 0, 16, 1.42) : null;
+const reflectionLight = reflectionCamera ? new THREE.PointLight(0xd2c2a4, 0, 16, 1.42) : null;
 const chemicalMarks = MAP_NAME === 'taxidermy' ? new THREE.InstancedMesh(boxGeo,
   new THREE.MeshBasicMaterial({ color: 0x769d40, transparent: true, opacity: 0.48 }), 88) : null;
 if (chemicalMarks) { chemicalMarks.count = 0; chemicalMarks.frustumCulled = false; scene.add(chemicalMarks); }
@@ -3038,10 +3097,20 @@ function toggleDoor(d) {
 }
 function useControl(control) {
   if (opened.has(control.target)) return;
+  const { x, z } = camera.position, G = MAP.grid;
+  const ci = G?.cellOf(x), cj = G?.cellOf(z);
+  const wasWater = G?.liquid === 'water' && G.cellType(ci, cj, opened) === LIQUID;
   opened.add(control.target);
+  const fellIn = !swim.in && !wasWater && G?.liquid === 'water' && G.cellType(ci, cj, opened) === LIQUID;
   sfx.door();
-  if (control.flood) { noise1(0.48, 'lowpass', 1800, 650, 0.6); toast('The deluge pipes shudder. The bay is flooding.'); }
-  else toast('Something unlocks nearby.');
+  if (control.flood) {
+    noise1(0.48, 'lowpass', 1800, 650, 0.6);
+    if (!fellIn) toast('The deluge pipes shudder. The bay is flooding.');
+  } else toast('Something unlocks nearby.');
+  if (fellIn) {
+    fallIntoWater(true);
+    updateSwim(0, true, G, ci, cj, LIQUID, x, z);
+  }
   const mask = facility?.noiseScale(control.x, control.z, 'door') ?? 1;
   specialRounds.noise(control, 1);
   if (choir.active) choir.noise(control.x, control.z, 0.82 * mask, 'lever');
@@ -3199,15 +3268,23 @@ function updateThresholds(dt, inControl) {
   }
 }
 
+function fallIntoWater(immediate = false) {
+  swim.in = true;
+  swim.tick = 0;
+  if (immediate) swim.sink = 1;
+  holdingBreath = false;
+  sfx.splash();
+  toast('You fell in. Swim to the edge and press E to climb out');
+}
+
 function updateSwim(dt, inControl, G, ci, cj, here, px, pz) {
   if (!swim.in) {
     swim.sink += (0 - swim.sink) * Math.min(1, dt * 6);
     swim.air = Math.min(1, swim.air + dt / 5);
     if (!inControl || here !== LIQUID) return;
-    const lx = px - G.lo(ci), lz = pz - G.lo(cj), m = 0.35, L = (a, b) => G.cellType(ci + a, cj + b) === LIQUID;    // properly over the edge?
+    const lx = px - G.lo(ci), lz = pz - G.lo(cj), m = 0.35, L = (a, b) => G.cellType(ci + a, cj + b, opened) === LIQUID;    // properly over the edge?
     if ((lx > m || L(-1, 0)) && (lx < G.CELL - m || L(1, 0)) && (lz > m || L(0, -1)) && (lz < G.CELL - m || L(0, 1))) {
-      swim.in = true; swim.tick = 0; holdingBreath = false;
-      sfx.splash(); toast('You fell in. Swim to the edge and press E to climb out');
+      fallIntoWater();
     }
     return;
   }
@@ -3226,7 +3303,7 @@ function updateSwim(dt, inControl, G, ci, cj, here, px, pz) {
   swim.shore = null;
   let best = SWIM.reach;
   for (const [di, dj] of DIRS) {
-    if (G.cellType(ci + di, cj + dj) === LIQUID || G.solidCell(ci + di, cj + dj, opened)) continue;
+    if (G.cellType(ci + di, cj + dj, opened) === LIQUID || G.solidCell(ci + di, cj + dj, opened)) continue;
     const edge = di ? Math.abs(G.lo(di > 0 ? ci + 1 : ci) - px) : Math.abs(G.lo(dj > 0 ? cj + 1 : cj) - pz);
     if (edge < best) { best = edge; swim.shore = { x: px + di * (edge + 0.8), z: pz + dj * (edge + 0.8) }; }
   }
@@ -3331,7 +3408,7 @@ function updateWorld(dt, inControl, running) {
     }
   }
   if (MAP.grid) {
-    const G = MAP.grid, ci = G.cellOf(px), cj = G.cellOf(pz), here = G.cellType(ci, cj);
+    const G = MAP.grid, ci = G.cellOf(px), cj = G.cellOf(pz), here = G.cellType(ci, cj, opened);
     if (G.liquid === 'water') updateSwim(dt, inControl, G, ci, cj, here, px, pz); else updateLava(dt, inControl, G, ci, cj, here, px, pz);
   }
   if (MAP.grid || MAP_NAME === 'swamp') liquidScroll.value.set(t * 0.012, Math.sin(t * 0.35) * 0.03);
@@ -3374,9 +3451,9 @@ function updateWorld(dt, inControl, running) {
   }
   updateGrenades(dt, inControl);
   const bodyAction = obsRound.world(dt, inControl, px, pz, yaw, t);
-  if (bodyAction && (!mapAction || bodyAction.label.startsWith('[E]'))) mapAction = bodyAction;
+  if (!swim.in && bodyAction && (!mapAction || bodyAction.label.startsWith('[E]'))) mapAction = bodyAction;
   const civilianAction = inControl && consumer.active ? consumer.worldAction(px, pz, yaw) : null;
-  if (civilianAction && (!mapAction || !facility)) mapAction = civilianAction;
+  if (!swim.in && civilianAction && (!mapAction || !facility)) mapAction = civilianAction;
   if (collective.encounter) {
     const routeAction = collective.routeAction(dt, {
       available: inControl && !mapAction && !swim.in && !nearChest && !nearLore,
@@ -4103,6 +4180,7 @@ function flickerFlashlight(kind) {
 // ───────────────────────── the story: fragments in the world, and the journal that keeps them ─────────────────────────
 // src/lore/ holds the text. Reading pauses the world; what you find is kept between nights.
 let journalWasPlaying = false;
+let helpWasPlaying = false;
 const journal = createJournal({
   onOpen() { journalWasPlaying = playing; playing = false; holdingBreath = false; gun.aiming = false; syncFootsteps(null); if (document.pointerLockElement) document.exitPointerLock(); overlay.style.display = 'none'; },
   onClose() {
@@ -4115,6 +4193,164 @@ const journal = createJournal({
   },
 });
 
+const roundHelpStyle = document.createElement('style');
+roundHelpStyle.textContent = `
+#roundHelp { position: fixed; inset: 0; z-index: 21; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.92); font-family: "Courier New", monospace; color: #b9b3a3; }
+#roundHelp[hidden] { display: none; }
+#roundHelp .hbox { width: min(720px, 92vw); max-height: min(640px, 88vh); display: flex; flex-direction: column; border: 1px solid rgba(185,179,163,.28); background: #0c0b09; }
+#roundHelp .hhead { padding: 16px 22px 12px; border-bottom: 1px solid rgba(185,179,163,.2); letter-spacing: 5px; font-size: 14px; color: #e6dfc8; }
+#roundHelp .hbody { padding: 18px 22px 8px; overflow-y: auto; }
+#roundHelp .hbody p { margin: 0 0 14px; font-size: 15px; line-height: 1.65; color: #d3ccb2; }
+#roundHelp .hfoot { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 22px; border-top: 1px solid rgba(185,179,163,.2); font-size: 12px; letter-spacing: 2px; opacity: .7; }
+#roundHelp button { padding: 8px 14px; border: 1px solid rgba(185,179,163,.4); background: transparent; color: #e6dfc8; font: 12px "Courier New", monospace; letter-spacing: 2px; }
+`;
+document.head.appendChild(roundHelpStyle);
+const roundHelp = document.createElement('div');
+roundHelp.id = 'roundHelp';
+roundHelp.hidden = true;
+roundHelp.innerHTML = `<div class="hbox"><div class="hhead"></div><div class="hbody"></div><div class="hfoot"><span>I OR ESC CLOSES THIS</span><button type="button">CLOSE</button></div></div>`;
+document.body.appendChild(roundHelp);
+roundHelp.querySelector('button').addEventListener('click', () => closeRoundHelp());
+const helpTitle = roundHelp.querySelector('.hhead');
+const helpBody = roundHelp.querySelector('.hbody');
+const helpText = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+function roundBrief() {
+  const spec = specialRound();
+  let title = 'THIS ROUND';
+  let lines = ['Survive until the round ends, or do what the words at the start asked of you.'];
+  if (isObserverRound()) {
+    title = 'THE OBSERVER';
+    lines = [
+      'Find every body and burn it with a match before dawn. Hold M to light the match, then hold E at the body until it catches. One match is not enough for the whole round, so search as you go.',
+      'Burning a body wears on your mind, and a body that is still on fire keeps wearing it down. Hold your breath while standing still to recover, or drink a potion.',
+      'Something is watching. If it is right behind you, the night ends. Dawn with a body still unburned also ends it. Burning the last body wins.',
+    ];
+  } else if (isCollectiveRound()) {
+    title = 'THE COLLECTIVE';
+    lines = [
+      'They close in around you. You win by keeping every rule until they leave, then walking clear of where they stood.',
+      'Never hurt one. A shot or a strike brings all of them at once.',
+      'Put the flashlight away once they are close. A match is allowed, and so is a light that is already on in the building. Standing in the dark for long brings them.',
+      'Walk away slowly. Running, or stepping right up to one of them, brings them. When they have gone, keep going until you are well clear. The last one may stay and watch. Do not go back to it.',
+    ];
+  } else if (isChoirRound()) {
+    title = 'THE CHOIR';
+    lines = [
+      'They hunt by sound: footsteps, breath, doors, and gunfire. Walk. Hold Space to quiet your breath. The round does not end on a timer.',
+      'A listener from a chest can point you toward the nest. The radar feedback marks the singers. Get close to the nest and the Hive Mind shows itself.',
+      'Kill the Hive Mind. Singers keep coming until it is dead. That is the only way to win.',
+    ];
+  } else if (isConsumerRound()) {
+    title = 'THE CONSUMER';
+    lines = [
+      'Civilians are loose. Hold E beside one for a few seconds to get them out. Each rescue is worth parts. Killing the creature is what wins the round.',
+      'It feeds and grows. Listen for its footsteps and the scrape along the ceiling. Stop the feeding where you can, and kill it before it gets too large.',
+      MAP.interior
+        ? 'Inside, the rooms carry the sound. Move quieter than you would outdoors.'
+        : 'As it grows, the weather turns against you. Get under a roof when the air darkens.',
+    ];
+  } else if (isSlimeRound()) {
+    title = 'THE SLIME';
+    lines = [
+      'Nothing you carry kills the large one. Shots only slow it. Shoot the small ones before they cling to your legs. The round does not end on a timer.',
+      MAP.slimeTrap
+        ? 'Follow the DELUGE mark. Pull the valve, then lure the slime through the flooded bay. The water is what takes it apart.'
+        : 'Follow the WATER mark to the lake and lure the slime into it. It is slower than your run. The water is what takes it apart.',
+    ];
+  } else if (isUnseenRound()) {
+    title = 'THE UNSEEN';
+    lines = [
+      'They are invisible until you reveal them. Watch for shaking branches and listen for the screech. A lit match, or the spectral video camera, shows their silhouette.',
+      'They watch for about ten seconds, then strike from behind. When you hear one close, turn to face it. Facing it stops the charge.',
+      'Kill all of them, or survive until the round runs out. Either one wins.',
+    ];
+  } else if (isLightboundRound()) {
+    title = 'THE LIGHTBOUND';
+    lines = [
+      'Souls are clinging to the lights. Look under the fixtures and shoot them. The round ends when the last one lets go.',
+      'If the wing is dark, find the breaker and hold E to steady the lights. They drain you while the lights hold them in place. Kill every one.',
+    ];
+  } else if (spec) {
+    title = spec.name.toUpperCase();
+    lines = [spec.objective, ...specialDetail(round.type)];
+  } else {
+    title = 'DARK GHOSTS';
+    lines = [
+      'Keep your light off them. The beam wears your mind down and makes them come for you. Shoot them, or stay alive until the round ends. Either one wins.',
+      'The last minute they turn vicious and the clock ticks. Hold your breath while standing still if your mind is fraying. A potion restores it too.',
+    ];
+  }
+  if (MAP.labyrinth) lines.push('On this map, walking out through the gap in the outer wall also ends the round, whatever is in here with you.');
+  return { title, lines };
+}
+function specialDetail(type) {
+  return ({
+    effigy: [
+      'Several statues are standing about. Bring a light close and hold E to inspect them. One of them breathes and shifts. That is the living one.',
+      'Lead it into the gold circle and hold your flashlight on it so it stays. Then hold E to seal each of the three locks. Outside the circle, do not let it reach you.',
+    ],
+    burrower: [
+      'Arm three traps. Run across an armed plate so it hears you under the ground, then get off the plate. When it is underneath, hold E on the trigger switch.',
+      'That exposes it. Shoot it. If you are still standing on the plate when the ground opens, it hits you.',
+    ],
+    seamstress: [
+      'Follow the web to three anchors. Burn an anchor with a match, or cut it. When the three are gone, the nest opens. Burn the nest.',
+      'Wax tins can be searched for spare matches. Loose threads slow your steps.',
+    ],
+    counterfeit: [
+      'Some of the props breathe or creak. Bring a light close and hold E to inspect them. Destroy three copies.',
+      'Then find the false landmark and destroy what is inside it. If one grabs you, hold E to pry it open before it bites.',
+    ],
+    wickeater: [
+      'Hold E to power three relays. Wait until one of them buzzes. Isolate the two quiet relays, then overload the buzzing one.',
+      'The core falls out. Shoot it before it hides. Do this three times. When the lights go out, it can find you.',
+    ],
+    bellman: [
+      'The clocks tick in pairs. Follow the sound and stop three of the right clocks with E. Stopping the wrong clock does not count.',
+      'When the master bell is ready, wait until you hear two footfalls and then a pause. Ring the bell in that pause.',
+    ],
+  })[type] || [];
+}
+function openRoundHelp() {
+  if (mapFall?.active || helpOpen || !started || finished || intro.active || cutscenes.active || journal.isOpen || bench.isOpen || picker.isOpen) return;
+  const brief = roundBrief();
+  helpTitle.textContent = `ROUND ${round.n} · ${brief.title}`;
+  helpBody.innerHTML = brief.lines.map((line) => `<p>${helpText(line)}</p>`).join('');
+  helpBody.scrollTop = 0;
+  helpOpen = true;
+  roundHelp.hidden = false;
+  helpWasPlaying = playing;
+  playing = false;
+  holdingBreath = false;
+  gun.aiming = false;
+  gun.trigger = false;
+  syncFootsteps(null);
+  for (const k in keys) keys[k] = false;
+  overlay.style.display = 'none';
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+function closeRoundHelp() {
+  if (!helpOpen) return;
+  helpOpen = false;
+  roundHelp.hidden = true;
+  if (helpWasPlaying && !finished) {
+    playing = true;
+    if (TOUCH) overlay.style.display = 'none';
+    else { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => { playing = false; overlay.style.display = 'flex'; }); }
+  } else overlay.style.display = 'flex';
+}
+window.addEventListener('keydown', (e) => {
+  if (helpOpen) {
+    if (e.code === 'Escape' || e.code === 'KeyI') closeRoundHelp();
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    return;
+  }
+  if (e.code !== 'KeyI' || e.repeat) return;
+  openRoundHelp();
+  if (helpOpen) { e.preventDefault(); e.stopImmediatePropagation(); }
+}, true);
 
 // ───────────────────────── armor: a shield over your health ─────────────────────────
 // Six kinds (gear/upgrades.js). Chests, salvage, the dead and the survivor's pick all turn them up; which kind is down to
@@ -4471,7 +4707,7 @@ function dropLore(pool, x, z, line) {
   return id;
 }
 window.addEventListener('keydown', (e) => {
-  if (e.code !== 'KeyJ' || e.repeat || !started || intro.active || journal.isOpen) return;
+  if (e.code !== 'KeyJ' || e.repeat || !started || intro.active || journal.isOpen || helpOpen) return;
   journal.open();
 });
 let nextObserverAt = Infinity;
@@ -4653,7 +4889,7 @@ function updateChoir(dt, inControl) {
 const consumerViewShake = { value: 0 };
 const consumerStepPan = audioCtx.createStereoPanner();
 consumerStepPan.connect(sfxGain);
-const consumer = await createConsumerRound({
+const consumer = createConsumerRound({
   scene, camera, world: creatureWorld,
   audio: {
     ctx: audioCtx, dest: audioCtx.destination,
@@ -4867,11 +5103,14 @@ function updateSlime(dt, inControl) {
   updateSlimeTravel(dt);
 }
 function travelToNextMap(nextRound) {
+  if (mapFall.active) return;
   const choices = MAP_NAMES.filter((name) => name !== MAP_NAME);
+  const map = choices[Math.floor(Math.random() * choices.length)];
   const checkpoint = {
-    map: choices[Math.floor(Math.random() * choices.length)],
+    map,
     seed: (Math.random() * 1e9) | 0,
     nextRound,
+    fall: { startedAt: Date.now(), label: MAP_META[map].label },
     run: {
       inv, bag, armor, sanity, stamina, staminaMax, needRecover, elapsed, clock: uTime.value,
       battery: flashlight.battery, flashlightEquipped: flashlight.equipped, matchTime: match.t,
@@ -4880,9 +5119,21 @@ function travelToNextMap(nextRound) {
     },
   };
   history.replaceState({ ...history.state, [TRAVEL_STATE]: checkpoint }, '');
+  mapFall.launch(checkpoint.fall.label, () => location.reload());
   playing = false;
-  fadeEl.style.opacity = 1;
-  location.reload();
+  holdingBreath = gun.aiming = gun.trigger = false;
+  gun.burst = 0;
+  for (const k in keys) keys[k] = false;
+  overlay.style.display = 'none';
+  fadeEl.style.transition = ''; fadeEl.style.background = ''; fadeEl.style.opacity = '0';
+  if (document.pointerLockElement) document.exitPointerLock();
+  syncFootsteps(null);
+  syncBodyAudio(null, false);
+  syncAmbience(null);
+  syncRoundMusic(false, round.n, false);
+  setHuntSilence(true);
+  noise1(1.43, 'lowpass', 620, 105, 0.72);
+  thump(108, 32, 0.92, 0.48);
 }
 
 function restoreRun(run) {
@@ -4914,12 +5165,13 @@ function newWorld() {
 // The lake pulls you under (the screen goes to water), and you come up out of water into another map, where the next round starts.
 const TRAVEL = { under: 1.1, hold: 0.7, rise: 3.0 };
 function beginSlimeTravel(next) {
+  slimeTravel.pending = false;
+  if (roundsHere >= ROUND.locationRounds) { travelToNextMap(next); return; }
   if (slimeBay) {
-    slimeTravel.pending = false;
-    if (roundsHere >= ROUND.locationRounds) travelToNextMap(next); else startRound(next);
+    startRound(next);
     return;
   }
-  slimeTravel.pending = false; slimeTravel.t = 0; slimeTravel.next = next; slimeTravel.swapped = false;
+  slimeTravel.t = 0; slimeTravel.next = next; slimeTravel.swapped = false;
   fadeEl.style.transition = ''; fadeEl.style.background = 'radial-gradient(circle at 50% 35%, #3f8fd8, #0d3f86 55%, #041c44)';
   noise1(1.4, 'lowpass', 900, 120, 0.6); thump(90, 30, 1.0, 0.5);
 }
@@ -4934,7 +5186,6 @@ function updateSlimeTravel(dt) {
   }
   if (!T.swapped) {
     T.swapped = true; fadeEl.style.opacity = 1;
-    if (roundsHere >= ROUND.locationRounds) { travelToNextMap(T.next); return; }
     newWorld(); startRound(T.next);
     noise1(2.2, 'bandpass', 500, 1800, 0.35);
   }
@@ -5529,6 +5780,7 @@ function updateSanity(dt, inControl, running) {
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (mapFall.update(dt)) return;
   if (TOUCH) {
     const box = touchView();
     if (playing && box.w <= box.h) pauseTouch();
@@ -5689,7 +5941,7 @@ function frame(now) {
   } else videoFlicker.amount = 0;
   const beam = raised && flashlight.battery > 0 ? L.intensity * flick * cut.light * batteryDim() * (cameraViewActive ? 1 - videoFlicker.amount * 0.94 : 1) : 0;
   const beamAngle = cameraViewActive ? 0.74 : L.angle;
-  spot.angle = beamAngle; spot.distance = (cameraViewActive ? Math.min(48, L.distance + 8) : L.distance) * (1 - (facilityView?.whiteout ?? 0) * 0.91); spot.color.set(cameraViewActive ? 0xa7ffb2 : 0xfff0cc);
+  spot.angle = beamAngle; spot.distance = (cameraViewActive ? Math.min(48, L.distance + 8) : L.distance) * (1 - (facilityView?.whiteout ?? 0) * 0.91); spot.color.set(cameraViewActive ? 0xa7ffb2 : 0xffd49c);
   halo.angle = cameraViewActive ? 0.98 : 0.62; halo.distance = Math.min(spot.distance, cameraViewActive ? 32 : 26); halo.color.copy(spot.color);
   spot.intensity = beam;
   halo.intensity = beam * 0.18;
@@ -5701,6 +5953,7 @@ function frame(now) {
   });
   updateLightbound(dt, inControl && !finished);
   updateMonsters(dt, inControl && !finished, beam > 1, running);
+  if (mapFall.active) return;
   updateUnseen(dt, inControl && !finished, cameraViewActive && beam > 1 && videoFlicker.amount < 0.8);
   updateLabyrinth(inControl && !finished);
   const dreadAim = collective.active && ['appear', 'warning', 'dispersal', 'last'].includes(collective.phase) && flashlight.equipped;
@@ -5776,15 +6029,6 @@ updateClock();
 // ?nointro or ?notitle goes straight past it.
 const SHOW_TITLE = !SKIP_INTRO && !new URLSearchParams(location.search).has('notitle');
 const menuEl = document.getElementById('menu'), boardEl = document.getElementById('board');
-const mapSelect = document.getElementById('mapSelect');
-for (const name of MAP_NAMES) mapSelect.add(new Option(MAP_META[name].label, name));
-mapSelect.value = MAP_NAMES.includes(requestedMap) ? requestedMap : '';
-mapSelect.addEventListener('change', () => {
-  const url = new URL(location.href);
-  if (mapSelect.value) url.searchParams.set('map', mapSelect.value);
-  else url.searchParams.delete('map');
-  location.replace(url.href);
-});
 const cinemaKit = {
   THREE, atlas, mulberry, billboardLayer, speckleTexture, surfaceMaterial, groundPalette: MAP_META.forest.ground, buildCorpse,
   render: (sc, cam, hands = false, sharp = false) => renderView(sc, cam, hands, sharp), aspect: () => camera.aspect, fade: fadeEl, menu: menuEl,
@@ -5832,7 +6076,7 @@ Object.assign(cinemaKit, {
   quiet() { for (const k in keys) keys[k] = false; holdingBreath = false; gun.aiming = false; gun.trigger = false; gun.burst = 0; syncFootsteps(null); syncBodyAudio(null, false); syncTick(false); },
   clear() { while (ghosts.length) removeGhost(ghosts[0]); clearMind(); bannerEl.style.opacity = 0; bannerTimer = 0; },
   clearMind() { clearMind(); sanity.value = SANITY_MAX; sanity.warned = false; sanity.empty = 0; sanity.drained = false; },
-  canPlay: () => playing && !finished && !swim.in && swim.climb < 0 && !burn.in && !journal.isOpen,
+  canPlay: () => playing && !finished && !swim.in && swim.climb < 0 && !burn.in && !journal.isOpen && !helpOpen,
   die(line, from = '') { cutsceneLine = line; cutsceneFrom = from; deathCause = 'cutscene'; endGame(false); },
   ceiling: META.ceiling || 0,
   // eyelids: 0 open, 1 shut
@@ -5850,15 +6094,53 @@ Object.assign(cinemaKit, {
 });
 const dawnColor = new THREE.Color(0x6a6a86);
 const cutscenes = createCutscenes(cinemaKit);
-if (arrival) {
+function clearTravelCheckpoint() {
   const state = { ...history.state };
   delete state[TRAVEL_STATE];
   history.replaceState(state, '');
+}
+function showArrival() {
+  clearTravelCheckpoint();
+  overlay.classList.add('map-arrival');
+  overlay.style.display = 'flex';
+}
+mapFall = createMapFall({
+  camera, screen: $('mapFall'), label: $('fallTarget'), state: $('fallState'),
+  render(amount) {
+    const beam = spot.intensity, fringe = halo.intensity;
+    spot.intensity = Math.max(beam, amount * 29);
+    halo.intensity = Math.max(fringe, amount * 7);
+    renderView(scene, camera, false, true);
+    spot.intensity = beam;
+    halo.intensity = fringe;
+  },
+  onLand: showArrival,
+});
+if (arrival) {
   started = true;
   document.getElementById('title').textContent = META.label;
   document.getElementById('sub').textContent = `Round ${round.n}. Your gear came with you.`;
   document.getElementById('go').textContent = TOUCH ? 'Tap to continue' : 'Click to continue';
-} else playIntroSong();
+  if (arrival.fall) {
+    const { x, z } = camera.position;
+    camera.position.y = MAP.groundY(x, z) + CFG.eye;
+    mapFall.wait((MAP.roofY?.(x, z) ?? camera.position.y + (META.ceiling || 0)) - camera.position.y);
+    placeGround();
+    updateMapLights(uTime.value, x, z);
+    updateLampLenses(uTime.value, specialRounds.power);
+    // Asset loading began while the shaft was already visible. Warm the map shaders behind it too.
+    Promise.all(arrivalTextures).then(() => renderer.compileAsync(scene, camera))
+      .catch(error => console.warn('Destination shader warmup failed', error))
+      .then(() => mapFall.loaded());
+  } else showArrival();
+} else {
+  if (arriving?.fall) {
+    clearTravelCheckpoint();
+    $('mapFall').hidden = true;
+    document.body.classList.remove('map-travel');
+  }
+  playIntroSong();
+}
 requestAnimationFrame(frame);
 
 // ───────────────────────── the labyrinth: its dead, and the way out ─────────────────────────

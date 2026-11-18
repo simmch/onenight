@@ -1,7 +1,7 @@
 import { doorBounds, segmentHits } from './Cover.js';
 
 export const BAYOU_META = {
-  label: 'THE BLACKWATER BAYOU', fog: 0x020706, fogDensity: 0.071, beamRange: 27,
+  label: 'THE BLACKWATER BAYOU', fog: 0x070603, fogDensity: 0.071, beamRange: 27,
   ambient: [0x000000, 0], eerie: 0.38, weather: 'drips',
   ground: ['#262b1e', '#303020', '#333024', '#3b3226', '#43402b'],
   hint: 'The raised boardwalks skirt the mud. Pull the chain to raise the old floodgate.',
