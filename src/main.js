@@ -1305,7 +1305,9 @@ function duckAmbience(moving) {
 }
 
 // Breathing. Idle, walk, and run each loop; movement breaths fade out when that pace stops.
+// A run picks the next heavy breath from a shuffled set, then loops it until the run ends.
 // Holding breath muffles it and silences footsteps so they don't carry.
+const runBreaths = [runBreath, ...await Promise.all(['hb2.mp3', 'hb3.mp3', 'hb4.mp3', 'hb5.mp3'].map((file) => loadClip(file)))];
 const BREATH = { idle: 0.32, walk: 0.42, run: 0.5 };
 const STEP_VOLUME = 0.55;
 const breathFilter = audioCtx.createBiquadFilter();
@@ -1326,7 +1328,45 @@ function loopBreath(buffer) {
 }
 const idleGain = loopBreath(idleBreath);
 const walkGain = loopBreath(walkBreath);
-const runGain = loopBreath(runBreath);
+const runGain = audioCtx.createGain();
+runGain.gain.value = 0;
+runGain.connect(breathFilter);
+let runSource = null;
+let runFading = null;
+let runOrder = [];
+let runLast = -1;
+function pickRunBreath() {
+  if (!runOrder.length) {
+    runOrder = runBreaths.map((_, i) => i);
+    for (let i = runOrder.length - 1; i > 0; i--) {
+      const j = (Math.random() * (i + 1)) | 0;
+      [runOrder[i], runOrder[j]] = [runOrder[j], runOrder[i]];
+    }
+    if (runOrder.length > 1 && runOrder[runOrder.length - 1] === runLast) {
+      const swap = (Math.random() * (runOrder.length - 1)) | 0;
+      [runOrder[swap], runOrder[runOrder.length - 1]] = [runOrder[runOrder.length - 1], runOrder[swap]];
+    }
+  }
+  runLast = runOrder.pop();
+  return runBreaths[runLast];
+}
+function stopRunSource(src) {
+  if (!src) return;
+  try { src.stop(); } catch (e) { /* already stopped */ }
+  src.disconnect();
+}
+function startRunBreath() {
+  stopRunSource(runSource);
+  stopRunSource(runFading);
+  runSource = null;
+  runFading = null;
+  const src = audioCtx.createBufferSource();
+  src.buffer = pickRunBreath();
+  src.loop = true;
+  src.connect(runGain);
+  src.start();
+  runSource = src;
+}
 let bodyAudio = '';
 let holdingBreath = false;
 let breathBlocked = false;
@@ -1356,11 +1396,18 @@ function rampParam(param, value, seconds) {
 function syncBodyAudio(pace, holding) {
   const id = (pace || 'off') + (holding ? '/hold' : '');
   if (id === bodyAudio) return;
+  const startingRun = pace === 'run' && !bodyAudio.startsWith('run');
   bodyAudio = id;
   const muff = holding ? 0.6 : 1;
   rampParam(idleGain.gain, pace === 'idle' ? BREATH.idle * muff : 0, 0.5);
   rampParam(walkGain.gain, pace === 'walk' ? BREATH.walk * muff : 0, 0.5);
+  if (startingRun) startRunBreath();
   rampParam(runGain.gain, pace === 'run' ? BREATH.run * muff : 0, 0.5);
+  if (pace !== 'run' && runSource) {
+    runFading = runSource;
+    runSource = null;
+    try { runFading.stop(audioCtx.currentTime + 0.55); } catch (e) { /* already stopped */ }
+  }
   rampParam(breathFilter.frequency, holding ? 420 : 16000, 0.2);
   rampParam(footstepGain.gain, holding ? 0 : STEP_VOLUME, 0.18);
 }
