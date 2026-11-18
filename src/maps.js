@@ -18,7 +18,7 @@ export const MAP_META = {
             ground: ['#55555e', '#62616b', '#4b4b55', '#6a655c', '#585762', '#726b62'] },
   snow:   { label: 'THE MOUNTAIN', fog: 0x04060a, fogDensity: 0.05, ambient: [0x000000, 0], eerie: 0.35, weather: 'snow', terrain: true,
             ground: ['#cfd9e6', '#dfe7f0', '#c2cedd', '#e9eff5', '#d5deea', '#b9c6d8'] },
-  hell:   { label: 'HELL', fog: 0x0b0100, fogDensity: 0.042, ambient: [0xff3a14, 0.3], eerie: 0, weather: 'embers',
+  hell:   { label: 'HELL', fog: 0x0b0100, fogDensity: 0.042, ambient: [0xff3a14, 0.12], eerie: 0, weather: 'embers',
             ground: ['#57302a', '#653a30', '#472620', '#70402e', '#532e27', '#7a462c'] },
   labyrinth: { label: 'THE LABYRINTH', fog: 0x000000, fogDensity: 0.05, ambient: [0x000000, 0], eerie: 0.7, weather: null, ceiling: 4.2,
             ground: ['#4c4844', '#57524c', '#423f3b', '#5e574e', '#4a4541', '#655c50'] },

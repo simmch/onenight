@@ -904,14 +904,14 @@ export function createCollective(ctx) {
   }
 
   // a bullet along dir: hitting any of them breaks rule 1
-  function shot(origin, dir) {
+  function shot(origin, dir, range = 60) {
     if (!kids.length || S.phase === 'gather' || S.phase === 'idle' || S.phase === 'done') return false;
     for (const k of kids) {
       if (k.gone) continue;
       const sc = k.c.root.scale.x, gy = world.groundY(k.x, k.z);
       for (const h of [0.35, 0.7, 1.0]) {
         const cx = k.x - origin.x, cy = gy + h * sc - origin.y, cz = k.z - origin.z, t = cx * dir.x + cy * dir.y + cz * dir.z;
-        if (t <= 0 || t > 60) continue;
+        if (t <= 0 || t > range) continue;
         const mx = cx - dir.x * t, my = cy - dir.y * t, mz = cz - dir.z * t;
         if (mx * mx + my * my + mz * mz < 0.24 * 0.24 && !world.losBlocked(origin.x, origin.z, k.x, k.z)) { provoke('shot'); return true; }
       }

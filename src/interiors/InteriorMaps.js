@@ -454,7 +454,7 @@ function dressCell({ name, estate, zone, a, b, x, y, z, roof, roll, faces, c, bo
     if (zone === 'flood' && faces.length && roll < 0.32) box('iron', x, 2.25, z, CELL, 0.18, 0.22);
   } else if (name === 'mall') {
     if (zone === 'atrium' && a === 0 && b <= 0 && b % 2 === 0) light(x, 5.1, z, 3.15, 5);
-    if (['food', 'store', 'upper'].includes(zone) && roll > 0.7) lamp(5, 0.2, 0.92);
+    if (['food', 'store', 'upper'].includes(zone) && roll > 0.7) lamp(4, 0.2, 0.92);
     if (faces.length || zone === 'atrium') {
       const dx = roll > 0.5 ? 1.4 : -1.4, dz = roll > 0.24 ? 1.25 : -1.25;
       if (roll > 0.28) sprite(roll < 0.58 ? 'fern' : 'bush', x + dx, y, z + dz, 1.35, 0.9, 0.12);
@@ -509,7 +509,7 @@ function dressObject(obj, { x, y, z, c, box, shape, sprite, powered, roll }) {
       box('moonPane', wx, y + 3.25, wz, 2.75, 2.6, 0.04, turn);
       for (const offset of [-1.36, 0, 1.36]) box('iron', wx - di * 0.03 + dj * offset, y + 3.25, wz - dj * 0.03 - di * offset, 0.08, 2.62, 0.08, turn);
       for (const offset of [-1.24, 0, 1.24]) box('iron', wx - di * 0.035, y + 3.25 + offset, wz - dj * 0.035, 2.76, 0.08, 0.07, turn);
-      for (const offset of [-0.72, 0.72]) box('moonStripe', x - di * 3.4 + dj * offset, y + 0.012, z - dj * 3.4 - di * offset, 1.16, 0.014, 9.7, turn + 0.1);
+      c.lights.push(wx, y + 3.25, wz, 1.25, 9);
       break;
     }
     case 'bleachers':

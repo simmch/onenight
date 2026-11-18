@@ -82,8 +82,7 @@ export function dressHazardCell({ name, zone, a, b, x, y, z, roof, roll, faces, 
     }
     if (zone === 'coldAisle') {
       for (const side of [-1, 1]) box('trim', x + side * 1.96, y + 2.45, z, 0.13, 0.14, 4);
-      box('serverLed', x, roof - 0.21, z, 0.13, 0.07, 1.33);
-      for (const side of [-1, 1]) box('serverFloorLight', x + side * 0.91, y + 0.017, z - 0.46, 0.43, 0.018, 2.24, side * 0.37);
+      box('iron', x, roof - 0.21, z, 0.16, 0.09, 1.33);
     }
     if (zone === 'hotAisle') box('iron', x, roof - 0.44, z, 1.28, 0.61, 4);
   }
@@ -92,8 +91,8 @@ export function dressHazardCell({ name, zone, a, b, x, y, z, roof, roll, faces, 
     c.lights.push(x, name === 'cathedral' ? y + 2.61 : roof - 0.32, z, 0.64, 3);
   }
   if (powered && name === 'serverfarm' && roll > 0.23) {
-    box('serverLed', x + 1.45, y + 2.34, z - 1.35, 0.12, 0.10, 0.24);
-    c.lights.push(x + 1.45, y + 2.34, z - 1.34, 1.1, 8);
+    box('serverLamp', x + 1.45, y + 2.34, z - 1.35, 0.12, 0.10, 0.24);
+    c.lights.push(x + 1.45, y + 2.34, z - 1.35, 1.1, 8);
   }
 }
 

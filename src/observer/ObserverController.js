@@ -449,13 +449,13 @@ export function createObserver(ctx) {
   }
 
   // A gunshot along dir. It cannot be killed: a hit only raises its attention and drives it off for a moment.
-  function shot(origin, dir) {
+  function shot(origin, dir, range = 60) {
     if (!S.active) return false;
     const gy = world.groundY(S.pos.x, S.pos.z);
     let hit = false;
     for (const h of [0.45, 0.9, 1.35, 1.8, 2.25, 2.45]) {
       const cx = S.pos.x - origin.x, cy = gy + h - origin.y, cz = S.pos.z - origin.z, t = cx * dir.x + cy * dir.y + cz * dir.z;
-      if (t <= 0 || t > 60) continue;
+      if (t <= 0 || t > range) continue;
       const mx = cx - dir.x * t, my = cy - dir.y * t, mz = cz - dir.z * t;
       if (mx * mx + my * my + mz * mz < 0.36 * 0.36) { hit = true; break; }
     }

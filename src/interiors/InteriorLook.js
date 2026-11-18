@@ -109,40 +109,17 @@ export function installInteriorLook(name, { scene, addLayer, boxMaterial, paintT
     cushion: [boxMaterial({ color: name === 'asylum' ? 0x777665 : 0x785447, bias: 0.55 }), 900],
     railGlass: [boxMaterial({ color: 0x52696b, bias: 0.42 }), 850],
     barrierGlass: [new THREE.MeshLambertMaterial({ color: 0x718d98, transparent: true, depthWrite: false, opacity: 0.27 }), 500],
-    moonPane: [boxMaterial({ color: 0x202c42, unlit: true }), 100],
-    moonStripe: [new THREE.MeshBasicMaterial({ color: 0x789aba, opacity: 0.16, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }), 150],
+    moonPane: [boxMaterial({ color: 0x546b8b, unlit: true }), 100],
     fluorescent: [boxMaterial({ color: name === 'backrooms' ? 0xe6dfb4 : 0xc8ded6, unlit: true }), 850],
     aqua: [boxMaterial({ color: 0x43c8c3, unlit: true }), 850],
     emergency: [boxMaterial({ color: 0xd44f28, unlit: true }), 500],
   };
-  // The emergency tubes fade with their corresponding point-light pulse.
-  const lightTime = { value: 0 };
-  specs.emergency[0].onBeforeCompile = (sh) => {
-    sh.uniforms.uInteriorTime = lightTime;
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uInteriorTime;')
-      .replace('#include <opaque_fragment>', `
-        float pulse = sin(uInteriorTime * 8.0 + sin(uInteriorTime * 2.3) * 4.0);
-        outgoingLight *= pulse > 0.74 ? 0.17 : 0.94;
-        #include <opaque_fragment>`);
-  };
-  specs.emergency[0].customProgramCacheKey = () => 'interior-emergency';
   if (Object.hasOwn(FACILITY_THEMES, name)) {
     specs.amberDiode = [boxMaterial({ color: 0xaf6d2c, unlit: true }), 620];
     specs.icePlate = [boxMaterial({ color: 0x637582, bias: 0.82 }), 375];
     if (name === 'cathedral') specs.saltCrust = [boxMaterial({ color: 0x8b9085, bias: 0.65 }), 720];
-    specs.serverLed = [boxMaterial({ color: 0x57b0ac, unlit: true }), 1800];
-    specs.serverLed[0].onBeforeCompile = (sh) => {
-      sh.uniforms.uInteriorTime = lightTime;
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uInteriorTime;')
-        .replace('#include <opaque_fragment>', 'outgoingLight *= step(0.36, sin(uInteriorTime * 2.1)) * 0.94 + 0.06;\n#include <opaque_fragment>');
-    };
-    specs.serverLed[0].customProgramCacheKey = () => 'data-vault-led';
-    const reflection = specs.serverLed[0].clone();
-    reflection.color.setHex(0x28413e); reflection.transparent = true; reflection.opacity = 0.30;
-    reflection.depthWrite = false; reflection.blending = THREE.AdditiveBlending;
-    reflection.onBeforeCompile = specs.serverLed[0].onBeforeCompile;
-    reflection.customProgramCacheKey = () => 'data-vault-floor-light';
-    specs.serverFloorLight = [reflection, 220];
+    specs.serverLed = [boxMaterial({ color: 0x234944, unlit: true }), 1800];
+    specs.serverLamp = [boxMaterial({ color: 0x57b0ac, unlit: true }), 400];
   }
 
   for (const [key, [material, cap]] of Object.entries(specs)) addLayer(key, material, cap);
@@ -389,7 +366,6 @@ export function installInteriorLook(name, { scene, addLayer, boxMaterial, paintT
     chunks.delete(key);
   }
   function update(t, dt, camera, playing) {
-    lightTime.value = t;
     if (playing && name === 'offshore') for (const { sails } of chunks.values()) for (const { positions, phase } of sails) {
       for (let i = 0; i < positions.count; i++) {
         const x = positions.getX(i), y = positions.getY(i);

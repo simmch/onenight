@@ -279,7 +279,7 @@ export function createObserverRound(ctx) {
     spawnDecoy: () => lastInfo && spawnDecoy(lastInfo),
     get marks() { return marks.length; },
     shiftBodies,
-    shot: (origin, dir) => active && observers.some((o) => o.shot(origin, dir)),
+    shot: (origin, dir, range) => active && observers.some((o) => o.shot(origin, dir, range)),
     // fire that did not come from a match (a blast): every unburned body within r catches, and they all hear it
     burnNear(x, z, r) {
       let n = 0;
