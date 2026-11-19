@@ -125,6 +125,9 @@
   #menu .loadNote { display: none; font-size: 12px; letter-spacing: 4px; opacity: .6; }
   #menu.loading { background: #000; }
   #menu.loading nav { display: none; }
+  #menu.loading .mapSelect { display: none; }
+  .mapSelect { display: flex; flex-direction: column; gap: 6px; align-self: flex-start; margin: 0 0 12px; max-width: 100%; color: #b9b3a3; font-size: 11px; letter-spacing: 3px; }
+  .mapSelect select { max-width: 100%; padding: 8px 28px 8px 9px; border: 1px solid #756f61; border-radius: 0; background: #111311; color: #e6dfc8; font: 12px "Courier New", monospace; color-scheme: dark; }
   #menu.loading .loadNote { display: block; }
   #menuPanel { justify-content: flex-start; padding-top: clamp(14px, 7vh, 70px); padding-bottom: 16px; overflow: auto; }
   #menuPanel h2 { font-size: 20px; letter-spacing: 8px; font-weight: normal; color: #d8d2c0; margin: 0 0 12px; }
@@ -235,6 +238,9 @@
     <h1>ONE NIGHT</h1>
     <p class="tag">The dead keep coming. Survive as many rounds as you can.</p>
     <p class="loadNote">LOADING</p>
+    <label class="mapSelect" for="mapSelect">STARTING LOCATION
+      <select id="mapSelect"><option value="">RANDOM LOCATION</option></select>
+    </label>
     <div class="phone" id="menuGestures">
       <p class="big">TAP TO PLAY</p>
       <p>&larr; SWIPE LEFT &middot; INSTRUCTIONS</p>

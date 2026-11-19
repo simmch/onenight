@@ -1,6 +1,7 @@
 // Pixel-scale architectural surfaces and the few props that need more than instanced boxes.
 import * as THREE from 'three';
 import { FACILITY_THEMES } from './HazardLook.js';
+import { createEnvironmentAssets } from '../world/EnvironmentAssets.js';
 
 const THEMES = {
   asylum: { wall: ['#a2aaa0', '#566764', '#415b58'], floor: ['#727d75', '#3d4744'], ceiling: ['#767f76', '#454b49'], trim: 0x47615c, sign: ['#324138', '#e6e8d3'], paint: 0x64867d },
@@ -20,6 +21,7 @@ const V = new THREE.Vector3(), DIR = new THREE.Vector3();
 
 export function installInteriorLook(name, { scene, addLayer, boxMaterial, paintTexture }) {
   const theme = THEMES[name];
+  const environmentAssets = createEnvironmentAssets({ scene, name });
   const textile = name === 'backrooms', tile = ['asylum', 'subway', 'school'].includes(name);
   const surface = (salt, bg, lines, draw, gain = 1, size = 64) => {
     const map = paintTexture(size, salt, (g, rng, n) => {
@@ -339,7 +341,8 @@ export function installInteriorLook(name, { scene, addLayer, boxMaterial, paintT
     return root;
   }
 
-  function mount(key, details) {
+  function mount(key, details, lights, boxes) {
+    environmentAssets.mount(key, lights || [], details || [], boxes || {});
     if (chunks.has(key) || !details?.length) return;
     const root = new THREE.Group(), dolls = [], sails = [], own = [];
     for (const detail of details) {
@@ -359,6 +362,7 @@ export function installInteriorLook(name, { scene, addLayer, boxMaterial, paintT
     scene.add(root); chunks.set(key, { root, dolls, own, sails });
   }
   function unmount(key) {
+    environmentAssets.unmount(key);
     const entry = chunks.get(key);
     if (!entry) return;
     scene.remove(entry.root);
@@ -366,6 +370,7 @@ export function installInteriorLook(name, { scene, addLayer, boxMaterial, paintT
     chunks.delete(key);
   }
   function update(t, dt, camera, playing) {
+    environmentAssets.update(t, dt, playing);
     if (playing && name === 'offshore') for (const { sails } of chunks.values()) for (const { positions, phase } of sails) {
       for (let i = 0; i < positions.count; i++) {
         const x = positions.getX(i), y = positions.getY(i);
@@ -391,7 +396,7 @@ export function installInteriorLook(name, { scene, addLayer, boxMaterial, paintT
       }
     }
   }
-  return { mount, unmount, update, chunks };
+  return { mount, unmount, update, chunks, environmentAssets };
 }
 
 function prng(seed) {

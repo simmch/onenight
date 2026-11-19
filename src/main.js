@@ -59,7 +59,7 @@ const CFG = {
   chestReach: 2.2,
 };
 console.log('seed', CFG.seed);
-// A ?map= link still opens that place. Otherwise the first night is a random one.
+// The title location selector and URL supply the opening map only.
 const requestedMap = new URLSearchParams(location.search).get('map');
 const MAP_NAME = arrival?.map ?? (MAP_NAMES.includes(requestedMap) ? requestedMap : MAP_NAMES[(Math.random() * MAP_NAMES.length) | 0]);
 const META = MAP_META[MAP_NAME];
@@ -672,7 +672,7 @@ function refreshChunks(force) {
     let c = chunks.get(k);
     if (!c) chunks.set(k, c = MAP.generateChunk(cx + dx, cz + dz));
     mountCameraWords(k, c);
-    interiorLook?.mount(k, c.details);
+    interiorLook?.mount(k, c.details, c.lights, c.boxes);
     const p = c.props, q = c.glow, E = eaten.get(k);
     for (let i = 0; i < p.length; i += 7) { if (p[i + 3] < 3 && inClearZone(p[i], p[i + 1])) continue; if (E && inEaten(E, p[i], p[i + 1])) continue; vegLayer.add(p[i], p[i + 6], p[i + 1], p[i + 2], p[i + 3], p[i + 4], p[i + 5]); }
     for (let i = 0; i < q.length; i += 7) if (!E || !inEaten(E, q[i], q[i + 1])) glowLayer.add(q[i], q[i + 6], q[i + 1], q[i + 2], q[i + 3], q[i + 4], q[i + 5]);
@@ -6343,6 +6343,15 @@ updateClock();
 // ?nointro or ?notitle goes straight past it.
 const SHOW_TITLE = !SKIP_INTRO && !new URLSearchParams(location.search).has('notitle');
 const menuEl = document.getElementById('menu'), boardEl = document.getElementById('board');
+const mapSelect = document.getElementById('mapSelect');
+for (const name of MAP_NAMES) mapSelect.add(new Option(MAP_META[name].label, name));
+mapSelect.value = MAP_NAMES.includes(requestedMap) ? requestedMap : '';
+mapSelect.addEventListener('change', () => {
+  const url = new URL(location.href);
+  if (mapSelect.value) url.searchParams.set('map', mapSelect.value);
+  else url.searchParams.delete('map');
+  location.replace(url.href);
+});
 const cinemaKit = {
   THREE, atlas, mulberry, billboardLayer, speckleTexture, surfaceMaterial, groundPalette: MAP_META.forest.ground, buildCorpse,
   render: (sc, cam, hands = false, sharp = false) => renderView(sc, cam, hands, sharp), aspect: () => camera.aspect, fade: fadeEl, menu: menuEl,
