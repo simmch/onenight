@@ -7,6 +7,7 @@ const files = {
   burrower: 'TheVentCrawler/SK_VentCrawler.glb',
   observer: 'TheContortionist/SK_Contortionist.glb',
   trayHound: 'TheTrayHound/SK_TrayHound.glb',
+  unseen: 'TheBrute/SK_Brute.glb',
 };
 const assets = new Map();
 

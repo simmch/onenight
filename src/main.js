@@ -4494,8 +4494,8 @@ function roundBrief() {
   } else if (isUnseenRound()) {
     title = 'THE UNSEEN';
     lines = [
-      'They are invisible until you reveal them. Watch for shaking branches and listen for the screech. A lit match, or the spectral video camera, shows their silhouette.',
-      'They watch for about ten seconds, then strike from behind. When you hear one close, turn to face it. Facing it stops the charge.',
+      'Watch for shaking branches and listen for heavy footsteps. A lit match or the Spectral video camera reveals the Brute. An ordinary flashlight cannot.',
+      'They watch for about ten seconds, then rush you one at a time. When the footsteps close in or you hear a screech, turn to face it or get behind cover.',
       'Kill all of them, or survive until the round runs out. Either one wins.',
     ];
   } else if (isLightboundRound()) {
@@ -5468,7 +5468,19 @@ const unseen = createUnseenRound({
   world: { ...creatureWorld, losBlocked: (x0, z0, x1, z1) => creatureWorld.losBlocked(x0, z0, x1, z1, true) },
   hooks: {
     damage: damagePlayer,
+    warning(monster) {
+      silenceUnseen(monster);
+      cameraCue('rumble', monster.x, monster.z, 10, 0.34);
+    },
+    footfall(monster, charging) {
+      encounterCue('step', monster, charging ? 1.4 : 0.74);
+      cameraCue('stomp', monster.x, monster.z, 8, charging ? 0.67 : 0.21);
+    },
+    glimpse(monster) {
+      cameraCue('door', monster.x, monster.z, 6, 0.5);
+    },
     screech(monster, attack) {
+      if (attack) cameraCue('breach', monster.x, monster.z, 5, 0.6);
       if (unseenVoices.has(monster) && !attack) return;
       silenceUnseen(monster);
       const volume = attack ? 1.08 : 0.52;
@@ -5486,7 +5498,7 @@ const unseen = createUnseenRound({
 });
 function announceUnseen() {
   banner('THE UNSEEN', `Round ${round.n}. ${unseen.monsters.length} are watching.`);
-  toast('Watch for moving branches. A match reveals their shape. Face them to stop an attack.');
+  toast('Watch the branches. Listen for heavy steps behind you. Turn to stop the rush.');
 }
 function updateUnseen(dt, inControl, cameraView) {
   unseen.update(dt, camera, {

@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { ObserverMovement } from '../observer/ObserverMovement.js';
+import { monsterAsset } from '../world/MonsterAssets.js';
 
 export const UNSEEN = {
   observe: 10, maxCount: 8, radius: 0.3, reach: 1.65,
-  stalkSpeed: 6.4, chargeSpeed: 9.2, windup: 0.45, rear: -0.2,
+  stalkSpeed: 6.4, chargeSpeed: 9.2, windup: 0.48, rear: -0.2,
 };
 
 function silhouetteMaterial(fill, edge) {
@@ -30,8 +31,38 @@ function createModels() {
   const cameraMat = silhouetteMaterial(0x07110d, 0x80e2af);
   const orb = new THREE.SphereGeometry(1, 12, 8);
   const limb = new THREE.CylinderGeometry(0.68, 1, 1, 8);
+  const bruteMaterials = new WeakMap();
 
   return function build() {
+    const rig = monsterAsset('unseen', { scale: 0.88, idle: 'Idle' });
+    if (rig?.meshes.length) {
+      rig.root.visible = false;
+      const finishes = rig.meshes.map(mesh => {
+        const source = mesh.material;
+        if (!bruteMaterials.has(source)) {
+          const match = source.clone();
+          match.color.set(0xcfa181);
+          match.emissive.set(0xc27545);
+          match.emissiveMap = source.map;
+          match.emissiveIntensity = 0.42;
+          const spectral = source.clone();
+          spectral.color.set(0x91d4a6);
+          spectral.emissive.set(0x9af9ae);
+          spectral.emissiveMap = source.map;
+          spectral.emissiveIntensity = 0.72;
+          bruteMaterials.set(source, { match, camera: spectral });
+        }
+        return bruteMaterials.get(source);
+      });
+      return {
+        root: rig.root, rig,
+        reveal(mode) {
+          rig.root.visible = !!mode;
+          if (mode) rig.meshes.forEach((mesh, i) => { mesh.material = finishes[i][mode]; });
+        },
+        dispose() { for (const mesh of rig.meshes) mesh.skeleton.dispose(); },
+      };
+    }
     const root = new THREE.Group(), torso = new THREE.Group(), meshes = [];
     function part(parent, geometry, x, y, z, sx, sy, sz) {
       const mesh = new THREE.Mesh(geometry, matchMat);
@@ -84,7 +115,7 @@ export function createUnseenRound({ scene, world, hooks, rng = Math.random }) {
   const monsters = [], build = createModels();
   const view = new THREE.Vector3(), target = new THREE.Vector3(), hitVolume = new THREE.Sphere();
   const ray = new THREE.Ray(), hit = new THREE.Vector3();
-  let active = false, elapsed = 0, damage = 0, speedBonus = 0, nextAttack = 0;
+  let active = false, elapsed = 0, damage = 0, speedBonus = 0, nextAttack = 0, attacker = null;
 
   function nearby(x, z, heading, min, max, clear = true, available = () => true) {
     for (let i = 0; i < 32; i++) {
@@ -101,6 +132,7 @@ export function createUnseenRound({ scene, world, hooks, rng = Math.random }) {
     stop();
     active = true;
     elapsed = nextAttack = 0;
+    attacker = null;
     const level = Math.max(0, round - 1);
     const count = Math.min(UNSEEN.maxCount, 3 + Math.floor(level / 2));
     const hp = 2 + Math.min(6, Math.floor(level / 3));
@@ -121,13 +153,15 @@ export function createUnseenRound({ scene, world, hooks, rng = Math.random }) {
       monsters.push({ x, z, ground, hp, model, motor: new ObserverMovement(world, UNSEEN.radius),
         trailX: x, trailZ: z, angle: heading, phase: rng() * 6, speed: 0,
         state: 'stalk', timer: 0, goal: null, retarget: 1.3 + i * 0.8,
-        voiceIn: 0.4 + i * 0.8, flank: i % 2 ? -1 : 1 });
+        voiceIn: 0.7 + i * 1.8, stride: 0, flank: i % 2 ? -1 : 1, previouslyRevealed: false });
     }
   }
 
   function remove(index) {
     const [monster] = monsters.splice(index, 1);
+    if (attacker === monster) { attacker = null; nextAttack = 1.1; }
     scene.remove(monster.model.root);
+    monster.model.dispose?.();
     hooks.silence(monster);
   }
 
@@ -142,9 +176,17 @@ export function createUnseenRound({ scene, world, hooks, rng = Math.random }) {
     const swing = m.state === 'windup' ? 1 - Math.max(0, m.timer / UNSEEN.windup) : 0;
     const facing = Math.atan2(dx, dz);
     m.angle += Math.atan2(Math.sin(facing - m.angle), Math.cos(facing - m.angle)) * Math.min(1, dt * 16);
+    root.rotation.y = m.angle;
+    if (m.model.rig) {
+      root.position.set(m.x, m.ground, m.z);
+      const clip = m.state === 'windup' || m.state === 'recover' ? 'Attack_Slam'
+        : m.speed > 2.5 ? 'Run' : m.speed > 0.25 ? 'Walk' : 'Idle';
+      const rate = clip === 'Attack_Slam' ? 2 : clip === 'Run' ? Math.min(2.55, m.speed / 3.5) : clip === 'Walk' ? Math.min(2.3, m.speed / 0.78) : 1;
+      m.model.rig.animate(clip, dt, { once: clip === 'Attack_Slam', rate });
+      return;
+    }
     m.phase += dt * (2.5 + m.speed * 1.8);
     root.position.set(m.x, m.ground + Math.sin(m.phase * 2) * moving * 0.065, m.z);
-    root.rotation.y = m.angle;
     torso.rotation.x = 0.18 + moving * 0.33 + swing * 0.4;
     torso.rotation.z = Math.sin(m.phase) * (0.025 + moving * 0.095);
     for (const { shoulder, elbow, side } of arms) {
@@ -159,6 +201,7 @@ export function createUnseenRound({ scene, world, hooks, rng = Math.random }) {
   }
 
   function retreat(m, player, dx, dz) {
+    if (attacker === m) { attacker = null; nextAttack = 1.1; }
     m.state = 'retreat';
     m.timer = 1.1;
     m.motor.reset();
@@ -175,7 +218,7 @@ export function createUnseenRound({ scene, world, hooks, rng = Math.random }) {
     elapsed += dt;
     nextAttack = Math.max(0, nextAttack - dt);
     const player = camera.position, forwardX = -Math.sin(yaw), forwardZ = -Math.cos(yaw);
-    if (cameraRange) camera.getWorldDirection(view);
+    if (cameraRange || matchRange) camera.getWorldDirection(view);
     for (const m of monsters) {
       let dx = player.x - m.x, dz = player.z - m.z, distance = Math.hypot(dx, dz);
       const behind = () => distance > 0.05 && -(dx * forwardX + dz * forwardZ) < UNSEEN.rear * distance;
@@ -186,34 +229,41 @@ export function createUnseenRound({ scene, world, hooks, rng = Math.random }) {
       if (m.state === 'retreat' && m.timer <= 0) {
         m.state = 'stalk'; m.goal = null; m.retarget = 0;
       }
-      if ((m.state === 'charge' || m.state === 'windup') && (!behind() || !clear())) retreat(m, player, dx, dz);
-      if (m.state === 'stalk' && elapsed >= UNSEEN.observe && nextAttack <= 0 && distance < Math.max(4, 12 * (world.exposure?.(player.x, player.z) ?? 1)) && behind() && clear()) {
-        m.state = 'charge'; m.motor.reset();
+      if (attacker === m && m.state !== 'recover' && (!behind() || !clear())) retreat(m, player, dx, dz);
+      if (m.state === 'stalk' && elapsed >= UNSEEN.observe && !attacker && nextAttack <= 0 && distance < Math.max(4, 12 * (world.exposure?.(player.x, player.z) ?? 1)) && behind() && clear()) {
+        attacker = m;
+        m.state = 'coil'; m.timer = 0.3 + rng() * 0.2; m.motor.reset();
+        hooks.warning?.(m);
       }
-      if (m.state === 'charge' && distance <= UNSEEN.reach && nextAttack <= 0) {
+      if (m.state === 'coil' && m.timer <= 0) { m.state = 'charge'; m.timer = 1.45; }
+      if (m.state === 'charge' && distance <= UNSEEN.reach) {
         m.state = 'windup'; m.timer = UNSEEN.windup;
-        nextAttack = UNSEEN.windup + 1.2;
         hooks.screech(m, true);
       }
 
       if (m.state === 'charge') {
-        if (distance > UNSEEN.reach * 0.85) { goal = player; speed = UNSEEN.chargeSpeed + speedBonus; }
+        if (m.timer <= 0) retreat(m, player, dx, dz);
+        else { goal = player; speed = UNSEEN.chargeSpeed + speedBonus; }
       } else if (m.state === 'windup') {
-        if (distance > UNSEEN.reach + 0.3) m.state = 'charge';
+        if (distance > UNSEEN.reach + 0.3) retreat(m, player, dx, dz);
         else if (m.timer <= 0) {
           strike = distance <= UNSEEN.reach;
-          retreat(m, player, dx, dz);
+          m.state = 'recover'; m.timer = 0.38;
+          hooks.footfall?.(m, true);
         }
+      } else if (m.state === 'recover') {
+        if (m.timer <= 0) retreat(m, player, dx, dz);
       } else if (m.state === 'retreat') {
         goal = m.goal; speed = UNSEEN.chargeSpeed;
-      } else {
+      } else if (m.state === 'stalk') {
         if (m.retarget <= 0) {
           m.retarget = distance > 11 || distance < 2.8 ? 0.65 : 1.7 + rng() * 2.1;
           const heading = Math.atan2(-dx, -dz) + m.flank * (0.5 + rng() * 0.7);
           m.goal = nearby(player.x, player.z, heading, 4, 7) || nearby(player.x, player.z, heading, 2, 4);
           m.flank *= -1;
         }
-        goal = m.goal; speed = UNSEEN.stalkSpeed;
+        // Alternate short, fast passes with long stretches standing still.
+        goal = m.goal; speed = !attacker || distance > 9 ? UNSEEN.stalkSpeed : 1.2;
       }
 
       const move = m.motor.update(dt, m, goal, speed);
@@ -224,15 +274,25 @@ export function createUnseenRound({ scene, world, hooks, rng = Math.random }) {
       dx = player.x - m.x; dz = player.z - m.z; distance = Math.hypot(dx, dz);
       if (m.speed > 1 && m.voiceIn <= 0 && distance < 28) {
         hooks.screech(m, false);
-        m.voiceIn = 4 + rng() * 2;
+        m.voiceIn = 5 + rng() * 5;
+      }
+      if (m.speed > 1 && distance < 11) {
+        m.stride += m.speed * dt;
+        if (m.stride >= 1.65) {
+          m.stride %= 1.65;
+          hooks.footfall?.(m, m.state === 'charge');
+        }
       }
       pose(m, dt, m.speed > 1 ? move.vx : dx, m.speed > 1 ? move.vz : dz);
-      target.set(-dx, m.ground + 1.3 - player.y, -dz);
-      const cameraLit = cameraRange > 0 && distance < cameraRange && target.normalize().dot(view) > 0.56;
+      const facing = target.set(-dx, m.ground + 1.3 - player.y, -dz).normalize().dot(view);
+      const cameraLit = cameraRange > 0 && distance < cameraRange && facing > 0.56;
       const matchLit = matchRange > 0 && distance < matchRange;
-      m.model.reveal((cameraLit || matchLit) && clear() ? (cameraLit ? 'camera' : 'match') : null);
+      const reveal = (cameraLit || matchLit) && clear() ? (cameraLit ? 'camera' : 'match') : null;
+      if (reveal && !m.previouslyRevealed && distance < 6 && facing > 0.15) hooks.glimpse?.(m);
+      m.previouslyRevealed = !!reveal;
+      m.model.reveal(reveal);
       if (strike) {
-        hooks.damage(damage, 'unseen');
+        hooks.damage(damage, 'unseen', m);
         if (!active) return;
       }
     }
@@ -251,6 +311,12 @@ export function createUnseenRound({ scene, world, hooks, rng = Math.random }) {
     for (let i = 0; i < monsters.length; i++) {
       const m = monsters[i];
       if (world.losBlocked(origin.x, origin.z, m.x, m.z)) continue;
+      if (m.model.rig) {
+        if (ray.distanceSqToPoint(target.set(m.x, m.ground + 1.1, m.z)) > 2.3 ** 2) continue;
+        const posedHit = m.model.rig.rayHit(origin, direction, nearest, melee ? 0.2 : 0.06);
+        if (posedHit) { nearest = origin.distanceTo(posedHit); best = i; }
+        continue;
+      }
       for (const height of [0.65, 1.23, 1.72]) {
         hitVolume.center.set(m.x, m.ground + height, m.z);
         hitVolume.radius = melee ? 0.76 : 0.43;
