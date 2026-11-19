@@ -265,6 +265,12 @@ export function createCultRound({ root, aspect, render, sound, onWin, onConversi
       x = -2.42; y = lerp(1.18, 1.69, smoothstep(age, 0.55, 2.8)); z = -27.93;
       ty = 2.4; fov = 58;
     }
+    if (!reduced && (phase === 'creed' || phase === 'instruction' || phase === 'question' || phase === 'verdict')) {
+      const approach = smoothstep(age, 0.15, phase === 'question' ? 8.5 : 3.1);
+      z -= approach * (phase === 'verdict' ? 0.48 : 0.23);
+      x -= approach * 0.08;
+      fov -= approach * (phase === 'verdict' ? 3.5 : 1.7);
+    }
     if (phase === 'creed' || phase === 'instruction' || phase === 'question' || phase === 'reaction' || phase === 'verdict') {
       ty -= clamp((1.4 - aspectRatio) / 0.68, 0, 1) * 0.64;
     }

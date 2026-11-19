@@ -4,6 +4,7 @@ import { ObserverAnimator } from './ObserverAnimator.js';
 import { ObserverMovement } from './ObserverMovement.js';
 import { createVisibility, updateVisibility } from './ObserverVisibility.js';
 import { createObserverAudio } from './ObserverAudio.js';
+import { createMimicLight } from './MimicLight.js';
 
 // Tuning. Attention is hidden from the player; it only shows through how the creature behaves and sounds.
 export const OBSERVER = {
@@ -18,7 +19,7 @@ export const OBSERVER = {
   speed: { stalk: 1.4, creep: 2.0, reposition: 4.4, catchUp: 8, retreat: 7.5, relocate: 9 },
   stare: { after: 1.5, rate: 9, burst: 4.5, burstGain: 18 },   // looking straight at it: past 1.5 s each second costs more; 4.5 s and it hisses
   unseen: { close: 0.45, time: 9 },          // looking away lets it come in: up to 45% closer after 9 s unseen
-  mimic: { first: [20, 35], every: [55, 90], dur: [10, 16], dist: [24, 30], breakDist: 14 },
+  mimic: { first: [20, 35], every: [55, 90], dur: [10, 16], dist: [24, 30], delay: [0.46, 0.59] },
   guard: { ring: [3, 4.5], lightRange: 22, lightGain: 7 },   // the last body: your light near it is what it watches for
   alert: { gain: 14, watch: 9, standOff: 7.5 },             // a body burning: it comes to the edge of the firelight
   centralAngle: 0.2,         // radians either side of the crosshair that count as looking straight at it
@@ -47,8 +48,12 @@ export function createObserver(ctx) {
   if (ctx.mimic) {
     mLight = new THREE.SpotLight(0xffeccc, 0, 30, 0.42, 0.55, 1.35);
     scene.add(mLight); scene.add(mLight.target);
-    mLens = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.07), new THREE.MeshBasicMaterial({ color: 0xfff1c8 }));
-    mLens.visible = false; model.j.RightHand.add(mLens); mLens.position.set(0, -0.14, 0.03);
+    mLens = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.095, 0.095), new THREE.MeshBasicMaterial({ color: 0xfff1c8 }));
+    const hand = model.j.RightHand, handScale = hand.getWorldScale(new THREE.Vector3());
+    mLens.visible = false;
+    hand.add(mLens);
+    mLens.scale.setScalar(1).divide(handScale);
+    mLens.position.set(0, -0.12, 0.04).divide(handScale);
   }
   const handPos = new THREE.Vector3(), lastP = new THREE.Vector3();
   const chest = new THREE.Vector3(), eye = new THREE.Vector3();
@@ -146,7 +151,7 @@ export function createObserver(ctx) {
     model.root.rotation.y = S.heading;
   }
 
-  // info: { inControl, yaw, flashlightOn, beamLit, beamRange, beamAngle, matchActive, matchRadius, flash, playerMoving }
+  // mimicLightOn tracks the switch immediately, before the player's raise animation finishes.
   function update(dt, info) {
     if (!S.active) return;
     S.info = info; S.yaw = info.yaw;
@@ -199,7 +204,7 @@ export function createObserver(ctx) {
     const lookPitch = Math.atan2(gy + 2.35 - p.y, Math.max(0.5, dist)) * 0.8;
     if (!S.hunt && !S.mimic && ctx.mimic && !S.guard && !S.drawn && S.stage <= 1) { S.mimicIn -= dt; if (S.mimicIn <= 0) startMimic(); }
     if (S.mimic && !S.hunt) {
-      if (mimicStep(dt, dist)) { lastP.copy(p); return; }
+      if (mimicStep(dt)) { lastP.copy(p); return; }
     }
     lastP.copy(p);
     if (S.hunt) ({ speed, state, goal } = hunt(dt, dist));
@@ -235,16 +240,28 @@ export function createObserver(ctx) {
 
   // ── imitation: far off, it holds a light the way you do, walks when you walk, turns when you turn ──
   function startMimic() {
-    S.mimicIn = rand(MI.every);
-    if (vis.visible || !S.info) return;
-    for (let k = 0; k < 16; k++) {
-      const rel = (Math.random() < 0.5 ? -1 : 1) * (0.25 + Math.random() * 0.35), d = rand(MI.dist), g = at(rel, d);
-      if (!world.walkable(g.x, g.z, 0.5) || world.losBlocked(P().x, P().z, g.x, g.z)) continue;
+    S.mimicIn = rand([4, 8]);
+    if (vis.visible || !S.info.mimicLightOn) return;
+    const p = P();
+    const rim = Math.max(0.31, vis.halfH);
+    for (let k = 0; k < 32; k++) {
+      // Favor the outer third of the actual display. Tight interiors can use
+      // a nearer doorway or the edge of a straight corridor.
+      const near = k >= 16;
+      const rel = (Math.random() < 0.5 ? -1 : 1) * rim * rand(near ? [0.32, 0.82] : [0.68, 0.91]);
+      const d = rand(near ? [9, 19] : MI.dist);
+      if (d < S.info.beamRange && Math.abs(rel) < OBSERVER.centralAngle) continue;
+      const g = at(rel, d);
+      if (!world.walkable(g.x, g.z, 0.5) || world.losBlocked(p.x, p.z, g.x, g.z, true)) continue;
       S.pos.set(g.x, 0, g.z); move.reset();
-      S.mimic = { t: 0, dur: rand(MI.dur), off: (Math.random() - 0.5) * 0.3, lit: false };
+      S.mimic = { t: 0, dur: rand(MI.dur), off: (Math.random() - 0.5) * 0.3, lit: true,
+        nearLimit: Math.min(14, d * 0.7), light: createMimicLight(true, rand(MI.delay)) };
+      S.mimicIn = rand(MI.every);
+      lastP.copy(p);
       S.heading = S.yaw + Math.PI + S.mimic.off; place();
-      return;
+      return true;
     }
+    return false;
   }
   function endMimic(edge) {
     if (!S.mimic) return;
@@ -254,11 +271,13 @@ export function createObserver(ctx) {
     S.mode = 'lurk'; S.retarget = 0;
     if (edge) { S.edgePeek = true; S.peekIn = 1.2; }           // next, the corner of your eye
   }
-  function mimicStep(dt, dist) {
+  function mimicStep(dt) {
     const M = S.mimic, p = P(), info = S.info;
+    const dist = Math.hypot(S.pos.x - p.x, S.pos.z - p.z);
     M.t += dt;
-    const lit = vis.flashLit && vis.central;
-    if (lit || dist < MI.breakDist) { endMimic(false); setRetreat(true); return false; }       // caught in your beam: the light goes out and it is gone
+    const los = !world.losBlocked(p.x, p.z, S.pos.x, S.pos.z, true);
+    const caught = M.t > dt && los && vis.flashLit && vis.central;
+    if (caught || dist < M.nearLimit) { endMimic(false); setRetreat(true); return false; }
     if (M.t >= M.dur) { endMimic(true); return false; }
     const dx = p.x - lastP.x, dz = p.z - lastP.z, stepLen = Math.hypot(dx, dz);
     if (stepLen > 0 && stepLen < 2) {
@@ -268,15 +287,18 @@ export function createObserver(ctx) {
     const speed = stepLen / Math.max(dt, 1e-3);
     S.heading = S.yaw + Math.PI + M.off;                       // facing the way you face
     place();
+    const { on, raised, switched } = M.light.update(dt, !!info.mimicLightOn);
     anim.setState('mimic');
-    anim.update(dt, { speed: speed > 0.3 ? speed : 0, lookYaw: 0, lookPitch: 0 });
+    anim.update(dt, { speed: speed > 0.3 ? speed : 0, lookYaw: 0, lookPitch: 0, lightRaised: raised });
     model.mats.setEyeGlow(0);
-    M.lit = !!info.flashlightOn;
+    M.lit = on;
+    if (switched && los) audio.click(relOf(S.pos.x, S.pos.z), dist);
     if (mLight) {
-      mLight.intensity = M.lit ? 28 : 0; mLens.visible = M.lit;
+      mLight.intensity = los && raised > 0.015 ? 28 * raised : 0;
+      mLens.visible = los && raised > 0.10;
       mLens.getWorldPosition(handPos);
       mLight.position.copy(handPos);
-      const pitch = camera.rotation.x || 0;
+      const pitch = THREE.MathUtils.clamp(camera.rotation.x, -0.45, 0.45) - (1 - raised) * 0.65;
       mLight.target.position.set(handPos.x + Math.sin(S.heading) * 10, handPos.y + Math.tan(pitch) * 10, handPos.z + Math.cos(S.heading) * 10);
     }
     audio.breath(dt, S.rel, dist, 0);
@@ -473,6 +495,10 @@ export function createObserver(ctx) {
     get mimicking() { return !!S.mimic; },
     get mode() { return S.mode; },
     get active() { return S.active; },
+    get peripheral() {
+      if (S.mimic) return mLens.visible && vis.inView && !vis.central && S.mimic.t < 2;
+      return S.active && vis.visible && !vis.central && !vis.flashLit;
+    },
     get hunting() { return !!S.hunt; },
     get position() { return S.pos; },
     silence() { audio.stop(); },

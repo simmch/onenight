@@ -30,6 +30,7 @@ import { mountLeaderboard, offerScore } from './leaderboard.js';
 import { createTitleScreen } from './cinema/TitleScreen.js';
 import { createCutscenes } from './cinema/Cutscenes.js';
 import { createMapFall } from './cinema/MapFall.js';
+import { createHorrorCamera } from './cinema/HorrorCamera.js';
 import { GUN_TIERS, LIGHT_TIERS, RADAR_TIERS, COSTS, PARTS_IN_CHEST, SPRITES, createWorkbench, createPicker, ARMOR_TIERS, ARMOR_ICONS, rollArmorTier } from './gear/upgrades.js';
 
 // The checkpoint carries the run and the fall across the destination's fresh scene load.
@@ -199,7 +200,9 @@ const visionUniforms = {
   uHeat: { value: 0 },
   uWhiteout: { value: 0 },
   uReflection: { value: 0 },
+  uHorror: { value: new THREE.Vector4() }, // edge falloff, exposure, moisture, ghost smearing
 };
+const horrorCamera = createHorrorCamera();
 const visionMat = new THREE.ShaderMaterial({
   uniforms: visionUniforms,
   depthTest: false,
@@ -220,11 +223,14 @@ const visionMat = new THREE.ShaderMaterial({
     uniform float uHeat;
     uniform float uWhiteout;
     uniform float uReflection;
+    uniform vec4 uHorror;
     varying vec2 vUv;
     vec3 tap(vec2 o){ vec2 uv = vec2(mix(vUv.x, 1.0 - vUv.x, step(0.01, uReflection)), vUv.y); return texture2D(tDiffuse, uv + o).rgb; }
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
     void main(){
+      float edge = smoothstep(0.26, 0.84, length((vUv - 0.5) * vec2(min(uAspect, 1.8), 1.0)));
       float wavering = sin(vUv.y * 38.0 + uVideoTime * 9.0) * (0.011 * uHeat);
+      wavering += (vUv.x - 0.5) * edge * uHorror.x * 0.013;
       vec3 sharp = tap(vec2(wavering, 0.0));
       vec2 px = uTexel * 6.5;
       vec3 blur = sharp * 0.18;
@@ -259,6 +265,16 @@ const visionMat = new THREE.ShaderMaterial({
       color = mix(color, blur * 0.44 + vec3(0.10, 0.095, 0.065), uBlind * 0.92);
       color = mix(color, vec3(0.46, 0.52, 0.58) + grain * 0.17, uWhiteout * smoothstep(0.01, 0.65, d + 0.17) * 0.97);
       color = mix(color, color.bgr * vec3(0.62, 0.82, 0.93), uReflection);
+      if (uHorror.w > 0.001) {
+        float drag = (0.5 + 0.5 * sin(floor(uVideoTime * 14.0) * 2.4)) * uHorror.w;
+        vec3 trail = tap(vec2((vUv.x - 0.5) * 0.035 * drag, -0.004 * drag));
+        color = mix(color, trail, edge * drag * 0.48);
+      }
+      float bead = smoothstep(0.83, 1.0, sin(vUv.x * 104.0 + sin(vUv.y * 3.0) * 0.8));
+      float wet = uHorror.z * edge * (0.22 + bead * 0.28);
+      color = mix(color, blur * vec3(0.66, 0.72, 0.76), wet);
+      color *= (1.0 + uHorror.y) * (1.0 - uHorror.x * edge);
+      color += grain * uHorror.x * 0.075 * edge * smoothstep(0.005, 0.13, luma);
       gl_FragColor = vec4(color, 1.0);
     }`,
 });
@@ -2955,6 +2971,8 @@ const facility = MAP.facility ? createFacilityHazards(MAP, opened, {
   },
   reposition(p) { camera.position.x = p.x; camera.position.z = p.z; facilityDirty = true; },
   cue(kind, p) {
+    if (kind === 'shatter' || kind === 'surge') cameraCue('breach', p.x, p.z, 9, 0.44);
+    if (kind === 'crack' || kind === 'cough') cameraCue('door', p.x, p.z, 4, 0.65);
     const { vol, pan } = creatureSoundPlace(p);
     const sounds = {
       hum: [54, 112, 1.4, 1.0], surge: [380, 49, 0.42, 1.25], switch: [128, 70, 0.14, 0.48],
@@ -3145,6 +3163,7 @@ function toggleDoor(d) {
   }
   if (opened.has(d.id)) opened.delete(d.id); else opened.add(d.id);
   sfx.door();
+  cameraCue('door', d.x, d.z, 4, 0.45);
   const loudness = 0.64 * (facility?.noiseScale(d.x, d.z, 'door') ?? 1);
   specialRounds.noise(d, 0.92);
   if (isChoirRound()) choir.noise(camera.position.x, camera.position.z, loudness, 'door');
@@ -4073,8 +4092,13 @@ function stainFromInnocent() {
   visionUniforms.uStain.value = Math.min(STAIN_RED_CAP, inv.innocents * STAIN_RED);
   toast(`The blood stays in you. Maximum health ${inv.maxHealth}.`);
 }
-function damagePlayer(amount, cause = 'ghost') {
+function damagePlayer(amount, cause = 'ghost', source) {
   if (finished) return;
+  if (amount >= 3) {
+    const { x, z } = camera.position;
+    const bearing = source ? Math.atan2(source.x - x, z - source.z) + yaw : 0;
+    horrorCamera.kick(cause === 'burrower' || cause === 'fall' ? 'breach' : 'hit', Math.min(1, amount / 23), bearing);
+  }
   if (amount >= 3) mix.accent(Math.min(1, amount / 24));
   sanity.value = Math.max(0, sanity.value - Math.min(12, amount * 0.18));
   amount *= endlessHurt();
@@ -4300,7 +4324,7 @@ function updateMonsters(dt, inControl, beamOn, running) {
         // locked in your face for one swipe, then gone
         g.timer += dt;
         g.x = px - Math.sin(yaw) * 1.3; g.z = pz - Math.cos(yaw) * 1.3;
-        if (!g.struck && g.animT * GHOST_ANIMS.attack[2] >= 10) { g.struck = true; damagePlayer(GHOST.scareDamage); }
+        if (!g.struck && g.animT * GHOST_ANIMS.attack[2] >= 10) { g.struck = true; damagePlayer(GHOST.scareDamage, 'ghost', g); }
         if (g.animDone || g.timer > 1.4) vanish(g);
       } else if (g.state === 'alert') {
         g.timer -= dt;
@@ -4312,7 +4336,7 @@ function updateMonsters(dt, inControl, beamOn, running) {
       } else if (g.state === 'attack') {
         if (!g.struck && g.animT * GHOST_ANIMS.attack[2] >= 10) {
           g.struck = true;
-          if (dist < GHOST.reach + 0.9 && !MAP.blocked(px, pz, g.x, g.z, opened)) damagePlayer(GHOST.damage);
+          if (dist < GHOST.reach + 0.9 && !MAP.blocked(px, pz, g.x, g.z, opened)) damagePlayer(GHOST.damage, 'ghost', g);
         }
         if (g.animDone) {
           if (g.sneaking) { g.sneaking = false; g.state = 'wander'; g.mode = 'lurk'; g.retarget = 0; g.lit = 0; g.creepIn = creepDelay(); }
@@ -5007,6 +5031,7 @@ function updateObserver(dt, inControl) {
   obsRound.update(dt, {
     inControl: inControl && playing, yaw,
     flashlightOn: flashlight.equipped && flashlight.battery > 0 && flashlight.raise > 0.6,
+    mimicLightOn: flashlight.equipped && flashlight.battery > 0 && facilityView?.drop?.id !== 'flashlight',
     beamLit: Math.min(1, spot.intensity / L.intensity), beamRange: L.distance, beamAngle: L.angle,
     matchActive: match.t > 0, matchRadius: CFG.match.distance,
     flash: flashLight.intensity > 0.6 && !debugAmbient ? 1 : 0,
@@ -5075,6 +5100,7 @@ const choir = createChoirRound({
   hooks: {
     say: (text) => toast(text),
     damage: (amount, cause) => damagePlayer(amount, cause),
+    cameraCue: (x, z, pounce) => cameraCue('hound', x, z, pounce ? 6 : 8, pounce ? 0.85 : 0.26),
     civilianDeath: () => playClip(dyingBuffer, 0.9),
   },
 });
@@ -5120,6 +5146,7 @@ const consumer = createConsumerRound({
     say: (text) => toast(text),
     damage: (amount, cause) => damagePlayer(amount, cause),
     stomp(x, z, size, surface) {
+      cameraCue('stomp', x, z, 16, Math.min(1, size * 0.42) * (surface === 'ceiling' ? 0.65 : 1));
       if (surface === 'ceiling') return;
       const distance = Math.hypot(camera.position.x - x, camera.position.z - z);
       consumerViewShake.value = Math.max(consumerViewShake.value, Math.max(0, 1 - distance / 15) * Math.min(0.42, size * 0.14));
@@ -5552,6 +5579,9 @@ const encounterCues = {
   falseTick: [370, 280, 0.08, 0.27, 'triangle'],
 };
 function encounterCue(kind, point, volume = 1) {
+  if (round.type === 'burrower' && (kind === 'rumble' || kind === 'crack')) {
+    cameraCue(kind === 'rumble' ? 'rumble' : 'breach', point.x, point.z, 11, kind === 'rumble' ? 0.62 : 0.85);
+  }
   if (audioCtx.state !== 'running' || encounterVoices.size >= 14) return;
   const [from, to, duration, loudness, wave] = encounterCues[kind];
   const { vol, pan } = creatureSoundPlace(point);
@@ -5761,10 +5791,10 @@ function clearMind() {
   for (const k of mindKids) hideMindKid(k);
   hideMindObserver();
 }
-function placeInView(minD, maxD, spread) {
+function placeInView(minD, maxD, spread, inner = 0) {
   const px = camera.position.x, pz = camera.position.z;
   for (let i = 0; i < 16; i++) {
-    const a = yaw + (Math.random() - 0.5) * 2 * spread;
+    const a = yaw + (Math.random() < 0.5 ? -1 : 1) * (inner + Math.random() * (spread - inner));
     const d = minD + Math.random() * (maxD - minD);
     const x = px - Math.sin(a) * d, z = pz - Math.cos(a) * d;
     if (!creatureWorld.walkable(x, z, 0.35) || creatureWorld.losBlocked(px, pz, x, z)) continue;
@@ -5781,14 +5811,18 @@ function headingWithRoom(x, z, preferred) {
 }
 function spawnMindKid() {
   const slot = mindKids.find((k) => !k.on);
-  const spotAt = placeInView(2.2, beamLive() ? 6.2 : 10, beamLive() ? L.angle * 0.65 : 1.05);
+  const rim = Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect);
+  const peripheral = Math.random() < 0.32 ? placeInView(3, 8, rim * 0.94, rim * 0.68) : null;
+  const spotAt = peripheral || placeInView(2.2, beamLive() ? 6.2 : 10, beamLive() ? L.angle * 0.65 : 1.05);
   if (!slot || !spotAt) return false;
   const across = yaw + (Math.random() < 0.5 ? 1 : -1) * (0.55 + Math.random() * 1.05);
   slot.on = true;
   slot.x = spotAt.x; slot.z = spotAt.z;
   slot.heading = headingWithRoom(spotAt.x, spotAt.z, across);
   slot.speed = 2.4 + Math.random() * 2.2;
-  slot.life = 0.85 + Math.random() * 1.7;
+  slot.life = peripheral ? 0.38 + Math.random() * 0.48 : 0.85 + Math.random() * 1.7;
+  slot.peripheral = !!peripheral;
+  slot.age = 0;
   slot.delay = Math.random() < 0.4 ? 0.12 + Math.random() * 0.28 : 0;
   slot.gait = Math.random() * 6.28;
   slot.c.root.visible = true;
@@ -5851,7 +5885,12 @@ function updateMind(dt, value) {
   for (const k of mindKids) {
     if (!k.on) continue;
     k.life -= dt;
+    k.age += dt;
     if (k.life <= 0) { hideMindKid(k); continue; }
+    if (k.peripheral && k.age > 0.12) {
+      const bearing = Math.atan2(camera.position.x - k.x, camera.position.z - k.z) - yaw;
+      if (Math.cos(bearing) > 0.985) { hideMindKid(k); continue; }
+    }
     const moving = k.delay <= 0;
     if (!moving) k.delay -= dt;
     k.gait += dt * (moving ? k.speed : 0.4) * 6.5;
@@ -6015,6 +6054,40 @@ function updateSanity(dt, inControl, running) {
 }
 
 const longMixRoom = ['cathedral', 'subway', 'accelerator', 'mall', 'cave'].includes(MAP_NAME);
+function cameraCue(kind, x, z, range, strength) {
+  if (!playing || finished || intro.active || horrorCamera.reduced) return;
+  const px = camera.position.x, pz = camera.position.z;
+  const dx = x - px, dz = z - pz;
+  const proximity = 1 - Math.hypot(dx, dz) / range;
+  if (proximity <= 0) return;
+  const cover = MAP.blocked(px, pz, x, z, opened) ? 0.45 : 1;
+  const bearing = Math.atan2(dx, -dz) + yaw;
+  horrorCamera.kick(kind, strength * proximity * cover, bearing);
+}
+
+function playerCameraEffects(dt, inControl, moving, running, staminaCap, ground) {
+  const { x, z } = camera.position;
+  const consumerNear = consumer.active && !consumer.dead
+    ? Math.max(0, 1 - Math.hypot(x - consumer.x, z - consumer.z) / 10) : 0;
+  const observer = obsRound.active && obsRound.observers.find(o => o.peripheral);
+  const observerBearing = observer ? Math.atan2(x - observer.position.x, z - observer.position.z) - yaw : 0;
+  const flashlightLit = flashlight.equipped && flashlight.raise > 0.6 && spot.intensity > 1;
+  const shade = !facilityLight && !flashlightLit && match.t <= 0;
+  const rainOnLens = !indoors && (MAP_NAME === 'glasshouse' ? facilityView.rain : META.weather === 'rain' ? 0.55 : 0);
+  const ghostClose = ghosts.some(g => (g.state === 'attack' || g.state === 'scare') && Math.hypot(g.x - x, g.z - z) < 4);
+  return horrorCamera.sample(dt, {
+    active: inControl && slimeTravel.t < 0, yaw, bob, moving: moving && !swim.in, running,
+    ads: gun.ads, hold: holdingBreath, ground,
+    strain: Math.max(1 - inv.health / inv.maxHealth, (1 - stamina / staminaCap) * 0.65, (1 - sanity.value / SANITY_MAX) * 0.8),
+    threat: consumerNear,
+    glance: Math.sin(observerBearing) * 0.034,
+    floor: -(1 - stamina / staminaCap) * 0.036 - consumerNear * 0.057 - (wade.in ? 0.026 : 0),
+    lit: lightbound.active ? facilityLight : !shade, lightbound: lightbound.active && (facilityLight || lightbound.draining),
+    ghost: ghostClose ? 0.85 : 0,
+    moisture: Math.max(rainOnLens * 0.55, swim.in ? 0.7 : 0, (facilityView?.blind ?? 0) * 0.65, facilityView?.gassed ? 0.52 : 0),
+  });
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -6099,6 +6172,8 @@ function frame(now) {
 
   // camera + head bob. Holding breath zooms in; past 10s the view starts to shake.
   const bobY = Math.sin(bob) * 0.035, bobX = Math.cos(bob * 0.5) * 0.02;
+  const groundHeight = MAP.groundY(camera.position.x, camera.position.z);
+  const view = playerCameraEffects(dt, inControl, moving, running, staminaCap, groundHeight);
   // Running: the body pounds and twists. Each foot strike jolts the view down, the shoulders roll side to side
   // with the stride, the head sways and the whole thing judders. The flashlight hand pumps up and down out of step.
   runShake.k += ((running && inControl ? 1 : 0) - runShake.k) * Math.min(1, dt * 6);
@@ -6106,9 +6181,10 @@ function frame(now) {
   const judder = Math.sin(uTime.value * 31) * Math.sin(uTime.value * 13.7);
   const runY = rk * (Math.abs(Math.sin(bob)) * 0.075 - 0.04 - strike * 0.03);
   consumerViewShake.value = Math.max(0, consumerViewShake.value - dt * 2.8);
-  const consumerJolt = Math.sin(uTime.value * 51) * consumerViewShake.value * 0.055;
+  const physical = inControl && !horrorCamera.reduced ? (1 - gun.ads) ** 2 : 0;
+  const consumerJolt = Math.sin(uTime.value * 21) * consumerViewShake.value * 0.038 * physical;
   const stooped = MAP.zoneAt?.(camera.position.x, camera.position.z) === 'cableHatch';
-  camera.position.y = MAP.groundY(camera.position.x, camera.position.z) + CFG.eye + bobY + runY + cut.y - swim.sink * 1.15 - wade.sink + consumerJolt - (stooped ? 0.66 : 0);
+  camera.position.y = groundHeight + CFG.eye + view.y + runY * physical * 0.3 + cut.y - swim.sink * 1.15 - wade.sink + consumerJolt - (stooped ? 0.66 : 0);
   const shaking = (facilityView?.shiver ?? 0) * 0.014;
   let sx = rk * (-0.025 - strike * 0.03 + judder * 0.008), sy = rk * Math.cos(bob) * 0.028, sr = rk * (Math.sin(bob) * 0.045 + judder * 0.01);
   if (holdingBreath && holdTime >= 10) {
@@ -6117,7 +6193,9 @@ function frame(now) {
     sy += Math.sin(uTime.value * 21) * 0.018 * k;
     sr += Math.sin(uTime.value * 17) * 0.014 * k;
   }
-  camera.rotation.set(pitch + cut.pitch + sx + shaking * Math.sin(uTime.value * 37), yaw + cut.yaw + sy, cut.roll + sr + consumerViewShake.value * 0.018);
+  camera.rotation.set(pitch + cut.pitch + view.pitch + physical * (sx * 0.4 + shaking * Math.sin(uTime.value * 37)),
+    yaw + cut.yaw + view.yaw + sy * physical * 0.24,
+    cut.roll + view.roll + physical * (sr * 0.24 + consumerViewShake.value * 0.01));
 
   // flashlight raise / lower, with a faint wobble and occasional hard flicker
   flashlight.raise += ((flashlight.equipped && facilityView?.drop?.id !== 'flashlight' ? 1 : 0) - flashlight.raise) * Math.min(1, dt * 9);
@@ -6149,7 +6227,7 @@ function frame(now) {
   syncVideoCamera(videoLens && !finished);
   const breathFov = videoLens ? 82 : holdingBreath && inControl ? 61 : 70;
   zoomFov += (breathFov - zoomFov) * Math.min(1, dt * 3.2);
-  const fov = zoomFov - gun.ads * 16;
+  const fov = zoomFov - gun.ads * 16 + view.fov;
   if (Math.abs(camera.fov - fov) > 0.02) { camera.fov = fov; camera.updateProjectionMatrix(); }
   const flickerOk = raised && playing && !finished && !intro.active && flashlight.battery > 0;
   if (flickerOk && flashlight.flickerAge < 0) {
@@ -6227,9 +6305,14 @@ function frame(now) {
   visionUniforms.uHeat.value = inControl ? (facilityView?.haze ?? 0) : 0;
   visionUniforms.uWhiteout.value = inControl ? (facilityView?.whiteout ?? 0) : 0;
   visionUniforms.uReflection.value = peek ? 0.55 : 0;
+  if (inControl && !finished && !cutscenes.active && !peek) {
+    const lensWeight = cameraViewActive ? 0.25 : 1;
+    visionUniforms.uHorror.value.set(view.edge * lensWeight, view.exposure * lensWeight, view.mist, view.ghosting);
+  }
   if (peek) renderView(scene, reflectionCamera, false);
   else renderView(scene, camera, held.visible || gunMesh.visible || matchMesh.visible);
   visionUniforms.uBlind.value = visionUniforms.uHeat.value = visionUniforms.uWhiteout.value = visionUniforms.uReflection.value = 0;
+  visionUniforms.uHorror.value.set(0, 0, 0, 0);
 }
 // One picture: the world at low resolution through the vision pass, then whatever is held in the hands on top.
 // The title screen and the cutscenes that leave the map draw their own scene through the same pass.

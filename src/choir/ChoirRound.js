@@ -364,6 +364,7 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
       s.attackT = 1.48 + s.speedFactor * 0.18;
       s.hound.animate('Attack_Shred', 0, { once: true, rate: 2.65, restart: true });
       playAt(audio.queenAttack, s.x, s.z, 0.95);
+      hooks.cameraCue?.(s.x, s.z, true);
     }
     if (s.pounce) {
       const p = s.pounce;
@@ -398,6 +399,13 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
       else if (motion < 0.13) s.hound.animate(s.idle, dt, { rate: 0.75 + s.speedFactor * 0.19 });
       else if (motion < 1.2) s.hound.animate('Walk', dt, { rate: THREE.MathUtils.clamp(motion / 0.36, 0.63, 2.45) });
       else s.hound.animate(C.state === 'FRENZY' ? 'Run_Shred' : 'Run', dt, { rate: THREE.MathUtils.clamp(motion / 2.6, 0.65, 1.75) });
+      if (motion > 1.2 && distance < 8) {
+        s.cameraStride = (s.cameraStride ?? 0.8) + motion * dt;
+        if (s.cameraStride >= 1.1) {
+          s.cameraStride %= 1.1;
+          hooks.cameraCue?.(s.x, s.z, false);
+        }
+      }
     }
     const turn = angleTo(facing, heading);
     s.mesh.rotation.y += THREE.MathUtils.clamp(turn, -dt * 10, dt * 10);

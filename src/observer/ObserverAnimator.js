@@ -125,7 +125,8 @@ export class ObserverAnimator {
         this.set(S + 'UpperArm', 0.3 * Math.sin(p), 0, s * 0.04);
         this.set(S + 'Elbow', -0.15, 0, 0); this.set(S + 'Forearm', 0, 0, 0);
       }
-      this.set('RightUpperArm', -1.2, 0, -0.06); this.set('RightElbow', 0.05, 0, 0); this.set('RightHand', -0.3, 0, 0);
+      this.set('RightUpperArm', -0.12 - 1.08 * (ctx.lightRaised ?? 1), 0, -0.06);
+      this.set('RightElbow', 0.05, 0, 0); this.set('RightHand', -0.3, 0, 0);
       hip = DIMS.hip + 0.03;
     } else if (st === 'scurry') {
       // folded almost flat, hands on the ground, legs going far too fast and out of step
