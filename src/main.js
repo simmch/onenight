@@ -2073,8 +2073,10 @@ function drawRadarMap() {
   if (inv.radarTier >= 2) for (const c of chunks.values()) {      // prospector: every chest still shut
     const ch = c.chest, at = ch && !opened.has(ch.id) && blip(ch.x, ch.z);
     if (!at) continue;
-    g.fillStyle = ch.tier === 'armory' ? '#d9b86c' : ch.tier === 'red' ? '#d27666' : ch.tier === 'blue' ? '#769dc9' : '#cfc9b4';
-    g.fillRect(at[0] - 2.5, at[1] - 2.5, 5, 5);
+    // chests are teal diamonds, so they never read as an objective (reds, ambers, yellow-green) or a creature (round dots); the better the chest, the bigger
+    const s = ch.tier === 'armory' ? 4.5 : ch.tier === 'red' || ch.tier === 'blue' ? 3.6 : 3;
+    g.fillStyle = '#3fe0c0'; g.strokeStyle = '#0b2b26'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(at[0], at[1] - s); g.lineTo(at[0] + s, at[1]); g.lineTo(at[0], at[1] + s); g.lineTo(at[0] - s, at[1]); g.closePath(); g.fill(); g.stroke();
   }
   if (inv.radarTier >= 1 && !choirMode) {                         // tracker: whatever is moving
     const dot = (x0, z0, color, r) => { const at = blip(x0, z0); if (at) { g.fillStyle = color; g.beginPath(); g.arc(at[0], at[1], r, 0, Math.PI * 2); g.fill(); } };
@@ -3782,6 +3784,12 @@ function vanish(g) {
   g.mover?.reset();
   g.state = 'wander'; g.mode = 'lurk'; g.away = 12; g.tx = g.x; g.tz = g.z; g.retarget = 0; g.lit = 0; g.creepIn = creepDelay();
 }
+// Health climbs with the rounds so the dead keep up with better guns: 2 shots in round 1, 4 by round 5, 7 by round 11, 12 by round 21.
+// A brute takes about twice as much. Past round 31 it stops climbing.
+function ghostHp(brute) {
+  const n = Math.min(Math.max(1, round.n), 31), hp = GHOST.hp + Math.floor((n - 1) / 2);
+  return brute ? hp * 2 + 1 : hp;
+}
 function makeGhost(x, z, brute = false) {
   // Lit by the flashlight like everything else; a faint emissive keeps the red eyes just visible in the dark.
   const mat = new THREE.MeshLambertMaterial({ map: ghostTex.idle, emissiveMap: ghostTex.idle, emissive: 0xff6060, emissiveIntensity: GHOST.eyeGlow, alphaTest: 0.5, side: THREE.DoubleSide });
@@ -3791,7 +3799,7 @@ function makeGhost(x, z, brute = false) {
   const sizeScale = brute ? Math.min(1.85, 1.42 + (round.n - 3) * 0.06 + Math.random() * 0.1) : 0.86 + Math.random() * 0.2;
   mesh.scale.setScalar(sizeScale);
   scene.add(mesh);
-  const hp = brute ? GHOST.hp + 2 + Math.floor((round.n - 3) / 2) : GHOST.hp + Math.floor((round.n - 1) / 4);
+  const hp = ghostHp(brute);
   const g = { x, z, mesh, sizeScale, brute, state: 'wander', hp, maxHp: hp, anim: '', animT: 0, animDone: false, tx: x, tz: z, retarget: 0,
               lit: 0, calm: 0, dark: 0, timer: 0, struck: false,
               mode: 'lurk', creepIn: creepDelay(), creepT: 0, stare: 0, away: 0, oa: 0, od: 15, flip: false, phase: Math.random() * 6 };
@@ -3955,6 +3963,32 @@ function hurtGhost(g, damage) {
   } else { g.state = 'hurt'; g.timer = 0.5; g.anim = ''; setAnim(g, 'hurt'); playGhostShot(g); }
 }
 
+// Ambush: from round 2 on, a long run with nothing happening draws one or two ghosts out of the dark, off to the side ahead of you.
+// They come in hunting, so there is something to shoot on the way. Not in a Collective round (its rules are about light and fleeing).
+const AMBUSH = { after: 14, cool: [38, 60], near: 12, far: 17, maxLive: 2 };
+const ambush = { run: 0, cool: 20 };
+function updateAmbush(dt, inControl, running) {
+  const quiet = !inControl || finished || round.n < 2 || round.rest > 0 || isCollectiveRound() || cutscenes.active || labLeaving || slimeTravel.t >= 0;
+  ambush.cool = Math.max(0, ambush.cool - dt);
+  // travelling counts (running fully, walking between sprints at 60%, since stamina runs out in 8 s); standing still drains it, a short stop does not reset it
+  ambush.run = quiet ? 0 : running ? ambush.run + dt : playerSpeedNow > 0 ? ambush.run + dt * 0.6 : Math.max(0, ambush.run - dt * 0.8);
+  if (quiet || ambush.run < AMBUSH.after || ambush.cool > 0) return;
+  if (ghosts.filter((g) => g.ambush && g.state !== 'die').length >= AMBUSH.maxLive) return;
+  const count = Math.random() < Math.min(0.6, 0.15 + round.n * 0.04) ? 2 : 1, px = camera.position.x, pz = camera.position.z;
+  let made = 0;
+  for (let tries = 0; tries < 16 && made < count; tries++) {
+    const side = Math.random() < 0.5 ? -1 : 1, a = yaw + side * (0.45 + Math.random() * 0.7);   // ahead, but out of the beam
+    const d = AMBUSH.near + Math.random() * (AMBUSH.far - AMBUSH.near);
+    const x = px - Math.sin(a) * d, z = pz - Math.cos(a) * d;
+    if (!creatureWorld.walkable(x, z, 0.45) || MAP.blocked(px, pz, x, z, opened)) continue;
+    const g = makeGhost(x, z, round.n >= 6 && Math.random() < 0.2);
+    g.ambush = true; g.state = 'alert'; g.timer = 0.35 + made * 0.4;
+    ghosts.push(g); playGhostShot(g); made++;
+  }
+  if (!made) return;
+  ambush.run = 0; ambush.cool = AMBUSH.cool[0] + Math.random() * (AMBUSH.cool[1] - AMBUSH.cool[0]);
+  thump(110, 40, 0.3, 0.35); noise1(0.35, 'bandpass', 1400, 500, 0.3);
+}
 function updateMonsters(dt, inControl, beamOn, running) {
   syncTick(inControl && menace().frenzy && !huntSilence);
   updateObserver(dt, inControl);
@@ -3962,6 +3996,7 @@ function updateMonsters(dt, inControl, beamOn, running) {
   updateChoir(dt, inControl);
   updateConsumer(dt, inControl);
   updateSlime(dt, inControl);
+  updateAmbush(dt, inControl, running);
   const px = camera.position.x, pz = camera.position.z;
   if (!inControl) {
     for (const g of ghosts) if (g.chase) { stopSrc(g.chase.src); g.chase = null; }
@@ -6192,4 +6227,4 @@ if (LAB) buildLabDead();
 mountLeaderboard();
 
 // small debug handle for the console
-window.game = { title, facility, damagePlayer, armor, wearArmor, endlessHurt, rollArmorTier, cutscenes, picker, pickOffers, drops, dropBundle, salvage, salvageIn, die(cause) { deathCause = cause; endGame(false); }, bench, GUN, applyKit, addParts, throwGrenade, grenades, craftGear, gearRecipes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, slime, SLIME, unseen, unseenRustle, lake, eaten, slimeTravel, newWorld, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };
+window.game = { title, facility, damagePlayer, armor, wearArmor, endlessHurt, rollArmorTier, cutscenes, picker, pickOffers, drops, dropBundle, salvage, salvageIn, die(cause) { deathCause = cause; endGame(false); }, bench, GUN, applyKit, addParts, throwGrenade, grenades, craftGear, gearRecipes, labyrinth: LAB, leaveLabyrinth, journal, lore, collectLore, dropLore, radar, drawRadarMap, setDusk, isDusk: () => isDusk, forceNext(type) { forcedMonster = type; }, collective, choir, consumer, slime, SLIME, ambush, AMBUSH, ghostHp, unseen, unseenRustle, lake, eaten, slimeTravel, newWorld, col: () => collective.debug(), obsRound, observer: () => obsRound.observer.debug(), creatureWorld, setHuntSilence, clock: () => uTime.value, outdoor: { filter: outdoorFilter, gain: outdoorGain }, weatherGain, cry, vision: visionUniforms, debugLight(v) { debugAmbient = v; flashLight.color.set(v ? 0xffffff : 0xbfd0ff); if (!v) flashLight.intensity = 0; }, MAP, MAP_NAME, storm: forestStorm, near, layers, swim, burn, bolt, weather, poolLights, world: () => ({ indoors, action: mapAction && mapAction.label, deathCause, glowStatic }), act: useAction, teleport(x, z) { camera.position.x = x; camera.position.z = z; }, menace, clips: { reloadBuffer, clockBuffer, dyingBuffer, singBuffer }, ticking: () => !!tick, scare, ghosts, round, ROUND, GHOST, startRound, state: () => ({ finished, playing, holdingBreath }), inv, gun, match, opened, SPAWN_CHEST, openChest, setYaw(v) { yaw = v; pitch = 0; }, setPitch(v) { pitch = v; }, intro, INTRO, debugBegin() { title.skip(); playing = true; started = true; overlay.style.display = 'none'; }, setSanity(v) { sanity.value = THREE.MathUtils.clamp(v, 0, SANITY_MAX); }, sanity, mind: () => ({ kids: mindKids.filter((k) => k.on).length, observer: mindObserver.on && mindObserverModel.root.visible, spawnedKids: mindStats.kids, spawnedObserver: mindStats.observer, kidRun: mindStats.kidRun, ahead: mindStats.ahead, mode: mindStats.lastMode, fronts: mindStats.fronts, charges: mindStats.charges, empty: sanity.empty, sanity: sanity.value }), CFG, camera, flashlight, chunks, veg, scene, renderer, introSong, audioCtx, walkBuffer, runBuffer, outsideAmbience, idleGain, walkGain, runGain, breathFilter, footstepGain, kids };

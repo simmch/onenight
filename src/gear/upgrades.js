@@ -166,7 +166,7 @@ export const LIGHT_TIERS = [
 export const RADAR_TIERS = [
   { name: 'Radar', range: 32, cost: 6, note: 'Finds bodies and the Choir. Only wakes in those rounds' },
   { name: 'Tracker', range: 38, cost: 8, note: 'Works in every round, and shows whatever is moving out there' },
-  { name: 'Prospector', range: 46, cost: 10, note: 'Reaches farther, and marks every unopened chest in range' },
+  { name: 'Prospector', range: 46, cost: 10, note: 'Reaches farther, and marks every unopened chest in range as a teal diamond' },
 ];
 export const COSTS = { battery: 3, ammo: 2, matches: 2, grenade: 4, potion: 6, launcher: 10 };
 export const PARTS_IN_CHEST = { common: [1, 2], blue: [3, 4], red: [4, 6], armory: [5, 7] };
