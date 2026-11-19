@@ -5151,7 +5151,7 @@ function updateConsumerAtmosphere(dt, inControl) {
     };
     consumerStorm.hazardIn = 8; consumerStorm.strikeIn = 6 + Math.random() * 4; consumerStorm.warned = false;
   }
-  const target = active ? THREE.MathUtils.clamp((consumer.sizeScale - 1) / 0.95, 0, 1) : 0;
+  const target = active ? THREE.MathUtils.clamp((consumer.sizeScale - consumer.baseScale) / 0.95, 0, 1) : 0;
   consumerStorm.intensity += (target - consumerStorm.intensity) * Math.min(1, dt * (target > consumerStorm.intensity ? 0.75 : 1.7));
   consumerRainUniforms.uIntensity.value = consumerStorm.intensity;
   consumerRain.visible = consumerStorm.intensity > 0.01;

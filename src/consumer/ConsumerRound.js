@@ -5,7 +5,9 @@ import { buildConsumerModel, CONSUMER_HEIGHT } from './ConsumerModel.js';
 const CIVILIAN_COUNT = 26;
 const CIVILIAN_RESCUE_TIME = 4.2;
 const CIVILIAN_SPEED = [1.85, 2.55];
-const MAX_CONSUMER_SCALE = 3.3;
+const CONSUMER_BASE = 1.8;
+const MAX_CONSUMER_SCALE = 5.2;
+const CEILING_SCALE = CONSUMER_BASE + 0.25;
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
 function createCitizenFrames() {
@@ -62,7 +64,7 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
     !!world.roofY && Math.abs(ground(ax, az) - ground(bx, bz)) > 1.25;
   const bodyRadius = () => model.contactRadius * S.sizeScale;
   const movementRadius = () => Math.min(1.1, 0.42 * S.sizeScale);
-  const scaleNow = () => Math.min(MAX_CONSUMER_SCALE, 1 + (S.round - 1) * 0.018 + S.eaten * 0.12);
+  const scaleNow = () => Math.min(MAX_CONSUMER_SCALE, CONSUMER_BASE + (S.round - 1) * 0.018 + S.eaten * 0.12);
   const feedingMouth = new THREE.Vector3();
   function fitBody() {
     const { x, z } = S.pos;
@@ -229,7 +231,7 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
     S.maxHealth += gain; S.health = Math.min(S.maxHealth, S.health + gain);
     S.sizeScale = scaleNow();
     fitBody();
-    if (S.surface === 'ceiling' && S.sizeScale >= 1.25) { S.surface = 'ground'; S.surfaceT = 0.8; }
+    if (S.surface === 'ceiling' && S.sizeScale >= CEILING_SCALE) { S.surface = 'ground'; S.surfaceT = 0.8; }
     model.distortion.material.opacity = Math.min(0.48, 0.14 + S.eaten * 0.035);
     hooks.growth?.(S.eaten, S.sizeScale, S.maxHealth);
     say(`The Consumer swells. ${S.maxHealth} maximum health.`);
@@ -322,7 +324,7 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
   function surfacePose(dt) {
     S.surfaceT -= dt;
     if (S.surfaceT <= 0) {
-      const canReachCeiling = world.ceiling > 0 && S.sizeScale < 1.25;
+      const canReachCeiling = world.ceiling > 0 && S.sizeScale < CEILING_SCALE;
       S.surface = canReachCeiling && Math.random() < 0.18 ? 'ceiling' : 'ground';
       S.surfaceT = S.surface === 'ground' ? 7 + Math.random() * 9 : 3 + Math.random() * 3;
     }
@@ -597,7 +599,7 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
     start, stop, update, shot, blast, noise, worldAction,
     get active() { return S.active; }, get dead() { return S.dead; },
     get health() { return S.health; }, get maxHealth() { return S.maxHealth; },
-    get sizeScale() { return S.sizeScale; }, get mode() { return S.mode; }, get surface() { return S.surface; },
+    get sizeScale() { return S.sizeScale; }, get baseScale() { return CONSUMER_BASE; }, get mode() { return S.mode; }, get surface() { return S.surface; },
     get x() { return S.pos.x; }, get z() { return S.pos.z; },
     get civilians() { return aliveCitizens(); }, get total() { return citizens.length; },
     get rescued() { return S.rescued; }, get eaten() { return S.eaten; }, get killed() { return S.killed; },
