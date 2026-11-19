@@ -215,7 +215,7 @@ export function createLightboundRound({ scene, world, fixtures, fixtureIsOn, hoo
         cry(m, 'near');
         m.nextNearCry = 3.2 + rng() * 1.4;
       } else if (range < 27 && m.nextCry <= 0) cry(m, 'idle');
-      m.model.pose(loopTime, m.scream, m.recoil);
+      m.model.pose(loopTime, m.scream, m.recoil, dt);
       if (range < 8.2 && Math.abs(p.y - root.position.y - 1.45) < 2.35 && clear(m, p)) {
         drain += Math.max(0.28, 1 - range / 9.8);
       }
@@ -253,10 +253,11 @@ export function createLightboundRound({ scene, world, fixtures, fixtureIsOn, hoo
     for (const m of creatures) {
       if (!m.model.root.visible || !visible(m) || !clear(origin, m)) continue;
       m.model.root.updateMatrixWorld(true);
-      m.model.head.getWorldPosition(head);
-      m.model.torso.localToWorld(chest.set(0, 0.42, 0));
       const scale = m.model.root.scale.x;
-      for (const [center, radius, bonus] of [[head, 0.34, 2], [chest, 0.29, 1]]) {
+      const zones = m.model.hitZones
+        ? m.model.hitZones.map(([bone, radius, bonus]) => [bone.getWorldPosition(new THREE.Vector3()), radius, bonus])
+        : [[m.model.head.getWorldPosition(head), 0.34, 2], [m.model.torso.localToWorld(chest.set(0, 0.42, 0)), 0.29, 1]];
+      for (const [center, radius, bonus] of zones) {
         sphere.set(center, (radius + (melee ? 0.22 : 0.06)) * scale);
         if (!ray.intersectSphere(sphere, hit)) continue;
         const d = hit.distanceTo(origin);

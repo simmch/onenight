@@ -1,5 +1,13 @@
 import { distance, press, hold } from './EncounterWorld.js';
 
+// The Wick Eater, made plain: power the three relays, then whichever one is buzzing (it flickers bright and its ring
+// pulses) is where it hides. Hold E on that one to overload it, and shoot the core that falls out. Two cores and it is gone.
+// It moves to another relay now and then, but never while you are standing near the one it is in.
+// In the dark, close to its relay, it can reach you; keep a light on and it cannot.
+const WICK = { cores: 2, strikeAfter: 3.0, strikeEvery: 5.0, exposed: [13, 9] };
+// Wicklings: the closer you are to finishing it, the more of itself it pushes out of the walls at you.
+// [seconds between, most alive at once] for: relays powered / one core gone / the last core exposed.
+const CRAWL = { waves: [[18, 1], [8, 3], [5, 3]], speed: 2.2, bite: 8, reach: 1.3, near: 3.5, far: 10 };
 export function createWickEater(w, sites, level) {
   const { hooks } = w;
   const relays = sites.slice(0, 3).map((p, i) => {
@@ -13,61 +21,113 @@ export function createWickEater(w, sites, level) {
     relay.id = i + 1;
     relay.ring = w.mark(relay, 0xaa7046, 0.78);
     relay.powered = false;
-    relay.open = true;
     return relay;
   });
   const core = w.prop(sites[0], { name: 'wickeater', width: 1.2, height: 1.02 });
   core.root.visible = false;
-  let fed = null, next = 9, cue = 0, darkness = 0, strike = 0, exposed = 0, hp = 0, overloads = 0, eaten = 0, blackout = 0;
+  let fed = null, next = 0, cue = 0, darkness = 0, strike = 0, exposed = 0, hp = 0, overloads = 0, blackout = 0;
   const ready = () => relays.every(r => r.powered);
-  const closed = () => relays.filter(r => r !== fed && !r.open).length;
+  const crawlers = [];
+  let crawlIn = 6;
+  const alive = () => crawlers.filter(c => !c.dead);
+  // Somewhere on a wall near you: walk out from the player in a few directions and stop at the first thing solid.
+  function wallSpot(p) {
+    const world = w.world;
+    for (let tries = 0; tries < 14; tries++) {
+      const a = Math.random() * Math.PI * 2, sx = Math.sin(a), sz = Math.cos(a);
+      let last = null;
+      for (let d = 1; d <= CRAWL.far; d += 0.5) {
+        const x = p.x + sx * d, z = p.z + sz * d;
+        if (!world.walkable(x, z, 0.3) || world.losBlocked(p.x, p.z, x, z, true)) break;
+        last = { x, z, d };
+      }
+      if (last && last.d >= CRAWL.near && last.d < CRAWL.far - 0.5) return last;   // it stopped at a wall, not in open air
+    }
+    const a = Math.random() * Math.PI * 2;                       // no wall in reach: it comes up out of the floor instead
+    const x = p.x + Math.sin(a) * 6, z = p.z + Math.cos(a) * 6;
+    return world.walkable(x, z, 0.3) ? { x, z } : null;
+  }
+  function spawnCrawler(p) {
+    const at = wallSpot(p);
+    if (!at) return;
+    const c = w.prop(at, { name: 'wickling', width: 1.05, height: 0.95 });
+    c.hp = 1 + Math.floor(level / 4); c.bite = 0.9; c.emerge = 0; c.dead = false; c.fade = 0;
+    c.skin.scale.x = 0.05;
+    crawlers.push(c);
+    hooks.cue('crack', c, 0.9);
+  }
+  function updateCrawlers(dt, p) {
+    const stage = !ready() ? -1 : exposed > 0 && overloads === WICK.cores - 1 ? 2 : Math.min(1, overloads);
+    if (stage >= 0 && (crawlIn -= dt) <= 0) {
+      const [every, most] = CRAWL.waves[stage];
+      crawlIn = Math.max(3, every - level * 0.4);
+      if (alive().length < most + Math.floor(level / 5)) spawnCrawler(p);
+    }
+    for (let i = crawlers.length - 1; i >= 0; i--) {
+      const c = crawlers[i];
+      if (c.dead) { c.fade -= dt; c.skin.scale.y = c.height * Math.max(0, c.fade / 0.4); if (c.fade <= 0) { c.root.visible = false; crawlers.splice(i, 1); } continue; }
+      if (c.emerge < 0.7) {                                         // tearing itself out of the wall
+        c.emerge += dt; c.skin.scale.x = c.width * Math.min(1, c.emerge / 0.7); c.pose('attack'); continue;
+      }
+      c.bite -= dt;
+      const lit = p.beam && !p.match && w.seen(c, p, 10, 0.93);    // a light on it slows it down
+      if (c.bite < 0.3) w.move(c, dt, p, (CRAWL.speed + level * 0.1) * (lit ? 0.5 : 1));
+      c.pose(c.bite > 0.5 ? 'attack' : Math.sin(p.time * 12 + i) > 0 ? 'still' : 'step');
+      if (c.bite <= 0 && distance(c, p) < CRAWL.reach && w.clearLine(c, p)) {
+        hooks.hurt(CRAWL.bite + Math.round(level * 0.5), 'wickeater'); hooks.cue('crack', c, 0.7); c.bite = 1.5;
+      }
+    }
+  }
   const encounter = {
     get status() {
-      if (exposed > 0) return `CORE ${hp} HP · OVERLOADS ${overloads}/3`;
+      const lings = alive().length ? ` · ${alive().length} IN THE WALLS` : '';
+      if (exposed > 0) return `SHOOT THE CORE · ${hp} HP · CORES ${overloads}/${WICK.cores}${lings}`;
       if (!ready()) return `POWER THE RELAYS ${relays.filter(r => r.powered).length}/3`;
-      if (!fed) return 'WAIT FOR THE BUZZ';
-      return `BUZZ AT RELAY ${fed.id} · BREAKERS ${closed()}/2 · CORES ${overloads}/3`;
+      return `OVERLOAD THE BUZZING RELAY (${fed.id}) · CORES ${overloads}/${WICK.cores}${lings}`;
     },
     get target() {
       if (exposed > 0) return core;
-      return relays.find(r => !r.powered) || relays.find(r => r !== fed && r.open) || fed;
+      return relays.find(r => !r.powered) || fed;
     },
-    get hostiles() { return [core.root.visible ? core : fed].filter(Boolean); },
+    get hostiles() { return [core.root.visible ? core : fed, ...alive()].filter(Boolean); },
     get power() { return blackout > 0 ? 0.14 : 1; },
     update(dt, p) {
       strike -= dt;
       blackout = Math.max(0, blackout - dt);
+      updateCrawlers(dt, p);
       for (const r of relays) {
-        const hum = r === fed && Math.sin(p.time * 10) > 0.15;
-        const power = r.powered && r.open ? hum ? 0.1 : r === fed ? 0.22 : 1 : 0;
-        r.light.intensity = 16 * power;
-        r.ring.material.opacity = r === fed ? 0.52 + 0.3 * Math.sin(p.time * 7) : 0.30 + power * 0.28;
-        for (const dot of r.indicators) dot.visible = !r.powered || !r.open || r !== fed || !hum;
+        const flick = Math.sin(p.time * 13) > -0.2;
+        const isFed = r === fed && ready() && exposed <= 0;
+        r.light.intensity = !r.powered ? 0 : isFed ? (flick ? 26 : 9) : 6;     // the buzzing relay is the bright, flickering one
+        r.ring.material.opacity = isFed ? 0.62 + 0.3 * Math.sin(p.time * 7) : r.powered ? 0.22 : 0.4;
+        for (const dot of r.indicators) dot.visible = !isFed || flick;
       }
       if (exposed > 0) {
         core.pose('attack');
         exposed -= dt;
         if (exposed <= 0) {
           core.root.visible = false;
-          relays.forEach(r => { r.open = true; });
-          next = 7;
-          hooks.say('The core slips back into the wires. Trap it again.');
+          hooks.say(`The core slips back into relay ${fed.id}. Overload it again.`);
         }
         return;
       }
       if (!fed) return;
       if ((cue -= dt) <= 0) { hooks.cue('buzz', fed, 0.83); cue = 1.35; }
-      const dark = distance(fed, p) < 6.2 && w.clearLine(fed, p) && !p.match && !p.beam && (!p.roomLit || blackout > 0);
+      const near = distance(fed, p);
+      const dark = near < 6.2 && w.clearLine(fed, p) && !p.match && !p.beam && (!p.roomLit || blackout > 0);
       darkness = dark ? darkness + dt : Math.max(0, darkness - dt * 2);
-      if (darkness > 2.0 && strike <= 0) {
+      if (darkness > WICK.strikeAfter && strike <= 0) {
         core.place(fed); core.root.visible = true; core.pose('attack');
         hooks.cue('crack', fed);
-        hooks.hurt(16 + level, 'wickeater');
-        strike = 3.9;
-      } else if (strike < 3.55) core.root.visible = false;
-      if (distance(fed, p) < 4 && w.clearLine(fed, p) && p.beam && !p.match) hooks.drain(dt * (0.6 + eaten * 0.15));
-      if (!ready() || closed() === 2 || (next -= dt) > 0) return;
-      hop(relays.find(r => r !== fed && r.open));
+        hooks.hurt(10 + Math.round(level * 0.6), 'wickeater');
+        hooks.say('It reaches out of the dark. Keep a light on near the relay.');
+        strike = WICK.strikeEvery; darkness = 0;
+      } else if (strike < WICK.strikeEvery - 0.35) core.root.visible = false;
+      if (near < 4 && w.clearLine(fed, p) && p.beam && !p.match) hooks.drain(dt * 0.3);
+      if (!ready() || (next -= dt) > 0) return;
+      if (near < 8) { next = 2; return; }                       // never slips away while you are right there
+      const others = relays.filter(r => r !== fed);
+      hop(others[(Math.random() * others.length) | 0]);
     },
     action(p) {
       if (exposed > 0 && w.close(core, p, 1.8)) return hold('Crush the exposed core', 0.62, () => encounter.hit(core, 3));
@@ -75,50 +135,55 @@ export function createWickEater(w, sites, level) {
       if (!r || exposed > 0) return null;
       if (!r.powered) return press(`Power relay ${r.id}`, () => {
         r.powered = true;
-        if (!fed) fed = r;
-        else hop(r);
         hooks.cue('latch', r);
-        if (ready()) hooks.say('Listen for the buzz. Isolate the two quiet relays, then overload the buzzing one.');
+        if (ready()) {
+          hop(relays[(Math.random() * 3) | 0], false);
+          hooks.say(`Relay ${fed.id} is buzzing: that is where it hides. Hold E on it to force the core out.`);
+        }
       });
-      if (!ready()) return { label: 'Connect all three relays first.', run() {} };
-      if (r === fed && closed() === 2) return hold('Overload the trapped relay', 1.05, () => {
-        exposed = Math.max(7, 11 - level * 0.26);
-        hp = 5 + Math.floor(level / 2);
+      if (!ready()) return { label: 'Power all three relays first', run() {} };
+      if (r !== fed) return { label: `Relay ${r.id} is quiet. Find the buzzing one (${fed.id})`, run() {} };
+      return hold('Overload the buzzing relay', 0.9, () => {
+        exposed = Math.max(WICK.exposed[1], WICK.exposed[0] - level * 0.3);
+        hp = 3 + Math.floor(level / 3);
         core.place(r);
         core.root.visible = true;
         hooks.cue('crack', r);
-        hooks.say('The core falls out. Destroy it while it is exposed.');
-      });
-      return press(r.open ? `Isolate relay ${r.id}` : `Reconnect relay ${r.id}`, () => {
-        if (r === fed && r.open) hop(relays.find(other => other !== r && other.open));
-        r.open = !r.open;
-        hooks.cue('latch', r);
+        hooks.say('The core falls out. Shoot it before it climbs back in.');
       });
     },
-    targets() { return exposed > 0 ? [core] : []; },
+    targets() { return [...(exposed > 0 ? [core] : []), ...alive()]; },
     hit(item, damage) {
+      if (crawlers.includes(item)) {
+        if (item.dead || item.emerge < 0.3) return;
+        item.hp -= damage; hooks.cue('stone', item, 0.7);
+        if (item.hp <= 0) { item.dead = true; item.fade = 0.4; }
+        return;
+      }
+      if (exposed <= 0) return;
       hp -= damage;
       hooks.cue('stone', core);
       if (hp > 0) return;
       overloads++;
-      if (overloads === 3) { encounter.won = true; return; }
       exposed = 0;
       core.root.visible = false;
-      relays.forEach(r => { r.open = true; });
-      hop(relays[(fed.id + 1) % relays.length]);
-      hooks.say('The core cracks. The remaining charge runs to another relay.');
+      if (overloads >= WICK.cores) { for (const c of crawlers) { c.dead = true; c.fade = 0.4; } encounter.won = true; return; }
+      const others = relays.filter(r => r !== fed);
+      hop(others[(Math.random() * others.length) | 0]);
+      hooks.say(`One core is gone. Relay ${fed.id} starts to buzz. One more. Something is moving in the walls.`);
+      crawlIn = 1.5;
     },
     relocate(nextSites) {
       relays.forEach((r, i) => r.place(nextSites[i]));
       if (fed) core.place(fed);
     },
+    debug: { wallSpot, crawlers },
   };
-  function hop(nextRelay) {
+  function hop(nextRelay, dim = true) {
     if (!nextRelay) return;
     fed = nextRelay;
-    next = Math.max(8, 23 - level * 0.73 - eaten * 0.4);
-    blackout = 3.6;
-    eaten = Math.min(7, eaten + 1);
+    next = Math.max(14, 26 - level * 0.6);
+    if (dim) blackout = 2;
     hooks.cue('buzz', fed);
   }
   return encounter;

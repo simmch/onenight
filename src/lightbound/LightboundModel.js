@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { monsterAsset } from '../world/MonsterAssets.js';
 
 const oval = new THREE.SphereGeometry(1, 10, 8);
 const bone = new THREE.CylinderGeometry(0.76, 1, 1, 7);
@@ -27,6 +28,23 @@ const ellipsoid = (parent, material, x, y, z, w, h, d) => piece(parent, oval, ma
 const limb = (parent, material, x, y, z, w, h, d = w) => piece(parent, bone, material, x, y, z, w, h, d);
 
 export function buildLightbound(side, phase) {
+  const asset = monsterAsset('lightbound', { scale: [0.77, 1.45, 0.88], idle: 'Idle_02' });
+  if (asset) {
+    return {
+      root: asset.root,
+      hitZones: [
+        [asset.bone('torsoL_head'), 0.34, 2],
+        [asset.bone('torsoR_head'), 0.34, 2],
+        [asset.bone('chest'), 0.44, 1],
+        [asset.bone('body'), 0.62, 1],
+      ],
+      pose(_time, scream, recoil, dt) {
+        if (recoil > 0) asset.animate('Hit', dt, { once: true, rate: 1.35 });
+        else if (scream > 0) asset.animate('Attack_Pound', dt, { once: true, rate: 2.1 });
+        else asset.animate('Idle_02', dt, { rate: 0.88 + 0.15 * Math.sin(phase) });
+      },
+    };
+  }
   const root = new THREE.Group();
   const torso = group(root, 0, 1.30, 0);
   ellipsoid(torso, skin, 0, 0.05, 0, 0.17, 0.14, 0.095);

@@ -47,6 +47,18 @@ export function paintEncounterSprite(name, pose) {
     pixel('#161015', 24, 19, 11, 4);
     for (let i = 0; i < 4; i++) pixel('#cfbfa9', 24 + i * 3, 29 + i % 2, 2, 7);
     for (let i = 0; i < 5; i++) poly('#665661', [20 + i * 4, 44], [24 + i * 3, 44], [12 + i * 8, 71]);
+  } else if (name === 'wickling') {
+    // what the Wick Eater pushes out of the walls: low, burnt, all reach, one ember for an eye
+    const low = attack ? 0 : 6;
+    poly('#1a1213', [4, 70], [8, 52 + low], [14, 38 + low], [28, 30 + low], [42, 36 + low], [50, 52 + low], [53, 70]);
+    poly('#5a2617', [10, 68], [14, 52 + low], [20, 42 + low], [30, 37 + low], [40, 42 + low], [45, 55 + low], [46, 68]);
+    for (const side of [0, 1]) {                                  // spidery arms, reaching forward when it lunges
+      const x = side ? 44 : 12, d = side ? 1 : -1;
+      poly('#2b1c1a', [x, 50 + low], [x + d * 10, (attack ? 30 : 44) + low], [x + d * 13, (attack ? 34 : 60)], [x + d * 4, 56 + low]);
+    }
+    pixel('#f0a24a', 26, 44 + low, 6, 4);
+    pixel('#fff0b5', 28, 45 + low, 2, 2);
+    for (const [x, y] of [[16, 58], [38, 61], [24, 66]]) pixel('#b76026', x, y, 3, 2);
   } else if (name === 'wickeater') {
     hooks('#642d1e', 35);
     poly('#1c1618', [8, 69], [12, 41], [10, 26], [19, 7], [36, 2], [47, 20], [41, 39], [50, 68]);

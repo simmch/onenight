@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { consumerSurface } from './ConsumerTextures.js';
+import { monsterAsset } from '../world/MonsterAssets.js';
 
 export const CONSUMER_HEIGHT = 2.96;
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
@@ -75,7 +76,36 @@ function thorn(parent, material, base, tip, radius) {
   return mesh;
 }
 
+function buildMaw(asset) {
+  const { root } = asset;
+  const distortion = new THREE.Mesh(new THREE.TorusGeometry(1, 0.035, 5, 32),
+    new THREE.MeshBasicMaterial({ color: 0x6c2743, transparent: true, depthWrite: false }));
+  distortion.rotation.x = -Math.PI / 2;
+  distortion.position.y = 0.035;
+  root.add(distortion);
+  const mouth = new THREE.Group();
+  asset.bone('mouth_upper').add(mouth);
+  mouth.position.copy(asset.bone('mouth_upper').worldToLocal(
+    asset.bone('mouth_upper').getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, -0.09, 0.20)),
+  ));
+  return {
+    ...asset, distortion, mouth, hitT: 0, contactRadius: 0.59,
+    pose(dt, { state, speed, hit }) {
+      if (state === 'consume') asset.animate('Attack_Eat', dt, { once: true, rate: 1.38 });
+      else if (state === 'windup' || state === 'lunge' || state === 'recover') {
+        asset.animate('Attack_Swipe', dt, { once: true, rate: 1.1 });
+      } else if (hit > 0) asset.animate('Hit', dt, { once: true });
+      else if (speed > 0.25) {
+        const clip = state === 'hunt' ? 'Run_Chomp' : state === 'scurry' ? 'Run_Pull' : 'Crawl';
+        asset.animate(clip, dt, { rate: THREE.MathUtils.clamp(speed / 2, 0.8, 2.4) });
+      } else asset.animate('Idle_Breathe', dt);
+    },
+  };
+}
+
 export function buildConsumerModel() {
+  const replacement = monsterAsset('consumer', { scale: [1.12, 1.72, 1.04], idle: 'Idle_Breathe' });
+  if (replacement) return buildMaw(replacement);
   const root = new THREE.Group();
   root.name = 'Consumer';
   root.rotation.order = 'YXZ';

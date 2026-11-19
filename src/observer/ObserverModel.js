@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { DIMS, buildSkeleton } from './ObserverSkeleton.js';
 import { createObserverMaterials } from './ObserverMaterials.js';
+import { monsterAsset } from '../world/MonsterAssets.js';
 
 // Procedural low-poly body: a handful of shared, roughened geometries scaled onto the skeleton.
 // Few faces and flat shading so it sits in the game's 300-line pixel render instead of looking like a model.
@@ -73,7 +74,46 @@ function sharedGeometry() {
   return shared;
 }
 
+const eyeGeometry = new THREE.SphereGeometry(1, 8, 6);
+
+function buildContortionist(asset, opts) {
+  const mats = createObserverMaterials(opts);
+  const head = asset.bone('head');
+  const eyeOrigin = head.getWorldPosition(new THREE.Vector3());
+  const worldScale = head.getWorldScale(new THREE.Vector3());
+  const eyes = [-1, 1].map(side => {
+    const eye = new THREE.Mesh(eyeGeometry, mats.eyes);
+    head.add(eye);
+    eye.position.copy(head.worldToLocal(eyeOrigin.clone().add(new THREE.Vector3(side * 0.048, 0.09, 0.10))));
+    eye.frustumCulled = false;
+    return eye;
+  });
+  const materials = asset.meshes.map(mesh => {
+    const mat = mesh.material.clone();
+    mat.onBeforeCompile = mats.skin.onBeforeCompile;
+    mat.customProgramCacheKey = () => 'contortionist-ambient-' + (opts.ambientScale ?? 1);
+    mesh.material = mat;
+    return mat;
+  });
+  function sizeEyes(dist, radPerPixel) {
+    const size = Math.max(0.013, dist * radPerPixel * 1.1);
+    for (const eye of eyes) eye.scale.setScalar(size).divide(worldScale);
+  }
+  sizeEyes(0, 0);
+  return {
+    root: asset.root, eyes, mats, sizeEyes, asset,
+    j: { Head: head, RightHand: asset.bone('limb_R1_c') },
+    dispose() {
+      asset.root.removeFromParent();
+      for (const material of materials) material.dispose();
+      mats.dispose();
+    },
+  };
+}
+
 export function createObserverModel(opts = {}) {
+  const replacement = monsterAsset('observer', { scale: [0.93, 1.6, 0.98], idle: 'Idle' });
+  if (replacement) return buildContortionist(replacement, opts);
   const G = sharedGeometry(), mats = createObserverMaterials(opts), D = DIMS;
   const { root, j, chest } = buildSkeleton();
   const meshes = [];

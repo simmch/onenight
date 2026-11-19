@@ -136,6 +136,12 @@ export function createEncounterWorld({ scene, world, camera, atlas, atlasTexture
     let nearest = null, best = range;
     for (const item of items) {
       if (!item.root.visible) continue;
+      if (item.rayHit) {
+        if (!clearLine(item, origin)) continue;
+        const hit = item.rayHit(origin, dir, best, melee ? 0.32 : 0.08);
+        if (hit) { best = hit.distanceTo(origin); nearest = item; }
+        continue;
+      }
       const dx = item.x - origin.x, dz = item.z - origin.z;
       const dy = item.root.position.y + item.height * 0.48 - origin.y;
       const t = dx * dir.x + dy * dir.y + dz * dir.z;

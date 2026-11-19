@@ -120,10 +120,10 @@ export function createTitleScreen(kit) {
   menu.addEventListener('click', (e) => {
     const b = e.target.closest('[data-menu]'); if (!b) return;
     const what = b.dataset.menu;
-    if (what === 'play') play(); else show(what === 'back' ? null : what);
+    if (what === 'play') play(); else if (what === 'lore') { if (state.active && !leaving) kit.openLore(); } else show(what === 'back' ? null : what);
   });
   addEventListener('keydown', (e) => {
-    if (!state.active || leaving || e.target.matches?.('input, select')) return;
+    if (!state.active || leaving || e.target.matches?.('input, select') || kit.loreOpen?.()) return;
     if (e.code === 'Escape' && !panel.hidden) show(null);
   });
   if (touch) {
@@ -135,7 +135,8 @@ export function createTitleScreen(kit) {
       if (!finger || e.pointerId !== finger.id) return;
       const f = finger, dx = e.clientX - f.x, dy = e.clientY - f.y; finger = null;
       if (!state.active || leaving) return;
-      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+      if (!page && dy < -60 && Math.abs(dy) > Math.abs(dx) * 1.3) kit.openLore();   // swipe up: the lore board
+      else if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3) {
         if (!page) show(dx < 0 ? 'how' : 'board');
         else if ((page === 'how' && dx > 0) || (page === 'board' && dx < 0)) show(null);
       } else if (!page && !f.field && Math.hypot(dx, dy) < 14 && performance.now() - f.t < 450) play();

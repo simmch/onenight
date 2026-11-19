@@ -1,0 +1,69 @@
+body.cult-active > :not(canvas, #cult, script) { visibility: hidden; }
+
+#cult {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  isolation: isolate;
+  color: #f0e1cf;
+  pointer-events: auto;
+  touch-action: pan-y;
+  background: linear-gradient(#050407 0 3%, transparent 3% 96%, #050407 96%),
+    radial-gradient(ellipse at 50% 43%, transparent 24%, rgb(9 5 10 / 56%) 100%);
+}
+
+.cult-fade { position: absolute; inset: 0; background: #060408; pointer-events: none; }
+.cult-plaque { position: absolute; top: 12%; left: 50%; transform: translateX(-50%); text-align: center; text-shadow: 0 2px 16px #000; }
+.cult-plaque strong { font: normal clamp(24px, 5vw, 53px) Georgia, serif; text-transform: uppercase; letter-spacing: .14em; white-space: nowrap; }
+
+.cult-panel {
+  position: absolute;
+  bottom: max(5vh, 14px);
+  left: 50%;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  width: min(740px, calc(100% - 30px));
+  max-height: 57%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px 17px;
+  background: linear-gradient(115deg, rgb(17 13 18 / 97%), rgb(11 9 14 / 93%));
+  border: 1px solid #826a5e;
+  border-top-color: #c19473;
+  box-shadow: 0 10px 36px #0009;
+}
+
+.cult-speaker { color: #efbd94; font: 700 11px/1.25 "Courier New", monospace; text-transform: uppercase; letter-spacing: .23em; margin-bottom: 4px; }
+.cult-line { color: #fff0dc; margin: 0; font: clamp(16px, 2.2vw, 22px)/1.26 Georgia, serif; }
+.cult-cue { color: #cfbbad; font: italic clamp(13px, 1.7vw, 15px)/1.3 Georgia, serif; margin: 5px 0 0; }
+.cult-cue:empty, .cult-choices:empty, .cult-speaker:empty { display: none; }
+.cult-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 10px; }
+.cult-choices button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  text-align: left;
+  min-height: 38px;
+  color: #f2e5d4;
+  background: #241b23;
+  border: 1px solid #5f4a4d;
+  padding: 6px 10px;
+  cursor: pointer;
+  font: clamp(13px, 1.65vw, 15px)/1.23 Georgia, serif;
+  touch-action: manipulation;
+}
+.cult-choices button:only-child { grid-column: 1 / -1; width: fit-content; min-width: min(206px, 100%); }
+.cult-choices button:hover, .cult-choices button:focus-visible { background: #3d2b2d; border-color: #e2ad88; outline: 1px solid #e2ad88; }
+.cult-key { color: #e7b991; font: 700 11px/1 "Courier New", monospace; }
+.cult-aim { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 13px; height: 13px; border: 1px solid #f8d1a9a6; border-radius: 50%; pointer-events: none; }
+
+@media (max-width: 560px) {
+  .cult-choices { grid-template-columns: 1fr; }
+  .cult-panel { max-height: 59%; padding: 10px; }
+}
+
+@media (max-height: 470px) and (orientation: landscape) {
+  .cult-panel { bottom: 8px; max-height: 55%; padding: 7px 11px; }
+  .cult-choices { margin-top: 5px; }
+  .cult-choices button { min-height: 33px; }
+}

@@ -31,8 +31,8 @@ export const SPECIAL_ROUNDS = {
   },
   wickeater: {
     name: 'The Wick Eater', sites: 3, create: createWickEater,
-    objective: 'Power three relays. Isolate the two quiet ones, overload the buzzing relay, then destroy its exposed core.',
-    ending: 'The third core goes dark. Current returns to the lights.',
+    objective: 'Power three relays. Hold E on the one that buzzes and flickers, then shoot the core that falls out. Twice. Things will come out of the walls.',
+    ending: 'The last core goes dark. Current returns to the lights.',
     death: 'It found you when the lights went out.',
   },
   bellman: {
@@ -139,9 +139,16 @@ export function createSpecialRounds(params) {
     }
   }
   function noise(point, amount) { encounter?.noise?.(point, amount); }
+  // the Counterfeit only: a real chest in the world was one of them
+  function chestTrap(x, z) {
+    if (!encounter?.chestTrap || encounter.won) return false;
+    encounter.chestTrap(x, z, { x: camera.position.x, z: camera.position.z });
+    return true;
+  }
   return {
-    start, stop, relocate, update, action, shot, blast, noise,
+    start, stop, relocate, update, action, shot, blast, noise, chestTrap,
     get active() { return !!encounter; },
+    get encounter() { return encounter; },            // console debugging
     get won() { return !!encounter?.won; },
     get drag() { return encounter?.drag ?? 1; },
     get power() { return encounter?.power ?? 1; },

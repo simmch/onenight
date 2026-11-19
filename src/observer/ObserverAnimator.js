@@ -30,6 +30,12 @@ export class ObserverAnimator {
   // An abrupt head turn with no easing, used when a match lands on it: it is already looking at you.
   snapHead(yaw, pitch, roll) {
     const h = this.j.Head;
+    if (this.m.asset) {
+      h.rotateY(Math.max(-1.2, Math.min(1.2, yaw)));
+      h.rotateX(pitch);
+      h.rotateZ(roll);
+      return;
+    }
     h.rotation.set(pitch, Math.max(-2.6, Math.min(2.6, yaw)), roll);
     this.j.Neck.rotation.y = 0;
   }
@@ -44,8 +50,15 @@ export class ObserverAnimator {
     let pace = (ctx.speed || 0) / stride * Math.PI;
     if (st === 'stalk') pace *= 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(this.gait * 0.37)) * (Math.sin(this.gait * 0.13) > 0.85 ? 0.15 : 1);   // hitches
     this.gait += dt * pace;
-    this.pose(T, ctx);
-    this.apply(dt);
+    if (this.m.asset) {
+      const speed = ctx.speed || 0;
+      const name = st === 'attack' ? 'Attack' : speed <= 0.2 ? 'Idle' : st === 'hunt' || st === 'scurry' ? 'Run' : 'Walk';
+      const rate = name === 'Run' || name === 'Walk' ? Math.max(0.45, Math.min(2.4, speed / (name === 'Run' ? 2.2 : 0.6))) : 1;
+      this.m.asset.animate(name, dt, { once: name === 'Attack', rate });
+    } else {
+      this.pose(T, ctx);
+      this.apply(dt);
+    }
     // footfalls: each foot plants when its swing crosses zero
     if (ctx.speed > 0.2 && (st === 'stalk' || st === 'hunt' || st === 'scurry' || st === 'mimic')) {
       SIDES.forEach((_, k) => {

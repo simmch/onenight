@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { ObserverMovement } from '../observer/ObserverMovement.js';
+import { monsterAsset } from '../world/MonsterAssets.js';
+
+const HOUND_SIZE = 1.15;
 
 function makeSingerTexture() {
   const canvas = document.createElement('canvas');
@@ -39,6 +42,13 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
   const singerGeometry = new THREE.PlaneGeometry(1.15, 1.9);
   const singerMaterial = new THREE.MeshLambertMaterial({ map: texture, alphaTest: 0.5, side: THREE.DoubleSide });
   const singers = [];
+  const fallen = [];
+
+  function removeSinger(s) {
+    stopChase(s, 0.05);
+    s.mesh.removeFromParent();
+    if (s.hound) for (const mesh of s.hound.meshes) mesh.skeleton.dispose();
+  }
   const bodyPos = new THREE.Vector3();
   let singing = null;
 
@@ -107,23 +117,32 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
   }
 
   function makeSinger(x, z, rng, role) {
-    const mesh = new THREE.Mesh(singerGeometry, singerMaterial);
-    mesh.position.set(x, world.groundY(x, z) + 0.95, z);
+    const idle = role === 'still' ? 'Idle' : 'Idle_Sniff';
+    const scale = HOUND_SIZE * (role === 'grunt' ? 1.15 : role === 'crawler' ? 0.85 : 1);
+    const hound = monsterAsset('trayHound', { scale, idle });
+    const mesh = hound?.root ?? new THREE.Mesh(singerGeometry, singerMaterial);
+    const y = world.groundY(x, z) + (hound ? 0 : 0.95);
+    mesh.position.set(x, y, z);
     mesh.rotation.order = 'YXZ';
     scene.add(mesh);
     const height = role === 'crawler' ? 0.9 : 1.9;
-    mesh.scale.set(role === 'crawler' ? 1.45 : 1, height / 1.9, 1);
-    if (role === 'crawler') mesh.rotation.z = Math.PI * 0.48;
+    if (!hound) {
+      mesh.scale.set(role === 'crawler' ? 1.45 : 1, height / 1.9, 1);
+      if (role === 'crawler') mesh.rotation.z = Math.PI * 0.48;
+    }
     const a = rng() * Math.PI * 2;
     // Most singers stay packed around the hive; a few roam wide patrol rings.
     const radius = role === 'roamer' ? 15 + rng() * 19 : 3.5 + rng() * 8;
     return {
-      mesh, x, z, y: 0, role, alive: true,
+      mesh, hound, idle, x, z, y: y + (hound ? 0.47 * scale : 0), role, alive: true,
+      houndScale: scale,
+      poseTime: 0, pose: '',
       hp: C.round >= 4 && rng() < Math.min(0.8, 0.28 + (C.round - 4) * 0.1) ? 2 : 1,
       suspicion: 0, targetX: x, targetZ: z, searchT: 0, attackT: 1 + rng(),
       guardA: a, guardR: radius,
       orbit: (rng() < 0.5 ? -1 : 1) * (role === 'roamer' ? 0.07 + rng() * 0.12 : 0.025 + rng() * 0.075),
-      phase: rng() * Math.PI * 2, roleDelay: 0, speedFactor: 0.78 + rng() * 0.48,
+      phase: rng() * Math.PI * 2, speedFactor: 0.78 + rng() * 0.48,
+      pace: 0, bank: 0, pounce: null,
       mover: world.canStep ? new ObserverMovement(world, role === 'crawler' ? 0.3 : 0.28) : null,
     };
   }
@@ -138,7 +157,7 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
     if (aliveSingers() + missingGrunts > 30) {
       for (let i = singers.length - 1; i >= 0 && aliveSingers() + missingGrunts > 30; i--) {
         if (singers[i].role === 'grunt') continue;
-        scene.remove(singers[i].mesh); singers.splice(i, 1);
+        removeSinger(singers[i]); singers.splice(i, 1);
       }
     }
     const cap = Math.min(30, Math.max(singerCap(), aliveSingers() + missingGrunts));
@@ -156,6 +175,7 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
       }
       singers.push(s);
     }
+    C.alive = aliveSingers();
     const interval = Math.max(7.5, 22 - (C.round - 1) * 1.55);
     C.nextWave = C.t + (initial ? interval * 0.8 : interval);
   }
@@ -191,6 +211,42 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
     pan.pan.value = Math.max(-1, Math.min(1, right));
     src.connect(gain).connect(pan).connect(audio.dest);
     src.start();
+  }
+
+  function stopChase(s, fade = 0.16) {
+    const v = s.chase;
+    if (!v || !audio.ctx) return;
+    s.chase = null;
+    const t = audio.ctx.currentTime;
+    v.gain.gain.cancelScheduledValues(t);
+    v.gain.gain.setValueAtTime(v.gain.gain.value, t);
+    v.gain.gain.linearRampToValueAtTime(0, t + fade);
+    try { v.src.stop(t + fade + 0.03); } catch { /* already stopped */ }
+    v.src.onended = () => { for (const node of v.nodes) { try { node.disconnect(); } catch { /* already gone */ } } };
+  }
+  function stopAllChases() {
+    for (const s of singers) stopChase(s, 0.12);
+    for (const s of fallen) stopChase(s, 0.12);
+  }
+  function syncChase(s, on) {
+    if (!audio.houndChase || !audio.ctx || !audio.dest) return;
+    const dx = s.x - camera.position.x, dz = s.z - camera.position.z, dist = Math.hypot(dx, dz) || 1e-6;
+    if (!on || dist > 52) { stopChase(s); return; }
+    if (!s.chase) {
+      if (audio.ctx.state === 'suspended') audio.ctx.resume();
+      const src = audio.ctx.createBufferSource(), gain = audio.ctx.createGain(), pan = audio.ctx.createStereoPanner();
+      src.buffer = audio.houndChase; src.loop = true; gain.gain.value = 0;
+      src.connect(gain).connect(pan).connect(audio.dest); src.start();
+      s.chase = { src, gain, pan, nodes: [src, gain, pan] };
+    }
+    const yaw = camera.rotation.y;
+    const right = (dx * Math.cos(yaw) + dz * -Math.sin(yaw)) / dist;
+    const near = Math.pow(Math.max(0, 1 - dist / 46), 1.15);
+    const walls = world.losBlocked?.(camera.position.x, camera.position.z, s.x, s.z) ? 0.4 : 1;
+    const biting = !!s.pounce || (s.attackT > 0 && dist < 2.4);
+    const t = audio.ctx.currentTime;
+    s.chase.gain.gain.setTargetAtTime(near * walls * (biting ? 0.42 : 0.92), t, 0.08);
+    s.chase.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, right)), t, 0.06);
   }
 
   function startSinging() {
@@ -268,24 +324,89 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
     if (s.mover && s.suspicion > 0.2 && world.cellWalkable(world.grid.cellOf(tx), world.grid.cellOf(tz))) {
       const motion = s.mover.update(dt, s, { x: tx, z: tz }, speed);
       if (motion.speed > 0.05) {
-        const sign = s.role === 'backstep' ? -1 : 1;
+        const sign = !s.hound && s.role === 'backstep' ? -1 : 1;
         s.mesh.userData.faceX = motion.vx * sign; s.mesh.userData.faceZ = motion.vz * sign;
       }
       return motion.speed * dt;
     }
     dx /= dist; dz /= dist;
     // The backward singer keeps its face pointed at the sound while stepping away from it.
-    const backwards = s.role === 'backstep' && s.suspicion > 0.2;
-    const faceX = backwards ? -dx : dx, faceZ = backwards ? -dz : dz;
-    s.mesh.userData.faceX = faceX; s.mesh.userData.faceZ = faceZ;
+    const sign = !s.hound && s.role === 'backstep' && s.suspicion > 0.2 ? -1 : 1;
     const step = Math.min(dist, speed * dt);
     const angles = [0, 0.7, -0.7, 1.35, -1.35, Math.PI];
     for (const turn of angles) {
       const a = Math.atan2(dz, dx) + turn;
       const nx = s.x + Math.cos(a) * step, nz = s.z + Math.sin(a) * step;
-      if (!world.walkable || world.walkable(nx, nz, s.role === 'crawler' ? 0.3 : 0.28)) { s.x = nx; s.z = nz; return step; }
+      if (!world.walkable || world.walkable(nx, nz, s.role === 'crawler' ? 0.3 : 0.28)) {
+        s.mesh.userData.faceX = Math.cos(a) * sign;
+        s.mesh.userData.faceZ = Math.sin(a) * sign;
+        s.x = nx; s.z = nz;
+        return step;
+      }
     }
     return 0;
+  }
+
+  const angleTo = (a, b) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
+  function updateHound(s, dt, tx, tz, speed, px, pz, tracking) {
+    const facing = s.mesh.rotation.y;
+    const inward = C.tellT > 0;
+    const toPlayer = Math.atan2(px - s.x, pz - s.z);
+    const distance = Math.hypot(px - s.x, pz - s.z);
+    const blocked = () => world.losBlocked?.(s.x, s.z, px, pz);
+    const staggered = s.pose === 'Hit' && s.poseTime > 0;
+    let heading = Math.atan2(tx - s.x, tz - s.z), motion = 0;
+    if (inward || staggered) s.pounce = null;
+    const canPounce = !inward && !staggered && s.attackT <= 0 && s.suspicion > 0.35 &&
+      distance < 2.9 && !blocked();
+    if (!s.pounce && canPounce && Math.abs(angleTo(facing, toPlayer)) < 0.85) {
+      s.pounce = { age: 0, heading: toPlayer, struck: false, stopped: false };
+      s.attackT = 1.48 + s.speedFactor * 0.18;
+      s.hound.animate('Attack_Shred', 0, { once: true, rate: 2.65, restart: true });
+      playAt(audio.queenAttack, s.x, s.z, 0.95);
+    }
+    if (s.pounce) {
+      const p = s.pounce;
+      p.age += dt;
+      heading = p.heading;
+      if (p.age >= 0.19 && p.age < 0.47 && !p.stopped) {
+        const step = 7.8 * dt;
+        const nx = s.x + Math.sin(heading) * step, nz = s.z + Math.cos(heading) * step;
+        if (world.walkable && !world.walkable(nx, nz, 0.31)) p.stopped = true;
+        else if (distance > 0.72) { s.x = nx; s.z = nz; }
+        if (!p.struck && Math.hypot(px - s.x, pz - s.z) < 1.23 &&
+            Math.abs(angleTo(heading, toPlayer)) < 1.0 && !blocked()) {
+          p.struck = true;
+          hooks.damage?.(7 + Math.min(9, C.round * 1.35), 'choir');
+          if (!C.active) return;
+          C.alert = Math.max(C.alert, 0.75);
+        }
+      }
+      s.pace = 0;
+      s.hound.animate('Attack_Shred', dt, { once: true, rate: 2.65 });
+      if (p.age >= 0.78) s.pounce = null;
+    } else {
+      if (inward) heading = Math.atan2(C.hive.x - s.x, C.hive.z - s.z);
+      const sniffPause = !tracking && Math.sin(C.t * 1.4 + s.phase) < -0.59;
+      const turnBrake = 0.50 + 0.50 * Math.max(0, Math.cos(angleTo(facing, heading)));
+      const desired = inward || staggered || sniffPause ? 0 : speed * turnBrake;
+      s.pace += (desired - s.pace) * Math.min(1, dt * (desired > s.pace ? 5.8 : 10));
+      if (!inward && !staggered && s.pace > 0.06) motion = moveSinger(s, tx, tz, s.pace, dt) / Math.max(dt, 0.001);
+      if (motion > 0.12) heading = Math.atan2(s.mesh.userData.faceX, s.mesh.userData.faceZ);
+      if (canPounce) heading = toPlayer;
+      if (staggered) s.hound.animate('Hit', dt, { once: true, rate: 1.7 });
+      else if (motion < 0.13) s.hound.animate(s.idle, dt, { rate: 0.75 + s.speedFactor * 0.19 });
+      else if (motion < 1.2) s.hound.animate('Walk', dt, { rate: THREE.MathUtils.clamp(motion / 0.36, 0.63, 2.45) });
+      else s.hound.animate(C.state === 'FRENZY' ? 'Run_Shred' : 'Run', dt, { rate: THREE.MathUtils.clamp(motion / 2.6, 0.65, 1.75) });
+    }
+    const turn = angleTo(facing, heading);
+    s.mesh.rotation.y += THREE.MathUtils.clamp(turn, -dt * 10, dt * 10);
+    const bank = motion > 1.2 ? THREE.MathUtils.clamp(-turn * 0.22, -0.22, 0.22) : 0;
+    s.bank += (bank - s.bank) * Math.min(1, dt * 11);
+    s.mesh.rotation.z = s.bank;
+    const floor = world.groundY(s.x, s.z);
+    s.y = floor + 0.47 * s.houndScale;
+    s.mesh.position.set(s.x, floor, s.z);
   }
 
   function expose() {
@@ -300,7 +421,13 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
   }
 
   function update(dt, info = {}) {
-    if (!C.active || C.death) return;
+    if (!C.active || C.death || info.inControl === false) { stopAllChases(); return; }
+    for (let i = fallen.length - 1; i >= 0; i--) {
+      const s = fallen[i];
+      s.poseTime -= dt;
+      if (s.poseTime > 0) s.hound.animate('Death', dt, { once: true, rate: 1.55 });
+      else { removeSinger(s); fallen.splice(i, 1); }
+    }
     C.noiseScale = THREE.MathUtils.clamp(info.noiseScale ?? 1, 0.5, 1.15);
     if (info.inControl) startSinging();
     C.t += dt; C.beat += dt; C.soundAge += dt;
@@ -328,43 +455,58 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
       s.searchT = Math.max(0, s.searchT - dt);
       s.attackT -= dt;
       let tx, tz, speed;
-      if (s.suspicion > 0.08 && (s.searchT > 0 || C.soundAge < 4.5) && C.lastSound) {
+      const tracking = s.suspicion > 0.08 && (s.searchT > 0 || C.soundAge < 4.5) && !!C.lastSound;
+      if (tracking) {
         tx = s.targetX; tz = s.targetZ;
         const d = Math.hypot(tx - s.x, tz - s.z);
         speed = (1.8 + Math.min(1.5, (C.round - 1) * 0.18) + C.alert * 0.65) * s.speedFactor;
         if (C.state === 'FRENZY') speed += 0.8;
-        if (d < 2.1 && s.suspicion > 0.35) { tx = px; tz = pz; speed += 0.25; }
+        if (!s.hound && d < 2.1 && s.suspicion > 0.35) { tx = px; tz = pz; speed += 0.25; }
+        if (s.hound && s.role === 'backstep' && d > 3.5) {
+          const side = Math.sign(s.orbit) * Math.min(2.3, d * 0.25);
+          tx += (s.targetZ - s.z) / d * side;
+          tz -= (s.targetX - s.x) / d * side;
+        }
       } else {
         s.guardA += dt * s.orbit * (1 + C.round * 0.025);
         tx = C.hive.x + Math.cos(s.guardA) * s.guardR;
         tz = C.hive.z + Math.sin(s.guardA) * s.guardR;
-        speed = (0.75 + C.round * 0.055) * s.speedFactor;
+        speed = (s.hound ? 0.50 : 0.75) * s.speedFactor + Math.min(0.35, C.round * 0.045);
       }
       if (s.role === 'still' && C.state !== 'FRENZY') speed = s.suspicion > 0.5 ? speed * 0.35 : 0;
-      if (C.state === 'CHORUS' || C.state === 'FRENZY') speed *= sharedBurst ? 1 : 0;
+      if (C.state === 'CHORUS' || C.state === 'FRENZY') speed *= sharedBurst ? 1 : s.hound ? 0.70 : 0;
       if (C.tellT > 0) speed = 0;
       if (s.role === 'echo' && s.suspicion > 0.15 && C.lastSound?.age > 1.2) {
         // This one follows an old sound; it continues toward the place the player has already left.
         if (C.lastSound.age > 4) { tx = C.lastSound.x; tz = C.lastSound.z; }
       }
+      s.poseTime = Math.max(0, s.poseTime - dt);
+      if (s.hound) {
+        updateHound(s, dt, tx, tz, speed, px, pz, tracking);
+        if (!C.active) return;
+        syncChase(s, (tracking || !!s.pounce) && C.tellT <= 0);
+        continue;
+      }
       moveSinger(s, tx, tz, speed, dt);
       s.mesh.position.x = s.x;
       s.mesh.position.z = s.z;
-      s.y = world.groundY(s.x, s.z) + (s.role === 'crawler' ? 0.47 : 0.95);
+      const floor = world.groundY(s.x, s.z);
+      s.y = floor + (s.role === 'crawler' ? 0.47 : 0.95);
       s.mesh.position.y = s.y + Math.sin(C.t * (s.role === 'crawler' ? 3 : 2) + s.phase) * 0.035;
       const faceX = s.mesh.userData.faceX ?? (C.hive.x - s.x), faceZ = s.mesh.userData.faceZ ?? (C.hive.z - s.z);
       if (C.tellT > 0 || (s.role === 'still' && s.suspicion < 0.2)) s.mesh.rotation.y = Math.atan2(C.hive.x - s.x, C.hive.z - s.z);
       else s.mesh.rotation.y = Math.atan2(faceX, faceZ);
-      if (s.role === 'crawler') s.mesh.rotation.z = Math.PI * 0.48 + Math.sin(C.t * 2 + s.phase) * 0.035;
-      else s.mesh.rotation.z = Math.sin(C.t * 2 + s.phase) * 0.025;
+      s.mesh.rotation.z = (s.role === 'crawler' ? Math.PI * 0.48 : 0) + Math.sin(C.t * 2 + s.phase) * 0.025;
 
       const dPlayer = Math.hypot(px - s.x, pz - s.z);
       if (dPlayer < 1.45 && s.suspicion > 0.25 && s.attackT <= 0 && (!world.canStep || !world.losBlocked(px, pz, s.x, s.z))) {
         s.attackT = Math.max(0.62, 1.45 - C.round * 0.07);
         playAt(audio.queenAttack, s.x, s.z, 0.95);
         hooks.damage?.(7 + Math.min(9, C.round * 1.35), 'choir');
+        if (!C.active) return;
         C.alert = Math.max(C.alert, 0.75);
       }
+      syncChase(s, tracking && C.tellT <= 0);
     }
 
     C.alive = aliveSingers();
@@ -411,20 +553,38 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
       bodyPos.set(s.x, s.y, s.z);
       const cx = bodyPos.x - origin.x, cy = bodyPos.y - origin.y, cz = bodyPos.z - origin.z;
       const t = cx * dir.x + cy * dir.y + cz * dir.z;
-      if (t <= 0 || t >= closestT || t >= hiveHitT) continue;
       const mx = cx - dir.x * t, my = cy - dir.y * t, mz = cz - dir.z * t;
+      if (s.hound) {
+        const limit = Math.min(closestT, hiveHitT);
+        const radius = 1.65 * HOUND_SIZE;
+        if (t < -radius || t > limit + radius || mx * mx + my * my + mz * mz > radius ** 2 ||
+            world.losBlocked?.(origin.x, origin.z, s.x, s.z)) continue;
+        const contact = s.hound.rayHit(origin, dir, limit, melee ? 0.40 : 0.12);
+        if (contact) { closest = s; closestT = contact.distanceTo(origin); }
+        continue;
+      }
+      if (t <= 0 || t >= closestT || t >= hiveHitT) continue;
       if (mx * mx + mz * mz < (melee ? 0.9 : 0.32) && Math.abs(my) < (melee ? 1.25 : 0.92) && !world.losBlocked?.(origin.x, origin.z, s.x, s.z)) { closest = s; closestT = t; }
     }
     if (closest) {
       closest.hp -= damage;
       closest.suspicion = 1; closest.searchT = 10; closest.targetX = origin.x; closest.targetZ = origin.z;
       if (closest.hp <= 0) {
+        stopChase(closest, 0.1);
         playAt(audio.gruntDeath, closest.x, closest.z, 0.9);
-        closest.alive = false; scene.remove(closest.mesh);
+        closest.alive = false;
+        if (closest.hound) {
+          closest.poseTime = 1.7;
+          closest.hound.animate('Death', 0, { once: true, rate: 1.55 });
+          fallen.push(closest);
+        } else removeSinger(closest);
         const index = singers.indexOf(closest);
         if (index >= 0) singers.splice(index, 1);
         C.alive = aliveSingers();
         if (!C.alive) C.nextWave = Math.min(C.nextWave, C.t + 4.5);
+      } else if (closest.hound) {
+        closest.pose = 'Hit'; closest.poseTime = 0.40;
+        closest.hound.animate('Hit', 0, { once: true, rate: 1.7, restart: true });
       }
       C.alert = Math.max(C.alert, 0.92);
       return { kind: 'singer', killed: closest.hp <= 0 };
@@ -438,6 +598,7 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
         playAt(audio.queenDeath, C.hive.x, C.hive.z, 1);
         C.hive.dead = true; C.death = true; C.hive.root.visible = false;
         if (singing) { singing.gain.gain.value = 0; }
+        stopAllChases();
         say('The Choir falls silent. The Hive Mind is dead.');
         return { kind: 'hive', killed: true };
       }
@@ -450,8 +611,10 @@ export function createChoirRound({ scene, camera, world, audio = {}, hooks = {} 
 
   function stop() {
     C.active = false;
-    for (const s of singers) scene.remove(s.mesh);
+    for (const s of singers) removeSinger(s);
+    for (const s of fallen) removeSinger(s);
     singers.length = 0;
+    fallen.length = 0;
     if (C.hive) {
       scene.remove(C.hive.root);
       C.hive.root.traverse((o) => { if (o.geometry && o.geometry !== singerGeometry) o.geometry.dispose(); });

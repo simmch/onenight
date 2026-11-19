@@ -123,6 +123,82 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
     c.stepAudio = null;
   }
 
+  // Stomps while it walks, chewing while it feeds, and a yell that holds for the whole attack.
+  let bodyVoice = null, yellHold = 0;
+  function stopBodyVoice(fade = 0.16) {
+    const v = bodyVoice;
+    if (!v || !audio.ctx) return;
+    bodyVoice = null;
+    const t = audio.ctx.currentTime;
+    const fadeGain = (node) => {
+      node.gain.cancelScheduledValues(t);
+      node.gain.setValueAtTime(node.gain.value, t);
+      node.gain.linearRampToValueAtTime(0, t + fade);
+    };
+    fadeGain(v.gain);
+    if (v.echo) fadeGain(v.echo);
+    try { v.source.stop(t + fade + 0.03); } catch { /* already stopped */ }
+    v.source.onended = () => { for (const node of v.nodes) { try { node.disconnect(); } catch { /* already gone */ } } };
+  }
+  function startBodyVoice(kind, buffer, withEcho) {
+    if (!audio.ctx || !buffer) return;
+    if (bodyVoice?.kind === kind) return;
+    stopBodyVoice(0.1);
+    const ctx = audio.ctx;
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const pan = ctx.createStereoPanner();
+    const presence = ctx.createBiquadFilter();
+    presence.type = 'lowpass';
+    presence.Q.value = 0.707;
+    presence.frequency.value = 9000;
+    const dest = audio.dest || ctx.destination;
+    source.connect(presence).connect(gain).connect(pan).connect(dest);
+    const voice = { kind, source, gain, pan, presence, nodes: [source, gain, pan, presence] };
+    if (withEcho) {
+      const delay = ctx.createDelay(1.5);
+      delay.delayTime.value = 0.22;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 1500;
+      const echo = ctx.createGain();
+      echo.gain.value = 0.42;
+      const feedback = ctx.createGain();
+      feedback.gain.value = 0.31;
+      const echoPan = ctx.createStereoPanner();
+      gain.connect(delay).connect(filter);
+      filter.connect(echo).connect(echoPan).connect(dest);
+      filter.connect(feedback).connect(delay);
+      voice.echo = echo;
+      voice.echoPan = echoPan;
+      voice.nodes.push(delay, filter, echo, feedback, echoPan);
+    }
+    source.start();
+    bodyVoice = voice;
+  }
+  function syncBodyVoice(kind, yaw) {
+    const buffer = kind === 'stomp' ? audio.stomp : kind === 'eat' ? audio.eat : kind === 'yell' ? audio.yell : null;
+    if (!buffer) { stopBodyVoice(0.18); return; }
+    startBodyVoice(kind, buffer, kind === 'stomp');
+    if (!bodyVoice) return;
+    const dx = S.pos.x - camera.position.x, dz = S.pos.z - camera.position.z;
+    const dist = Math.hypot(dx, dz) || 1e-6;
+    const pan = THREE.MathUtils.clamp((dx * Math.cos(yaw) - dz * Math.sin(yaw)) / dist, -1, 1);
+    const muffled = world.losBlocked?.(camera.position.x, camera.position.z, S.pos.x, S.pos.z) ? 0.42 : 1;
+    const near = Math.pow(Math.max(0, 1 - dist / 70), 1.12);
+    const size = 0.82 + Math.min(0.34, (S.sizeScale - 1) * 0.18);
+    const loud = kind === 'yell' ? 1.05 : kind === 'eat' ? 0.95 : (S.surface === 'ceiling' ? 0.5 : 0.88);
+    const t = audio.ctx.currentTime;
+    bodyVoice.gain.gain.setTargetAtTime(near * size * loud * muffled, t, 0.08);
+    bodyVoice.pan.pan.setTargetAtTime(pan * 0.86, t, 0.06);
+    const cutoff = muffled < 1 ? 1300 : 1000 + 13000 / (1 + (dist / 13) ** 1.4);
+    bodyVoice.presence.frequency.setTargetAtTime(cutoff * (S.surface === 'ceiling' ? 0.72 : 1), t, 0.12);
+    if (bodyVoice.echoPan) bodyVoice.echoPan.pan.setTargetAtTime(THREE.MathUtils.clamp(-pan * 0.6, -1, 1), t, 0.08);
+  }
+
   function chooseGoal(c, fromX = c.x, fromZ = c.z, min = 8, max = 19) {
     for (let i = 0; i < 24; i++) {
       const a = Math.random() * Math.PI * 2, d = min + Math.random() * (max - min);
@@ -336,7 +412,7 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
   function update(dt, info = {}) {
     if (!S.active || S.dead) return;
     S.time += dt;
-    if (!info.inControl) { for (const c of citizens) updateCitizenFootsteps(c, info, dt, false); return; }
+    if (!info.inControl) { for (const c of citizens) updateCitizenFootsteps(c, info, dt, false); stopBodyVoice(0.2); return; }
     const px = info.x ?? camera.position.x, pz = info.z ?? camera.position.z;
     if (S.playerSound) S.playerSound.age += dt;
     if (info.moving) {
@@ -433,6 +509,11 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
     animateModel(dt, state, moveSpeed);
     updateStomp(dt, moveSpeed);
     updateSoulWisps();
+    if (S.mode === 'attackPlayer') yellHold = 0.45;
+    else yellHold = Math.max(0, yellHold - dt);
+    const attacking = S.mode === 'attackPlayer' || (yellHold > 0 && S.mode !== 'consume');
+    const voiceKind = attacking ? 'yell' : S.mode === 'consume' ? 'eat' : moveSpeed > 0.2 ? 'stomp' : null;
+    syncBodyVoice(voiceKind, info.yaw || 0);
   }
 
   function shot(origin, dir, options = {}) {
@@ -465,6 +546,7 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
     model.hitT = 0.35;
     if (S.health === 0) {
       S.dead = true; S.mode = 'dead'; model.root.visible = false;
+      stopBodyVoice(0.25);
       say('The Consumer collapses. The survivors scatter into the dark.');
     } else say(`The Consumer takes the hit. ${S.health}/${S.maxHealth}`);
   }
@@ -505,6 +587,8 @@ export function createConsumerRound({ scene, camera, world, hooks = {}, audio = 
     S.active = false; S.rescueId = null; S.rescueProgress = 0; S.target = null;
     for (const c of citizens) { c.mesh.removeFromParent(); stopCitizenFootsteps(c); }
     citizens.length = 0; model.root.visible = false; mover.reset();
+    yellHold = 0;
+    stopBodyVoice(0.08);
     for (const wisp of soulWisps) wisp.visible = false;
     stompRing.visible = false;
   }

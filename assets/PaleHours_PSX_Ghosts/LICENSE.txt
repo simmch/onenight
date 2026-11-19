@@ -1,0 +1,26 @@
+Pale Hours - 14 PSX Ghosts and Possessed
+Copyright (c) 2026 Core Systems Asset Factory
+
+LICENCE - what you may do with these models
+------------------------------------------
+You may use these models, textures and animations in commercial and non-commercial games and other
+projects, in any number of them, with no attribution required and no royalty.
+
+You may modify them: retexture, re-rig, re-animate, decimate, combine with other assets.
+
+You may NOT resell or redistribute the models, textures or animations themselves as assets - as a model
+pack, a character library, a template whose value is the models, or inside an asset-generation service
+or dataset. Ship them INSIDE something you made, not AS the thing you are selling.
+
+No warranty of any kind is given.
+
+HOW THIS WAS MADE
+-----------------
+Every character in this pack is AI-generated. The bodies were generated with MakeHuman (MPFB, whose
+output is CC0) from parameter values chosen by an AI system, decimated and rigged by scripts that an AI
+system wrote. Every texture is an AI painting (OpenAI image model) made over the model's own silhouette
+and projected back onto the mesh. The skeleton and the animation clips are the CC0 Quaternius Universal
+Animation Library (see NOTICE.txt). The storefront listing states the same thing: Code = yes,
+Graphics = yes, Sounds = no, Text and Dialog = no.
+
+14 characters · 42 entities · 46 clips each · 256 px textures

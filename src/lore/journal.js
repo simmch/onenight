@@ -105,5 +105,8 @@ export function createJournal({ onOpen, onClose } = {}) {
     get total() { return ENTRIES.length; },
     get ids() { return new Set(foundIds()); },
     reset() { found = {}; sel = null; save(); render(); },
+    // for the storyboard: a copy of what has been found, and a way to mark something read from there
+    snapshot() { return JSON.parse(JSON.stringify(found)); },
+    markRead(id) { if (found[id] && !found[id].read) { found[id].read = true; save(); render(); } },
   };
 }

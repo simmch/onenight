@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>One Night</title>
 <link rel="icon" href="data:,">
+<link rel="stylesheet" href="./src/cult/cult.css">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: "Courier New", monospace; color: #b9b3a3; }
@@ -238,11 +239,13 @@
       <p class="big">TAP TO PLAY</p>
       <p>&larr; SWIPE LEFT &middot; INSTRUCTIONS</p>
       <p>SWIPE RIGHT &rarr; &middot; LEADERBOARD</p>
+      <p>&uarr; SWIPE UP &middot; LORE</p>
     </div>
     <nav class="desk">
       <button type="button" data-menu="play">PLAY</button>
       <button type="button" data-menu="board">LEADERBOARD</button>
       <button type="button" data-menu="how">INSTRUCTIONS</button>
+      <button type="button" data-menu="lore">LORE</button>
     </nav>
   </div>
   <div id="menuPanel" hidden>
@@ -275,6 +278,8 @@
       <p>Armor gives you a shield that takes every hit first and grows back after a few seconds unhurt. The workbench can craft and equip the next armor tier. Bone armor costs 28 parts and gives 25 shield points. Higher tiers cost more, up to 135 parts for the 170-point Choir carapace. Armor you find equips automatically if it is stronger and patches your shield otherwise.</p>
       <h3>YOUR MIND</h3>
       <p>Light on a horror wears your sanity down. Hold your breath while standing still to get it back, even when your mind is empty. A potion restores sanity too.</p>
+      <h3>THE STORY</h3>
+      <p>Letters, notes and objects turn up on the ground, in chests, on the dead. You keep them between nights. LORE on the title pins them all to a board and strings together the ones that belong together; blank pins are what you have not found, and a <b>?</b> is a lead. <span class="desk">Drag to move around or rearrange cards, scroll to zoom, click a card to read it.</span><span class="phone">One finger moves, two fingers zoom, tap a card to read it, swipe the reading sheet or the top bar down to close.</span></p>
       <div id="menuControls">
       <h3>CONTROLS</h3>
       <dl class="desk">
@@ -325,6 +330,7 @@
         <dl>
           <dt>Tap</dt><dd>Play</dd>
           <dt>Swipe left or right</dt><dd>Instructions, leaderboard, and back again</dd>
+          <dt>Swipe up</dt><dd>The lore board</dd>
         </dl>
       </div>
       </div>
@@ -370,6 +376,19 @@
   </div>
 </div>
 <div id="turn"><div><p>TURN SIDEWAYS</p><p>This night is played in landscape.</p></div></div>
+<section id="cult" aria-label="The Cult encounter" hidden>
+  <div class="cult-fade" aria-hidden="true"></div>
+  <div class="cult-plaque" aria-hidden="true"><strong>The Cult</strong></div>
+  <div class="cult-aim" aria-hidden="true" hidden></div>
+  <div class="cult-panel" hidden>
+    <div aria-live="polite" aria-atomic="true">
+      <div class="cult-speaker"></div>
+      <p class="cult-line"></p>
+      <p class="cult-cue"></p>
+    </div>
+    <div class="cult-choices"></div>
+  </div>
+</section>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

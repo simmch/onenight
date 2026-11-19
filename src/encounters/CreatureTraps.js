@@ -1,4 +1,5 @@
 import { distance, press, hold } from './EncounterWorld.js';
+import { monsterAsset } from '../world/MonsterAssets.js';
 
 export function createEffigy(w, sites, level) {
   const { hooks } = w;
@@ -143,7 +144,13 @@ export function createBurrower(w, sites, level) {
     plate.root.visible = control.root.visible = !i;
     return { plate, control };
   });
-  const burrow = w.prop(sites[0], { name: 'burrower', width: 1.8, height: 1.25 });
+  const crawler = monsterAsset('burrower', { scale: 0.74, idle: 'Idle_Ground' });
+  const burrow = w.prop(sites[0], { name: crawler ? undefined : 'burrower', width: 1.8, height: 1.25 });
+  if (crawler) {
+    burrow.root.add(crawler.root);
+    burrow.rayHit = crawler.rayHit;
+  }
+  let attackPose = 0, hitPose = 0;
   const mound = w.prop(sites[5]);
   const tremor = w.mark(mound, 0xa78a72, 1.8);
   for (let i = 0; i < 6; i++) {
@@ -169,13 +176,22 @@ export function createBurrower(w, sites, level) {
       strike -= dt;
       const { plate, control } = active();
       if (phase === 'surface') {
-        if (strike < -0.9) w.move(burrow, dt, p, 1.65 + level * 0.09);
+        const moving = strike < -0.9;
+        if (moving) w.move(burrow, dt, p, 1.65 + level * 0.09);
+        attackPose = Math.max(0, attackPose - dt);
+        hitPose = Math.max(0, hitPose - dt);
         if (strike <= 0 && distance(burrow, p) < 1.65 && w.clearLine(burrow, p)) {
+          attackPose = 1.75;
           burrow.pose('attack');
           hooks.hurt(18 + level, 'burrower');
           hooks.cue('crack', burrow);
           strike = 2.5;
         } else if (strike < 1.8) burrow.pose(Math.sin(p.time * 9) > 0 ? 'still' : 'step');
+        if (crawler) {
+          burrow.root.rotation.y = Math.atan2(p.x - burrow.x, p.z - burrow.z);
+          const clip = hitPose > 0 ? 'Hit' : attackPose > 0 ? 'Attack' : moving ? 'Run_Snake' : 'Idle_Ground';
+          crawler.animate(clip, dt, { once: hitPose > 0 || attackPose > 0 });
+        }
         return;
       }
       if (phase === 'tracking') {
@@ -258,6 +274,7 @@ export function createBurrower(w, sites, level) {
     targets() { return phase === 'surface' ? [burrow] : []; },
     hit(m, damage) {
       health -= damage;
+      hitPose = 0.48;
       strike = Math.max(strike, 0.72);
       hooks.cue('stone', burrow);
       if (health <= 0) encounter.won = true;

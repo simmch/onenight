@@ -1,0 +1,9 @@
+NOTICE
+
+Skeleton and animation clips: "Universal Animation Library" (Standard) by Quaternius, released under CC0 1.0 Universal
+(https://creativecommons.org/publicdomain/zero/1.0/). No attribution is required by that licence; this credit is a courtesy.
+
+Base bodies: generated with MPFB (MakeHuman Plugin For Blender); MakeHuman's generated output is CC0. The add-on itself
+(AGPL) is not included in this pack.
+
+Textures: AI paintings generated through the OpenAI image API by Core Systems Asset Factory.

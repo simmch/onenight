@@ -1,0 +1,1574 @@
+{
+ "schema": "csaf-poly3d-pack/1",
+ "id": "p3-pale-hours-14-psx-ghosts-spirits-and-possessed-humanoid",
+ "name": "Pale Hours - 14 PSX Ghosts and Possessed",
+ "line": "A1",
+ "version": "1.0.0",
+ "theme": "supernatural horror: the ghosts of a haunted house, its grounds and the drowned shore below it, plus the possessed living, for PlayStation era ghost story and survival horror games",
+ "style": "a PlayStation 1 era supernatural horror game character, a ghost, hand painted low resolution game texture look, slightly grainy, muted desaturated colours with a cold pale blue grey cast, deathly pale grey skin, plain unmarked period clothing with no logos, no readable text and no symbols",
+ "texture": 256,
+ "trisBudget": 1500,
+ "generatedAt": "2026-10-30T13:09:22.607Z",
+ "counts": {
+  "bases": 14,
+  "skins": 42,
+  "entities": 42,
+  "clipsPerBase": 46
+ },
+ "entities": [
+  {
+   "id": "pg_drowned_bride",
+   "kind": "human",
+   "name": "Drowned bride",
+   "tris": 1496,
+   "verts": 760,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_drowned_bride/textures/pg_drowned_bride_skin0.png",
+     "bytes": 77183,
+     "sha256": "acdc18e50adca36a5db34b7e6c125a12e12acd4ded324d83cfe74054f78d7dea"
+    },
+    {
+     "path": "models/pg_drowned_bride/textures/pg_drowned_bride_skin1.png",
+     "bytes": 64600,
+     "sha256": "fd9d2160b2d96ca567c388edb3e67803aa19fb0de19f8769c517e02c8f9027cc"
+    },
+    {
+     "path": "models/pg_drowned_bride/textures/pg_drowned_bride_skin2.png",
+     "bytes": 67917,
+     "sha256": "0ef45cf879ce85a9a6d05a1767b7eec86e437078ea27a52c2545bec8f6d77e0b"
+    },
+    {
+     "path": "models/pg_drowned_bride/pg_drowned_bride_skin0.glb",
+     "bytes": 2603464,
+     "sha256": "f8534d31d3afaca8d669c96ec2e3ca1984f160856f05ecb6f3afad18191b9278"
+    },
+    {
+     "path": "models/pg_drowned_bride/pg_drowned_bride_skin1.glb",
+     "bytes": 154200,
+     "sha256": "434b03faa9a42fefb2801477b575e457264b43355bf9eaa22e5e8b523f751501"
+    },
+    {
+     "path": "models/pg_drowned_bride/pg_drowned_bride_skin2.glb",
+     "bytes": 157520,
+     "sha256": "991d9542192b4725f43bca76922424c12e6751d3c1202a5d0cf264f5042f5745"
+    },
+    {
+     "path": "models/pg_drowned_bride/pg_drowned_bride.fbx",
+     "bytes": 13084140,
+     "sha256": "9d38d999fb6a4b9d0e4989f417e2cde1b3e455d6f99bcfbcd8514ba3eff40d81"
+    },
+    {
+     "path": "models/pg_drowned_bride/pg_drowned_bride.obj",
+     "bytes": 120428,
+     "sha256": "181448814de58550cbee7dc921fc786a2a1619cd814b9915340ac4389d22e328"
+    },
+    {
+     "path": "models/pg_drowned_bride/pg_drowned_bride.mtl",
+     "bytes": 266,
+     "sha256": "84e722a99e1a591b40eb2cbdbef915e85f40db7bba33023faedb1dd6aaee95ac"
+    },
+    {
+     "path": "blender_source/pg_drowned_bride.blend",
+     "bytes": 11464810,
+     "sha256": "de065fdd770f4e2bc0ee9b45d588b9e539d2cc74051d956df058ad25894358e2"
+    }
+   ]
+  },
+  {
+   "id": "pg_mourning_widow",
+   "kind": "human",
+   "name": "Veiled widow",
+   "tris": 1495,
+   "verts": 750,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_mourning_widow/textures/pg_mourning_widow_skin0.png",
+     "bytes": 64964,
+     "sha256": "737a07ed85445247f007275d1a4c7f0957ded9c3013673358d1aec4bfac38854"
+    },
+    {
+     "path": "models/pg_mourning_widow/textures/pg_mourning_widow_skin1.png",
+     "bytes": 58589,
+     "sha256": "46273338fcb9becce0a8bbd3740ce2aa74030bc90f7b5bbec28132ad9dd770c3"
+    },
+    {
+     "path": "models/pg_mourning_widow/textures/pg_mourning_widow_skin2.png",
+     "bytes": 59897,
+     "sha256": "f3ff006f1a495f4d7ca9365c39b7c3998d8e605f7f7e997212fa603b50a0d51a"
+    },
+    {
+     "path": "models/pg_mourning_widow/pg_mourning_widow_skin0.glb",
+     "bytes": 2592320,
+     "sha256": "ac90b9b7f4a623559bb234dfd727881bd97f2ed252c8581940e1e2e8d144e35f"
+    },
+    {
+     "path": "models/pg_mourning_widow/pg_mourning_widow_skin1.glb",
+     "bytes": 149288,
+     "sha256": "9cbe996f47b5c3acc8b779ddc90f2ae8d3b8380c5c244caed55ddb40eb9229a7"
+    },
+    {
+     "path": "models/pg_mourning_widow/pg_mourning_widow_skin2.glb",
+     "bytes": 150596,
+     "sha256": "0c3a2d107e48529240ff9ac341e8daad66b60dca208941a848e22c580304d831"
+    },
+    {
+     "path": "models/pg_mourning_widow/pg_mourning_widow.fbx",
+     "bytes": 13084012,
+     "sha256": "814b7ab46d765a864414ab78d4b18a35283a3537462e5a238ee0e3fc1d758903"
+    },
+    {
+     "path": "models/pg_mourning_widow/pg_mourning_widow.obj",
+     "bytes": 120620,
+     "sha256": "fa4d88fd80d3641e4b2f366249913937599cf29435b9eae1c5bb750c9d867058"
+    },
+    {
+     "path": "models/pg_mourning_widow/pg_mourning_widow.mtl",
+     "bytes": 268,
+     "sha256": "2d32815c810c1a42346fa0deb386025fc9dea30def8ec77c3a94876b815de124"
+    },
+    {
+     "path": "blender_source/pg_mourning_widow.blend",
+     "bytes": 11452553,
+     "sha256": "282a26ec35203cf216d3dd60e8c36b0eec1c5f961046edaf952ebc892787b2f8"
+    }
+   ]
+  },
+  {
+   "id": "pg_hanged_man",
+   "kind": "human",
+   "name": "Hanged man",
+   "tris": 1496,
+   "verts": 745,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_hanged_man/textures/pg_hanged_man_skin0.png",
+     "bytes": 64048,
+     "sha256": "42a846d055888ede5d936fe3353cc6548845ecf6c2f96a4595bde5a402303054"
+    },
+    {
+     "path": "models/pg_hanged_man/textures/pg_hanged_man_skin1.png",
+     "bytes": 70614,
+     "sha256": "312b9827ffb6cd2144c19bab9d5e26d169b909f58cb1f3ee5ec11effb302054e"
+    },
+    {
+     "path": "models/pg_hanged_man/textures/pg_hanged_man_skin2.png",
+     "bytes": 71182,
+     "sha256": "b2e2e9ecc6037cbb4f2ec3958c9850decca5a1d6bbe6a192f48dd8c4e7f10415"
+    },
+    {
+     "path": "models/pg_hanged_man/pg_hanged_man_skin0.glb",
+     "bytes": 2595448,
+     "sha256": "e5b4b1e145c006f94f1f0a3f685129ccb831549d86169c218fab2434b6992442"
+    },
+    {
+     "path": "models/pg_hanged_man/pg_hanged_man_skin1.glb",
+     "bytes": 165352,
+     "sha256": "e04a1b6789e0bd0db0c82d19e017a262806bb6492d68af241a345d07811c5dc4"
+    },
+    {
+     "path": "models/pg_hanged_man/pg_hanged_man_skin2.glb",
+     "bytes": 165920,
+     "sha256": "43073472e135fd44207fdf0bab88287620cbd9c99436192e6fb482afacc59e47"
+    },
+    {
+     "path": "models/pg_hanged_man/pg_hanged_man.fbx",
+     "bytes": 13083692,
+     "sha256": "05915381d9d6ba3e1a6f1e9b42dd5d4ccad7d268aeeff9d10448907e7188d201"
+    },
+    {
+     "path": "models/pg_hanged_man/pg_hanged_man.obj",
+     "bytes": 123054,
+     "sha256": "6347bba73269caf89911d2a90fa7b8922e6359bfce90f91b1077e60a899ee5b8"
+    },
+    {
+     "path": "models/pg_hanged_man/pg_hanged_man.mtl",
+     "bytes": 260,
+     "sha256": "8fd73a4cb5704af2e6eaef27cf0ca672e8edf51785fe61ce12dc17b593d663e4"
+    },
+    {
+     "path": "blender_source/pg_hanged_man.blend",
+     "bytes": 11442586,
+     "sha256": "5c92129dda7d9fbcc6b13a7d9690a3c1a86bb42432c9a3a021b9b55689b73775"
+    }
+   ]
+  },
+  {
+   "id": "pg_plague_doctor",
+   "kind": "human",
+   "name": "Plague doctor",
+   "tris": 1496,
+   "verts": 741,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_plague_doctor/textures/pg_plague_doctor_skin0.png",
+     "bytes": 62050,
+     "sha256": "c7777375ca572dfbd4f63f04b766f9ca5bb940a257fec38a04690c067d75d721"
+    },
+    {
+     "path": "models/pg_plague_doctor/textures/pg_plague_doctor_skin1.png",
+     "bytes": 55805,
+     "sha256": "4d8adefd435ed48cb006922b3b646d541be25e656acfb5752018d192f1b9c026"
+    },
+    {
+     "path": "models/pg_plague_doctor/textures/pg_plague_doctor_skin2.png",
+     "bytes": 58213,
+     "sha256": "3c68c725495cedba0d85036e7ff75ed1f5e2e0c308354f9ac9fa7b5958c027d6"
+    },
+    {
+     "path": "models/pg_plague_doctor/pg_plague_doctor_skin0.glb",
+     "bytes": 2592372,
+     "sha256": "ce1a9e62f33eecf2b4421bcf8983f02e32549e24033dfe63464b7f02ac0b8929"
+    },
+    {
+     "path": "models/pg_plague_doctor/pg_plague_doctor_skin1.glb",
+     "bytes": 149464,
+     "sha256": "dc6ac960fe598df52b5bb08fea586ab603fbb87ac417d7989e28917bdf111c3e"
+    },
+    {
+     "path": "models/pg_plague_doctor/pg_plague_doctor_skin2.glb",
+     "bytes": 151872,
+     "sha256": "f94e2e2da66700a52059cae2db79a1bf877a3bd2e81849a8e117bace20520c8a"
+    },
+    {
+     "path": "models/pg_plague_doctor/pg_plague_doctor.fbx",
+     "bytes": 13083916,
+     "sha256": "68935d887688e350321a2306731efcf180ad228c42e9290f67b029f009fc9a40"
+    },
+    {
+     "path": "models/pg_plague_doctor/pg_plague_doctor.obj",
+     "bytes": 121800,
+     "sha256": "27b77b98339b053e5f41e352b4cc843b19a70246cacfb8eaf24e302c5c54deaa"
+    },
+    {
+     "path": "models/pg_plague_doctor/pg_plague_doctor.mtl",
+     "bytes": 266,
+     "sha256": "908666b70a44a9aa52a749910ae79c5283f72280b95f9fd1e55e5a1ca3499836"
+    },
+    {
+     "path": "blender_source/pg_plague_doctor.blend",
+     "bytes": 11439404,
+     "sha256": "dc084bf73bb1449183bd31c8910b7376db91723578103c9f2fba94cd6fcb9205"
+    }
+   ]
+  },
+  {
+   "id": "pg_sleepwalker",
+   "kind": "human",
+   "name": "The sleepwalker",
+   "tris": 1496,
+   "verts": 758,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_sleepwalker/textures/pg_sleepwalker_skin0.png",
+     "bytes": 67257,
+     "sha256": "8b7c6d3dab0e0939c97cdbf7161cd5530c0cbadf9ba20cecd900a39f59c154fb"
+    },
+    {
+     "path": "models/pg_sleepwalker/textures/pg_sleepwalker_skin1.png",
+     "bytes": 57796,
+     "sha256": "055430a7b8ddfffa26a71c79221d9317c264b5fafe06249e8ea9f17a9cdb387b"
+    },
+    {
+     "path": "models/pg_sleepwalker/textures/pg_sleepwalker_skin2.png",
+     "bytes": 61115,
+     "sha256": "5d012a473be1ca6fe6917b8f5702c9c1f22b67d2ea50e03babd2e88a5c46880e"
+    },
+    {
+     "path": "models/pg_sleepwalker/pg_sleepwalker_skin0.glb",
+     "bytes": 2593304,
+     "sha256": "f69a8883d03e12640735c36fa04692d1969f8efc9b767b4211088e32c9451ade"
+    },
+    {
+     "path": "models/pg_sleepwalker/pg_sleepwalker_skin1.glb",
+     "bytes": 147180,
+     "sha256": "1e568982e2c202a8059b4c19f3d6c30ee5a028986be4b9fb1c8f183a79361728"
+    },
+    {
+     "path": "models/pg_sleepwalker/pg_sleepwalker_skin2.glb",
+     "bytes": 150500,
+     "sha256": "56f075d056a0224062cdd3f47117970ffe176bb7986bea58022eb9074999cdef"
+    },
+    {
+     "path": "models/pg_sleepwalker/pg_sleepwalker.fbx",
+     "bytes": 13083580,
+     "sha256": "ad3e03a770be159f07d3ad90f6a752180fbfcac62e9cecb3078ae23def589382"
+    },
+    {
+     "path": "models/pg_sleepwalker/pg_sleepwalker.obj",
+     "bytes": 120233,
+     "sha256": "79f9acdadd6320b5bd9fa031de897f14c5ade1161a32579f6c3699490b9acea0"
+    },
+    {
+     "path": "models/pg_sleepwalker/pg_sleepwalker.mtl",
+     "bytes": 262,
+     "sha256": "11f2d01aaf72af36fb2f55d712b49d778be363b553748d72c6722685bbcd8f52"
+    },
+    {
+     "path": "blender_source/pg_sleepwalker.blend",
+     "bytes": 11455035,
+     "sha256": "2ec415901b4254de75bd76d1823d522e7d5f301cdbe877213d233b2cfcda9337"
+    }
+   ]
+  },
+  {
+   "id": "pg_miner",
+   "kind": "human",
+   "name": "Buried miner",
+   "tris": 1497,
+   "verts": 746,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_miner/textures/pg_miner_skin0.png",
+     "bytes": 67294,
+     "sha256": "85ab45b66e8dfd2f675bd32c7c739ccf5fc05a37d9ef440a8e254f46c550b3c0"
+    },
+    {
+     "path": "models/pg_miner/textures/pg_miner_skin1.png",
+     "bytes": 70968,
+     "sha256": "74051fbdcba4c07c7103d1b89de7c42ec65a5f0dbb77372b08e74f3a5bd97e29"
+    },
+    {
+     "path": "models/pg_miner/textures/pg_miner_skin2.png",
+     "bytes": 69097,
+     "sha256": "57b0b3fee80156a9ee0ec06a0c4c36fa454f62bd2457667d754e1f8d803f898d"
+    },
+    {
+     "path": "models/pg_miner/pg_miner_skin0.glb",
+     "bytes": 2598632,
+     "sha256": "e4ca29b6409ae632c85047da9179c42738667d2553cefb8772861fa5b5e130c3"
+    },
+    {
+     "path": "models/pg_miner/pg_miner_skin1.glb",
+     "bytes": 165636,
+     "sha256": "5a9c297a5335c8ad843a524673ec2ceeed83700cf0467db7e7236f1f40fa75c2"
+    },
+    {
+     "path": "models/pg_miner/pg_miner_skin2.glb",
+     "bytes": 163768,
+     "sha256": "6f7593a1178d6b2bed707c3e0df05c59fbc5e1f97fb9d3a0ac0f9cdbc53c3c51"
+    },
+    {
+     "path": "models/pg_miner/pg_miner.fbx",
+     "bytes": 13082764,
+     "sha256": "fa0cd5adbdb95f0f974f737250a00a6afa8c3fc19298573f883deb6638ce45d0"
+    },
+    {
+     "path": "models/pg_miner/pg_miner.obj",
+     "bytes": 122613,
+     "sha256": "5d7cb084ba5be8fdcb6c4138103db056f78c63975a8608fc554776a9ebf89d2a"
+    },
+    {
+     "path": "models/pg_miner/pg_miner.mtl",
+     "bytes": 250,
+     "sha256": "f5db6a00a16fdb38f963336ed5ef9d71f2a14cf6491ba21040f0e3ca3f81c1b3"
+    },
+    {
+     "path": "blender_source/pg_miner.blend",
+     "bytes": 11455807,
+     "sha256": "6ddeb856a020b820b8fe15c6b7855c17a666aad5a90d9d3badd37a5479ac34e1"
+    }
+   ]
+  },
+  {
+   "id": "pg_ballerina",
+   "kind": "human",
+   "name": "Music box ballerina",
+   "tris": 1498,
+   "verts": 754,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_ballerina/textures/pg_ballerina_skin0.png",
+     "bytes": 63613,
+     "sha256": "52622ade86a8582f1d02f9ae30b72809233f6b528f17f13cc7f85a7f9fe47719"
+    },
+    {
+     "path": "models/pg_ballerina/textures/pg_ballerina_skin1.png",
+     "bytes": 60175,
+     "sha256": "6eea05ce9ba6ea1dc4543e1511ae363b35fe990ddcc06c3976ffc71febb02fe0"
+    },
+    {
+     "path": "models/pg_ballerina/textures/pg_ballerina_skin2.png",
+     "bytes": 60513,
+     "sha256": "bb6eb3bb92e19c019c81a936272971197f260841b22f381cf59ef5123c6347e6"
+    },
+    {
+     "path": "models/pg_ballerina/pg_ballerina_skin0.glb",
+     "bytes": 2590280,
+     "sha256": "c323df0931884b2050ea258035ccd74c1ae09ed6054675292b7ba8f8d5b3e72e"
+    },
+    {
+     "path": "models/pg_ballerina/pg_ballerina_skin1.glb",
+     "bytes": 150184,
+     "sha256": "e9610e052620c71ca1af9c8bd112f6917beedb518f1f20287ff45074754716af"
+    },
+    {
+     "path": "models/pg_ballerina/pg_ballerina_skin2.glb",
+     "bytes": 150524,
+     "sha256": "b8eadab590c5dc6cc3f7c4c997c74ae34c7633b55ddfe3a06c720846be66fc0d"
+    },
+    {
+     "path": "models/pg_ballerina/pg_ballerina.fbx",
+     "bytes": 13083548,
+     "sha256": "f8e094d00915e047f9e88efe533ccb772fed981960d076adea4be3d366869ba6"
+    },
+    {
+     "path": "models/pg_ballerina/pg_ballerina.obj",
+     "bytes": 121014,
+     "sha256": "80f7ce558af436bebdf3cca65ed2389c0f8a4494632c07ebe938e2f2b0701c53"
+    },
+    {
+     "path": "models/pg_ballerina/pg_ballerina.mtl",
+     "bytes": 258,
+     "sha256": "c82d52d1abf641d32811801697774de7ebff1da1907b9363a8cf7caa3ea354d4"
+    },
+    {
+     "path": "blender_source/pg_ballerina.blend",
+     "bytes": 11452704,
+     "sha256": "0d2333dc44f8c02710e29e993bd044424d15cf02b68e9ebfbb13979e7bfa731a"
+    }
+   ]
+  },
+  {
+   "id": "pg_drowned_sailor",
+   "kind": "human",
+   "name": "Drowned sailor",
+   "tris": 1499,
+   "verts": 748,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_drowned_sailor/textures/pg_drowned_sailor_skin0.png",
+     "bytes": 64431,
+     "sha256": "57caab5db6b69a7e488aa373d2cd17ff8bb00b35823d0a2c7be197c0b4721028"
+    },
+    {
+     "path": "models/pg_drowned_sailor/textures/pg_drowned_sailor_skin1.png",
+     "bytes": 61059,
+     "sha256": "70c04f259d3ab0fd7fdb2d44c9f9b6fa65e1e4f6ed323ce1f20e427fbf01ecc1"
+    },
+    {
+     "path": "models/pg_drowned_sailor/textures/pg_drowned_sailor_skin2.png",
+     "bytes": 60392,
+     "sha256": "ba16b8f27d4f3d1a667205e82faf007421f6c7ef257af441d94fbb7679cf0aef"
+    },
+    {
+     "path": "models/pg_drowned_sailor/pg_drowned_sailor_skin0.glb",
+     "bytes": 2594988,
+     "sha256": "187370678f35e9451fd45e26e8f3fc5ab718afe5848c2134b165d13fd99b558e"
+    },
+    {
+     "path": "models/pg_drowned_sailor/pg_drowned_sailor_skin1.glb",
+     "bytes": 154948,
+     "sha256": "51123107afa7058b336eb98f968273dae9293d1e92bb9de8aefd8cd7c91eca81"
+    },
+    {
+     "path": "models/pg_drowned_sailor/pg_drowned_sailor_skin2.glb",
+     "bytes": 154280,
+     "sha256": "50c211e342408f6defb12769f4d2b22527b7d1b31c1409d91d79fe807ad68eff"
+    },
+    {
+     "path": "models/pg_drowned_sailor/pg_drowned_sailor.fbx",
+     "bytes": 13084460,
+     "sha256": "123903de6e72bebcf6e93660a84fea3a81da7e26ba30ff5fad16e051426bdf4a"
+    },
+    {
+     "path": "models/pg_drowned_sailor/pg_drowned_sailor.obj",
+     "bytes": 122435,
+     "sha256": "c33218d90f24bc2075eb61a0b909879876aca5353db427ed472850fb72c89b63"
+    },
+    {
+     "path": "models/pg_drowned_sailor/pg_drowned_sailor.mtl",
+     "bytes": 268,
+     "sha256": "2f228800680cb0f26a8093f7f41b39d919506eed7c6690239b61fcd29d57cf15"
+    },
+    {
+     "path": "blender_source/pg_drowned_sailor.blend",
+     "bytes": 11441506,
+     "sha256": "219ad5327c9a737628396c0e7fc6ff0fdd8a71f93f9ca97e006c94874a288b12"
+    }
+   ]
+  },
+  {
+   "id": "pg_shrouded",
+   "kind": "human",
+   "name": "The shrouded",
+   "tris": 1497,
+   "verts": 744,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_shrouded/textures/pg_shrouded_skin0.png",
+     "bytes": 74992,
+     "sha256": "2bbc39e08d466439b36f7e0f5dfcbfeb270d3c28892d50899373119f4223f56e"
+    },
+    {
+     "path": "models/pg_shrouded/textures/pg_shrouded_skin1.png",
+     "bytes": 73044,
+     "sha256": "0092ca3a780f1a689e838bcc72063a7a19e3104901bcb5d59a98f879175d1791"
+    },
+    {
+     "path": "models/pg_shrouded/textures/pg_shrouded_skin2.png",
+     "bytes": 68808,
+     "sha256": "cbc8e28fe6efde525ac0408040cffd11051378f0ca2ba7a3efc25f47c10e13af"
+    },
+    {
+     "path": "models/pg_shrouded/pg_shrouded_skin0.glb",
+     "bytes": 2605472,
+     "sha256": "62d7580b78ac33cfd7536c8b9cbf0820bd9df3feff2f566f6aa33e3f748962bf"
+    },
+    {
+     "path": "models/pg_shrouded/pg_shrouded_skin1.glb",
+     "bytes": 166840,
+     "sha256": "b89e90bd353a1461f735cc9af62c4f586097f03bbb83e2a1614bcd16f810e8c2"
+    },
+    {
+     "path": "models/pg_shrouded/pg_shrouded_skin2.glb",
+     "bytes": 162604,
+     "sha256": "9d3dca80bf53da0ccf476d5839a8c5de4fdc155451324d635391f0bd853e7629"
+    },
+    {
+     "path": "models/pg_shrouded/pg_shrouded.fbx",
+     "bytes": 13083084,
+     "sha256": "23281c8d0d8ae7dfcf4c3bae7e587c17ca56ac5a2e80d7b8e46e314016518056"
+    },
+    {
+     "path": "models/pg_shrouded/pg_shrouded.obj",
+     "bytes": 122482,
+     "sha256": "ecf4536daaf11fd290c4cbd29069a35b2d9532576863bf2c0c0819d5124cb3a3"
+    },
+    {
+     "path": "models/pg_shrouded/pg_shrouded.mtl",
+     "bytes": 256,
+     "sha256": "850073986b5dfd61d0a0139079bc57001d9de6499f2e0a8c05b80a73c49fe195"
+    },
+    {
+     "path": "blender_source/pg_shrouded.blend",
+     "bytes": 11462694,
+     "sha256": "fd892aa2f25844a9ea01c2e814b992e195f04f5776e49290501170c6b4391bb8"
+    }
+   ]
+  },
+  {
+   "id": "pg_burned_nun",
+   "kind": "human",
+   "name": "Burned nun",
+   "tris": 1495,
+   "verts": 751,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_burned_nun/textures/pg_burned_nun_skin0.png",
+     "bytes": 64635,
+     "sha256": "dbf6f3d4b05dc1d21024bf1a644ac9464fe3846cda82c43cdeab21ecdc57ae93"
+    },
+    {
+     "path": "models/pg_burned_nun/textures/pg_burned_nun_skin1.png",
+     "bytes": 63743,
+     "sha256": "d77c248301f031c72a114d0eb9164a1d4b8ae62d90f90f2f7b9b11295a332b7e"
+    },
+    {
+     "path": "models/pg_burned_nun/textures/pg_burned_nun_skin2.png",
+     "bytes": 63076,
+     "sha256": "8816e0ee1d8c151f01f558ab76b6e00882a9c0fc940f7889ad53d5475c6ec1b9"
+    },
+    {
+     "path": "models/pg_burned_nun/pg_burned_nun_skin0.glb",
+     "bytes": 2593428,
+     "sha256": "f6369f41b5f0fe5144e0ad02cbff2831f2edcbdfbce33115d9de6fc8f0c18e2c"
+    },
+    {
+     "path": "models/pg_burned_nun/pg_burned_nun_skin1.glb",
+     "bytes": 155872,
+     "sha256": "df4c858abe47c2d5cf4eb9d6704df3e70766e08171ee49b05a9e5b3e6a527f89"
+    },
+    {
+     "path": "models/pg_burned_nun/pg_burned_nun_skin2.glb",
+     "bytes": 155204,
+     "sha256": "681f971da45c4bc0328659acc25a06eb8b6158c7f6f6eb6b49d0b4eb6ebd8b81"
+    },
+    {
+     "path": "models/pg_burned_nun/pg_burned_nun.fbx",
+     "bytes": 13083148,
+     "sha256": "4c56f8a5ad3e6322d7b40284825cf1ba92671ee338ec2889d2f14b8a5f8d44d9"
+    },
+    {
+     "path": "models/pg_burned_nun/pg_burned_nun.obj",
+     "bytes": 121885,
+     "sha256": "c9a43023d99fe66ecf93eb737509c0ae9d41beffed870c8b2e59290a2a5da90e"
+    },
+    {
+     "path": "models/pg_burned_nun/pg_burned_nun.mtl",
+     "bytes": 260,
+     "sha256": "fc46268e58c4ba3e9a03421f66b7c6ac48cac81723d8dad0fe26c18536344e3c"
+    },
+    {
+     "path": "blender_source/pg_burned_nun.blend",
+     "bytes": 11452959,
+     "sha256": "b11860b4bd383effae5ed4d8739ec60ae02b57759b1ad811174f0a70dc4ea8e8"
+    }
+   ]
+  },
+  {
+   "id": "pg_lost_soldier",
+   "kind": "human",
+   "name": "Lost soldier",
+   "tris": 1497,
+   "verts": 746,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_lost_soldier/textures/pg_lost_soldier_skin0.png",
+     "bytes": 67148,
+     "sha256": "626f45144af4043402166985d178c6ade2136848404888fb0793459446589b69"
+    },
+    {
+     "path": "models/pg_lost_soldier/textures/pg_lost_soldier_skin1.png",
+     "bytes": 65969,
+     "sha256": "08faf8f10328f41d25a83d078d36ef8fe8123b85e0580167f78cc109d3fe55a2"
+    },
+    {
+     "path": "models/pg_lost_soldier/textures/pg_lost_soldier_skin2.png",
+     "bytes": 62829,
+     "sha256": "cd5c4c4fb42ab329d1afd869c2b7d3f833dd9156b39b8aff351d11e4c386d976"
+    },
+    {
+     "path": "models/pg_lost_soldier/pg_lost_soldier_skin0.glb",
+     "bytes": 2599716,
+     "sha256": "8b5652f891d0a68f934cc60728d9b042408b3ae236bbec46e8639e439e99b85b"
+    },
+    {
+     "path": "models/pg_lost_soldier/pg_lost_soldier_skin1.glb",
+     "bytes": 161868,
+     "sha256": "623bf54efc022dfdbd00723260d8df73a5086ed3b5da45fa73920f47092efe39"
+    },
+    {
+     "path": "models/pg_lost_soldier/pg_lost_soldier_skin2.glb",
+     "bytes": 158728,
+     "sha256": "902ece683d0db04f67fa21c81ef28131a73a7a98c5e6764fb039284b2d540b58"
+    },
+    {
+     "path": "models/pg_lost_soldier/pg_lost_soldier.fbx",
+     "bytes": 13084172,
+     "sha256": "55e7a9a2f09bce8e10df1d32bfa57b1e2e37aa810bd742d0ed0ebc35225e77ba"
+    },
+    {
+     "path": "models/pg_lost_soldier/pg_lost_soldier.obj",
+     "bytes": 123568,
+     "sha256": "c85e2b5c270555b51108fe4fb2328da4725a0d62431c389fa28a06b62a4a024b"
+    },
+    {
+     "path": "models/pg_lost_soldier/pg_lost_soldier.mtl",
+     "bytes": 264,
+     "sha256": "9634bfd00f189bcd037e71e1cf9642a119f40f32af1bcd0b7393e3fa57baa938"
+    },
+    {
+     "path": "blender_source/pg_lost_soldier.blend",
+     "bytes": 11455194,
+     "sha256": "54a6f939db6f1cf3b8108f9569871d1674922adc8f13cc8c648864e774c7645e"
+    }
+   ]
+  },
+  {
+   "id": "pg_butler",
+   "kind": "human",
+   "name": "The butler",
+   "tris": 1498,
+   "verts": 744,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_butler/textures/pg_butler_skin0.png",
+     "bytes": 64227,
+     "sha256": "39d6bad81e6665a5dad9c31613a512ffa0e5565aced110d9595001ebe59b4f67"
+    },
+    {
+     "path": "models/pg_butler/textures/pg_butler_skin1.png",
+     "bytes": 59613,
+     "sha256": "61bb9725191d86ccf4ce98751e71433154c34c24800cc1eb257455e2046cf260"
+    },
+    {
+     "path": "models/pg_butler/textures/pg_butler_skin2.png",
+     "bytes": 59389,
+     "sha256": "1b0786db402584008e5f8ac78c828fb9a313936cf74df677ebf0b1b0e0b359a8"
+    },
+    {
+     "path": "models/pg_butler/pg_butler_skin0.glb",
+     "bytes": 2595672,
+     "sha256": "0a91b0c9c6cd74f1f48c5403925590597ff32fad20951b19a02032ebd0263c86"
+    },
+    {
+     "path": "models/pg_butler/pg_butler_skin1.glb",
+     "bytes": 154396,
+     "sha256": "c335081a4f234fbe96b36c76e414a176e854ad889b872dcd7e5b04b863cf8745"
+    },
+    {
+     "path": "models/pg_butler/pg_butler_skin2.glb",
+     "bytes": 154172,
+     "sha256": "40980c66949563130f0af30aefbf73a2b25bc13968addbd875c96f3e8264fbb7"
+    },
+    {
+     "path": "models/pg_butler/pg_butler.fbx",
+     "bytes": 13082764,
+     "sha256": "ee8eaf6ce3180ae8bb24e2bd4ede7d8d534b376e06a7e6b42bc0dd044fd51ad9"
+    },
+    {
+     "path": "models/pg_butler/pg_butler.obj",
+     "bytes": 122381,
+     "sha256": "7bbcf8cd69388bfe896009573467f804f183598e9f9232e7abb45d9a7461c450"
+    },
+    {
+     "path": "models/pg_butler/pg_butler.mtl",
+     "bytes": 252,
+     "sha256": "379233201847c4e0d58d25541444aa7c610ecbc2655dd2f588521110ec56dedf"
+    },
+    {
+     "path": "blender_source/pg_butler.blend",
+     "bytes": 11442012,
+     "sha256": "6a6ef686d2e54b8e77aeacd43069c69192ac5c06de769aa5240887455e51a1e1"
+    }
+   ]
+  },
+  {
+   "id": "pg_the_host",
+   "kind": "human",
+   "name": "The host",
+   "tris": 1497,
+   "verts": 750,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_the_host/textures/pg_the_host_skin0.png",
+     "bytes": 61840,
+     "sha256": "6058edf31cae515b0bc887b173a4fc39c81b4fc43b3c692fb9792d6c3926e00e"
+    },
+    {
+     "path": "models/pg_the_host/textures/pg_the_host_skin1.png",
+     "bytes": 66535,
+     "sha256": "26ae887a9287b3e2aeb9bc5ec36e4b185aba85b71386474ebaa2422c23623e17"
+    },
+    {
+     "path": "models/pg_the_host/textures/pg_the_host_skin2.png",
+     "bytes": 65468,
+     "sha256": "421715cfc476724be9ed3099d379e1090da22f8cd720d678e4d8b986fca02917"
+    },
+    {
+     "path": "models/pg_the_host/pg_the_host_skin0.glb",
+     "bytes": 2593080,
+     "sha256": "1f5abc968b336d82d183585818c4e7ea54b57bc685f1a04c57410a6d92b05881"
+    },
+    {
+     "path": "models/pg_the_host/pg_the_host_skin1.glb",
+     "bytes": 161112,
+     "sha256": "f8488c356199ef673647769099abd374c72fae171932d19bff2cb104d36b5889"
+    },
+    {
+     "path": "models/pg_the_host/pg_the_host_skin2.glb",
+     "bytes": 160044,
+     "sha256": "09b851eb07e1ed275976b057b4bae2004cbdba682d529a3b864a972d9288a93c"
+    },
+    {
+     "path": "models/pg_the_host/pg_the_host.fbx",
+     "bytes": 13083020,
+     "sha256": "390d5402a38715574ba452484b352f4bffd811586139ed145fe9947fb8c78c28"
+    },
+    {
+     "path": "models/pg_the_host/pg_the_host.obj",
+     "bytes": 123155,
+     "sha256": "bb415f88a8a975be08e2e01ab79f772578466c0cc9fb2af6e011327437eb1e5a"
+    },
+    {
+     "path": "models/pg_the_host/pg_the_host.mtl",
+     "bytes": 256,
+     "sha256": "d6f58730f4d08d444b578afca5be6e84ec24bea777f10378308710ce401f4162"
+    },
+    {
+     "path": "blender_source/pg_the_host.blend",
+     "bytes": 11440236,
+     "sha256": "47222223106c4739f61f9bc0a06bdecb01372b8c148603d450530c0b8e557de4"
+    }
+   ]
+  },
+  {
+   "id": "pg_wailer",
+   "kind": "human",
+   "name": "The wailer",
+   "tris": 1495,
+   "verts": 756,
+   "bones": 53,
+   "clips": 46,
+   "clipNames": [
+    "A_TPose",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Dance_Loop",
+    "Death01",
+    "Driving_Loop",
+    "Fixing_Kneeling",
+    "Hit_Chest",
+    "Hit_Head",
+    "Idle_Loop",
+    "Idle_Talking_Loop",
+    "Idle_Torch_Loop",
+    "Interact",
+    "Jog_Fwd_Loop",
+    "Jump_Land",
+    "Jump_Loop",
+    "Jump_Start",
+    "PickUp_Table",
+    "Pistol_Aim_Down",
+    "Pistol_Aim_Neutral",
+    "Pistol_Aim_Up",
+    "Pistol_Idle_Loop",
+    "Pistol_Reload",
+    "Pistol_Shoot",
+    "Punch_Cross",
+    "Punch_Enter",
+    "Punch_Jab",
+    "Push_Loop",
+    "Roll",
+    "Roll_RM",
+    "Sitting_Enter",
+    "Sitting_Exit",
+    "Sitting_Idle_Loop",
+    "Sitting_Talking_Loop",
+    "Spell_Simple_Enter",
+    "Spell_Simple_Exit",
+    "Spell_Simple_Idle_Loop",
+    "Spell_Simple_Shoot",
+    "Sprint_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Sword_Attack",
+    "Sword_Attack_RM",
+    "Sword_Idle",
+    "Walk_Formal_Loop",
+    "Walk_Loop"
+   ],
+   "skins": 3,
+   "texture": 256,
+   "files": [
+    {
+     "path": "models/pg_wailer/textures/pg_wailer_skin0.png",
+     "bytes": 66647,
+     "sha256": "63185e645b5e718080912ddf1e6b47aea9f08796760511ca2afab52076bde0a9"
+    },
+    {
+     "path": "models/pg_wailer/textures/pg_wailer_skin1.png",
+     "bytes": 66404,
+     "sha256": "8ab09387561acdbd6232c05fada60761364e0f28bb50d56a2467e9d209f5ace4"
+    },
+    {
+     "path": "models/pg_wailer/textures/pg_wailer_skin2.png",
+     "bytes": 64736,
+     "sha256": "be06e406ab00a5dce52b59f708395269218dfcf75ffa758b404bda31e7ba3f7f"
+    },
+    {
+     "path": "models/pg_wailer/pg_wailer_skin0.glb",
+     "bytes": 2593912,
+     "sha256": "dd610b9e6e9ddd6aa675af70a804fafe47df96124d9665ce1cd709d5959ace66"
+    },
+    {
+     "path": "models/pg_wailer/pg_wailer_skin1.glb",
+     "bytes": 157004,
+     "sha256": "d6abbc62c55f72d370e16798c3c9209232a11ae09329f42ef47c44c201a784ea"
+    },
+    {
+     "path": "models/pg_wailer/pg_wailer_skin2.glb",
+     "bytes": 155336,
+     "sha256": "2025bc666ddfb5eb2a3a13356bddd4ba5805fab4b0461d3d127fd541f2ff46d3"
+    },
+    {
+     "path": "models/pg_wailer/pg_wailer.fbx",
+     "bytes": 13082508,
+     "sha256": "495ef94d48667d689d4dc5b605aa1fa9d22a91dcfae95007fb4c9b73d7eacc15"
+    },
+    {
+     "path": "models/pg_wailer/pg_wailer.obj",
+     "bytes": 121100,
+     "sha256": "1e8bc99b72701f18f131087fa5227af643086bba3c9d710fe389c7bc226583cd"
+    },
+    {
+     "path": "models/pg_wailer/pg_wailer.mtl",
+     "bytes": 252,
+     "sha256": "844373c66fa7f13065092f929995fc727479f1f91f35e0aa3fa664f7d6752812"
+    },
+    {
+     "path": "blender_source/pg_wailer.blend",
+     "bytes": 11454657,
+     "sha256": "0a9a4e9f2e0475dee3aa4436a261ef65f0490727fae6ee110f888bb440575691"
+    }
+   ]
+  }
+ ]
+}

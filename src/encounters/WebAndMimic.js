@@ -145,12 +145,37 @@ export function createCounterfeit(w, sites, level) {
   const mimic = w.prop(sites[0], { name: 'counterfeit', width: 1.47, height: 1.6 });
   let brood = 0, real, exposed = 0, hp = 4, checked = new Set(), grabbed = 0, attack = 0, elapsed = 0, nextCue = 1;
   let homes = sites;
+  // Extra copies wait inside ordinary chests in the world (main.js decides which). They look like any chest, and
+  // come out biting the moment the lid is lifted.
+  const lurkers = [];
+  function updateLurkers(dt, p) {
+    for (let i = lurkers.length - 1; i >= 0; i--) {
+      const m = lurkers[i];
+      if (m.dead) { if ((m.fade -= dt) <= 0) { m.root.visible = false; lurkers.splice(i, 1); } continue; }
+      m.attack -= dt;
+      if (m.attack < 0.2) w.move(m, dt, p, 2.3 + 0.12 * level);
+      m.pose(m.attack > 0.6 ? 'attack' : Math.sin(p.time * 11 + i) > 0 ? 'still' : 'step');
+      if (m.attack <= 0 && distance(m, p) < 1.45 && w.clearLine(m, p)) {
+        hooks.hurt(11 + level, 'counterfeit'); hooks.cue('crack', m); m.attack = 1.7;
+      }
+    }
+  }
   const encounter = {
-    get status() { return grabbed > 0 ? 'HOLD E TO PRY IT OPEN' : exposed > 0 ? `COUNTERFEIT ${Math.min(brood + 1, 4)}/4 · ${hp} HP` : brood === 3 ? 'FIND THE FALSE LANDMARK' : `COPIES ${brood}/3 · INSPECT THE PROPS`; },
+    chestTrap(x, z, p) {
+      const toward = p ? Math.atan2(p.x - x, p.z - z) : 0;
+      const m = w.prop({ x: x + Math.sin(toward) * 0.5, z: z + Math.cos(toward) * 0.5 }, { name: 'counterfeit', width: 1.3, height: 1.4 });
+      m.hp = 2 + Math.floor(level / 2); m.attack = 0.35; m.dead = false; m.fade = 0;
+      m.pose('attack'); lurkers.push(m);
+      hooks.cue('crack', m);
+      hooks.say('The chest opens its mouth. Shoot it.');
+    },
+    get lurkers() { return lurkers.filter(m => !m.dead).length; },
+    get status() { return (lurkers.some(m => !m.dead) ? 'A CHEST BITES · ' : '') + (grabbed > 0 ? 'HOLD E TO PRY IT OPEN' : exposed > 0 ? `COUNTERFEIT ${Math.min(brood + 1, 4)}/4 · ${hp} HP` : brood === 3 ? 'FIND THE FALSE LANDMARK' : `COPIES ${brood}/3 · INSPECT THE PROPS`); },
     get target() { return exposed > 0 ? mimic : brood === 3 ? landmark : decoys.find(s => !checked.has(s)); },
-    get hostiles() { return [exposed > 0 ? mimic : real]; },
+    get hostiles() { return [exposed > 0 ? mimic : real, ...lurkers.filter(m => !m.dead)]; },
     update(dt, p) {
       elapsed = p.time;
+      updateLurkers(dt, p);
       if ((nextCue -= dt) <= 0) {
         hooks.cue(exposed > 0 ? 'stone' : 'mimic', exposed > 0 ? mimic : real, 0.8);
         nextCue = 2.3;
@@ -192,8 +217,14 @@ export function createCounterfeit(w, sites, level) {
         else { checked.add(obj); hooks.cue('latch', obj, 0.65); hooks.say('Dust inside. This one is empty.'); }
       });
     },
-    targets() { return exposed > 0 ? [mimic] : brood === 3 ? [landmark] : decoys; },
+    targets() { return [...(exposed > 0 ? [mimic] : brood === 3 ? [landmark] : decoys), ...lurkers.filter(m => !m.dead)]; },
     hit(item, damage) {
+      if (lurkers.includes(item)) {
+        if (item.dead) return;
+        item.hp -= damage; hooks.cue('stone', item);
+        if (item.hp <= 0) { item.dead = true; item.fade = 0.5; item.pose('still'); hooks.parts(2); hooks.say('The false chest is still. +2 parts'); }
+        return;
+      }
       if (item === real && exposed <= 0) { reveal(false); return; }
       if (item !== mimic) { checked.add(item); hooks.cue('stone', item); return; }
       hp -= damage;
