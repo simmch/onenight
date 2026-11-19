@@ -53,7 +53,7 @@ export class ObserverAnimator {
     if (this.m.asset) {
       const speed = ctx.speed || 0;
       const name = st === 'attack' ? 'Attack' : speed <= 0.2 ? 'Idle' : st === 'hunt' || st === 'scurry' ? 'Run' : 'Walk';
-      const rate = name === 'Run' || name === 'Walk' ? Math.max(0.45, Math.min(2.4, speed / (name === 'Run' ? 2.2 : 0.6))) : 1;
+      const rate = name === 'Run' || name === 'Walk' ? Math.max(0.3, Math.min(1.55, speed / (name === 'Run' ? 3.4 : 0.92))) : 0.7;
       this.m.asset.animate(name, dt, { once: name === 'Attack', rate });
     } else {
       this.pose(T, ctx);

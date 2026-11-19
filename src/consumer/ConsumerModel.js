@@ -91,14 +91,14 @@ function buildMaw(asset) {
   return {
     ...asset, distortion, mouth, hitT: 0, contactRadius: 0.59,
     pose(dt, { state, speed, hit }) {
-      if (state === 'consume') asset.animate('Attack_Eat', dt, { once: true, rate: 1.38 });
+      if (state === 'consume') asset.animate('Attack_Eat', dt, { once: true, rate: 0.9 });
       else if (state === 'windup' || state === 'lunge' || state === 'recover') {
-        asset.animate('Attack_Swipe', dt, { once: true, rate: 1.1 });
-      } else if (hit > 0) asset.animate('Hit', dt, { once: true });
+        asset.animate('Attack_Swipe', dt, { once: true, rate: 0.72 });
+      } else if (hit > 0) asset.animate('Hit', dt, { once: true, rate: 0.7 });
       else if (speed > 0.25) {
         const clip = state === 'hunt' ? 'Run_Chomp' : state === 'scurry' ? 'Run_Pull' : 'Crawl';
-        asset.animate(clip, dt, { rate: THREE.MathUtils.clamp(speed / 2, 0.8, 2.4) });
-      } else asset.animate('Idle_Breathe', dt);
+        asset.animate(clip, dt, { rate: THREE.MathUtils.clamp(speed / 3.1, 0.5, 1.55) });
+      } else asset.animate('Idle_Breathe', dt, { rate: 0.7 });
     },
   };
 }

@@ -112,7 +112,7 @@ function buildContortionist(asset, opts) {
 }
 
 export function createObserverModel(opts = {}) {
-  const replacement = monsterAsset('observer', { scale: [1.07, 1.84, 1.13], idle: 'Idle' });
+  const replacement = monsterAsset('observer', { scale: [1.23, 2.12, 1.30], idle: 'Idle' });
   if (replacement) return buildContortionist(replacement, opts);
   const G = sharedGeometry(), mats = createObserverMaterials(opts), D = DIMS;
   const { root, j, chest } = buildSkeleton();

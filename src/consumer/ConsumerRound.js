@@ -5,8 +5,8 @@ import { buildConsumerModel, CONSUMER_HEIGHT } from './ConsumerModel.js';
 const CIVILIAN_COUNT = 26;
 const CIVILIAN_RESCUE_TIME = 4.2;
 const CIVILIAN_SPEED = [1.85, 2.55];
-const CONSUMER_BASE = 1.8;
-const MAX_CONSUMER_SCALE = 5.2;
+const CONSUMER_BASE = 2.1;
+const MAX_CONSUMER_SCALE = 6.1;
 const CEILING_SCALE = CONSUMER_BASE + 0.25;
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
