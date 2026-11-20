@@ -1,4 +1,5 @@
 import { distance, press, hold } from './EncounterWorld.js';
+import { monsterAsset } from '../world/MonsterAssets.js';
 
 // The Wick Eater, made plain: power the three relays, then whichever one is buzzing (it flickers bright and its ring
 // pulses) is where it hides. Hold E on that one to overload it, and shoot the core that falls out. Two cores and it is gone.
@@ -7,7 +8,9 @@ import { distance, press, hold } from './EncounterWorld.js';
 const WICK = { cores: 2, strikeAfter: 3.0, strikeEvery: 5.0, exposed: [13, 9] };
 // Wicklings: the closer you are to finishing it, the more of itself it pushes out of the walls at you.
 // [seconds between, most alive at once] for: relays powered / one core gone / the last core exposed.
-const CRAWL = { waves: [[18, 1], [8, 3], [5, 3]], speed: 2.2, bite: 8, reach: 1.3, near: 3.5, far: 10 };
+const CRAWL = { waves: [[18, 1], [8, 3], [5, 3]], speed: 2.2, bite: 8, reach: 2.2, near: 3.5, far: 10 };
+// The Vent Crawler, reared up. The Burrower wears the same rig at 0.74; these ones fill the room.
+const VENT_SCALE = 1.9;
 export function createWickEater(w, sites, level) {
   const { hooks } = w;
   const relays = sites.slice(0, 3).map((p, i) => {
@@ -23,8 +26,20 @@ export function createWickEater(w, sites, level) {
     relay.powered = false;
     return relay;
   });
-  const core = w.prop(sites[0], { name: 'wickeater', width: 1.2, height: 1.02 });
+  const coreBody = monsterAsset('wickeater', { scale: VENT_SCALE, idle: 'Idle_Rear' });
+  const core = w.prop(sites[0], { name: coreBody ? undefined : 'wickeater', width: 2.2, height: 3.4 });
+  if (coreBody) {
+    core.root.add(coreBody.root);
+    core.body = coreBody;
+    core.rayHit = coreBody.rayHit;
+  }
+  core.hit = 0;
+  core.lunge = 0;
+  core.dying = 0;
+  core.finish = false;
   core.root.visible = false;
+  const face = (item, p) => { item.root.rotation.y = Math.atan2(p.x - item.x, p.z - item.z); };
+  const play = (item, clip, dt, once = false) => item.body.animate(clip, dt, { once });
   let fed = null, next = 0, cue = 0, darkness = 0, strike = 0, exposed = 0, hp = 0, overloads = 0, blackout = 0;
   const ready = () => relays.every(r => r.powered);
   const crawlers = [];
@@ -50,9 +65,15 @@ export function createWickEater(w, sites, level) {
   function spawnCrawler(p) {
     const at = wallSpot(p);
     if (!at) return;
-    const c = w.prop(at, { name: 'wickling', width: 1.05, height: 0.95 });
-    c.hp = 1 + Math.floor(level / 4); c.bite = 0.9; c.emerge = 0; c.dead = false; c.fade = 0;
-    c.skin.scale.x = 0.05;
+    const body = monsterAsset('wickeater', { scale: VENT_SCALE, idle: 'Idle_Coil' });
+    const c = w.prop(at, { name: body ? undefined : 'wickling', width: 1.8, height: 2.6 });
+    c.hp = 1 + Math.floor(level / 4); c.bite = 0.9; c.emerge = 0; c.dead = false; c.fade = 0; c.hit = 0;
+    if (body) {
+      c.root.add(body.root);
+      c.body = body;
+      c.rayHit = body.rayHit;
+      body.root.scale.setScalar(0.2);
+    } else c.skin.scale.x = 0.05;
     crawlers.push(c);
     hooks.cue('crack', c, 0.9);
   }
@@ -65,14 +86,30 @@ export function createWickEater(w, sites, level) {
     }
     for (let i = crawlers.length - 1; i >= 0; i--) {
       const c = crawlers[i];
-      if (c.dead) { c.fade -= dt; c.skin.scale.y = c.height * Math.max(0, c.fade / 0.4); if (c.fade <= 0) { c.root.visible = false; crawlers.splice(i, 1); } continue; }
+      if (c.dead) {
+        c.fade -= dt;
+        if (c.body) play(c, 'Death', dt, true);
+        else c.skin.scale.y = c.height * Math.max(0, c.fade / 0.4);
+        if (c.fade <= 0) { c.root.visible = false; crawlers.splice(i, 1); }
+        continue;
+      }
       if (c.emerge < 0.7) {                                         // tearing itself out of the wall
-        c.emerge += dt; c.skin.scale.x = c.width * Math.min(1, c.emerge / 0.7); c.pose('attack'); continue;
+        c.emerge += dt;
+        const grown = Math.min(1, c.emerge / 0.7);
+        if (c.body) { c.body.root.scale.setScalar(0.2 + 0.8 * grown); face(c, p); play(c, 'Idle_Rear', dt); }
+        else { c.skin.scale.x = c.width * grown; c.pose('attack'); }
+        continue;
       }
       c.bite -= dt;
+      c.hit = Math.max(0, c.hit - dt);
       const lit = p.beam && !p.match && w.seen(c, p, 10, 0.93);    // a light on it slows it down
-      if (c.bite < 0.3) w.move(c, dt, p, (CRAWL.speed + level * 0.1) * (lit ? 0.5 : 1));
-      c.pose(c.bite > 0.5 ? 'attack' : Math.sin(p.time * 12 + i) > 0 ? 'still' : 'step');
+      const moved = c.bite < 0.3 ? w.move(c, dt, p, (CRAWL.speed + level * 0.1) * (lit ? 0.5 : 1))?.speed || 0 : 0;
+      if (c.body) {
+        face(c, p);
+        if (c.body.root.scale.x < 1) c.body.root.scale.setScalar(1);
+        const clip = c.hit > 0 ? 'Hit' : c.bite > 0.5 ? 'Attack' : moved > 0.25 ? (lit ? 'Run_Snake' : 'Run_Rear') : (Math.floor(p.time / 4 + i) % 2 ? 'Idle_Coil' : 'Idle_Ground');
+        play(c, clip, dt, c.hit > 0 || c.bite > 0.5);
+      } else c.pose(c.bite > 0.5 ? 'attack' : Math.sin(p.time * 12 + i) > 0 ? 'still' : 'step');
       if (c.bite <= 0 && distance(c, p) < CRAWL.reach && w.clearLine(c, p)) {
         hooks.hurt(CRAWL.bite + Math.round(level * 0.5), 'wickeater'); hooks.cue('crack', c, 0.7); c.bite = 1.5;
       }
@@ -102,8 +139,29 @@ export function createWickEater(w, sites, level) {
         r.ring.material.opacity = isFed ? 0.62 + 0.3 * Math.sin(p.time * 7) : r.powered ? 0.22 : 0.4;
         for (const dot of r.indicators) dot.visible = !isFed || flick;
       }
+      if (core.dying > 0) {
+        core.dying -= dt;
+        core.root.visible = true;
+        face(core, p);
+        if (core.body) play(core, 'Death', dt, true);
+        else core.pose('attack');
+        if (core.dying > 0) return;
+        core.root.visible = false;
+        if (core.finish) { encounter.won = true; return; }
+        const others = relays.filter(r => r !== fed);
+        hop(others[(Math.random() * others.length) | 0]);
+        hooks.say(`One core is gone. Relay ${fed.id} starts to buzz. One more. Something is moving in the walls.`);
+        crawlIn = 1.5;
+        return;
+      }
+      core.hit = Math.max(0, core.hit - dt);
+      core.lunge = Math.max(0, core.lunge - dt);
       if (exposed > 0) {
-        core.pose('attack');
+        face(core, p);
+        if (core.body) {
+          const clip = core.hit > 0 ? 'Hit' : core.lunge > 0 ? 'Attack' : (Math.floor(p.time / 3.5) % 2 ? 'Idle_Rear2' : 'Idle_Rear');
+          play(core, clip, dt, core.hit > 0 || core.lunge > 0);
+        } else core.pose('attack');
         exposed -= dt;
         if (exposed <= 0) {
           core.root.visible = false;
@@ -117,12 +175,14 @@ export function createWickEater(w, sites, level) {
       const dark = near < 6.2 && w.clearLine(fed, p) && !p.match && !p.beam && (!p.roomLit || blackout > 0);
       darkness = dark ? darkness + dt : Math.max(0, darkness - dt * 2);
       if (darkness > WICK.strikeAfter && strike <= 0) {
-        core.place(fed); core.root.visible = true; core.pose('attack');
+        core.place(fed); core.root.visible = true; core.lunge = 1.15; core.hit = 0;
+        if (!core.body) core.pose('attack');
         hooks.cue('crack', fed);
         hooks.hurt(10 + Math.round(level * 0.6), 'wickeater');
         hooks.say('It reaches out of the dark. Keep a light on near the relay.');
         strike = WICK.strikeEvery; darkness = 0;
-      } else if (strike < WICK.strikeEvery - 0.35) core.root.visible = false;
+      } else if (core.lunge <= 0 && strike < WICK.strikeEvery - 0.35) core.root.visible = false;
+      if (core.root.visible && core.body) { face(core, p); play(core, 'Attack', dt, true); }
       if (near < 4 && w.clearLine(fed, p) && p.beam && !p.match) hooks.drain(dt * 0.3);
       if (!ready() || (next -= dt) > 0) return;
       if (near < 8) { next = 2; return; }                       // never slips away while you are right there
@@ -130,7 +190,7 @@ export function createWickEater(w, sites, level) {
       hop(others[(Math.random() * others.length) | 0]);
     },
     action(p) {
-      if (exposed > 0 && w.close(core, p, 1.8)) return hold('Crush the exposed core', 0.62, () => encounter.hit(core, 3));
+      if (exposed > 0 && w.close(core, p, 2.6)) return hold('Crush the exposed core', 0.62, () => encounter.hit(core, 3));
       const r = relays.find(r => w.close(r, p));
       if (!r || exposed > 0) return null;
       if (!r.powered) return press(`Power relay ${r.id}`, () => {
@@ -148,30 +208,30 @@ export function createWickEater(w, sites, level) {
         hp = 3 + Math.floor(level / 3);
         core.place(r);
         core.root.visible = true;
+        core.lunge = 1.25;
+        core.hit = 0;
         hooks.cue('crack', r);
         hooks.say('The core falls out. Shoot it before it climbs back in.');
       });
     },
-    targets() { return [...(exposed > 0 ? [core] : []), ...alive()]; },
+    targets() { return [...(exposed > 0 || core.dying > 0 ? [core] : []), ...alive()]; },
     hit(item, damage) {
       if (crawlers.includes(item)) {
         if (item.dead || item.emerge < 0.3) return;
-        item.hp -= damage; hooks.cue('stone', item, 0.7);
-        if (item.hp <= 0) { item.dead = true; item.fade = 0.4; }
+        item.hp -= damage; item.hit = 0.45; hooks.cue('stone', item, 0.7);
+        if (item.hp <= 0) { item.dead = true; item.fade = item.body ? 1.2 : 0.4; }
         return;
       }
-      if (exposed <= 0) return;
+      if (core.dying > 0 || exposed <= 0) return;
       hp -= damage;
+      core.hit = 0.45;
       hooks.cue('stone', core);
       if (hp > 0) return;
       overloads++;
       exposed = 0;
-      core.root.visible = false;
-      if (overloads >= WICK.cores) { for (const c of crawlers) { c.dead = true; c.fade = 0.4; } encounter.won = true; return; }
-      const others = relays.filter(r => r !== fed);
-      hop(others[(Math.random() * others.length) | 0]);
-      hooks.say(`One core is gone. Relay ${fed.id} starts to buzz. One more. Something is moving in the walls.`);
-      crawlIn = 1.5;
+      core.dying = 1.15;
+      core.finish = overloads >= WICK.cores;
+      if (core.finish) for (const c of crawlers) if (!c.dead) { c.dead = true; c.fade = c.body ? 1.2 : 0.4; }
     },
     relocate(nextSites) {
       relays.forEach((r, i) => r.place(nextSites[i]));

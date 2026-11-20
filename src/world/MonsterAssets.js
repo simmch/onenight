@@ -4,12 +4,13 @@ import { GLTFLoader } from '../../vendor/loaders/GLTFLoader.js';
 const files = {
   consumer: 'TheMaw/SK_Maw.glb',
   lightbound: 'TheCongregation/SK_Congregation.glb',
-  burrower: 'TheVentCrawler/SK_VentCrawler.glb',
+  burrower: 'TheVentCrawler/SK_VentCrawler.glb', // the Wick Eater uses this same body
   observer: 'TheContortionist/SK_Contortionist.glb',
   trayHound: 'TheTrayHound/SK_TrayHound.glb',
   unseen: 'TheBrute/SK_Brute.glb',
 };
 const assets = new Map();
+const aliases = { wickeater: 'burrower' };
 
 export async function preloadMonsterAssets() {
   const loader = new GLTFLoader();
@@ -24,7 +25,7 @@ export async function preloadMonsterAssets() {
 }
 
 export function monsterAsset(type, options) {
-  return instantiateMonsterAsset(assets.get(type), options);
+  return instantiateMonsterAsset(assets.get(aliases[type] ?? type), options);
 }
 
 export function instantiateMonsterAsset(source, { scale, yaw = 0, idle }) {
