@@ -1370,6 +1370,12 @@ function duckAmbience(moving) {
   ambienceGain.gain.linearRampToValueAtTime(moving ? AMBIENCE_MOVING : AMBIENCE_VOLUME, t + 0.18);
 }
 
+const [heartSlowBuffer, heartMidBuffer, heartFastBuffer] = await Promise.all([
+  loadClip('heartbeat_slow_pace_#2-1795147037477.mp3'),
+  loadClip('heartbeat_medium_pac_#2-1795147105076.mp3'),
+  loadClip('heartbeat_super_fast_#4-1795147145136.mp3'),
+]);
+
 // Breathing. Idle, walk, and run each loop; movement breaths fade out when that pace stops.
 // A run picks the next heavy breath from a shuffled set, then loops it until the run ends.
 // Holding breath muffles it and silences footsteps so they don't carry.
@@ -1392,6 +1398,24 @@ function loopBreath(buffer) {
   src.start();
   return gain;
 }
+function loopFoley(buffer) {
+  const gain = audioCtx.createGain();
+  gain.gain.value = 0;
+  gain.connect(mix.foley);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.loop = true;
+  src.connect(gain);
+  src.start();
+  return gain;
+}
+const HEART_VOLUME = { slow: 0.4, mid: 0.44, fast: 0.5 };
+const heartGain = {
+  slow: loopFoley(heartSlowBuffer),
+  mid: loopFoley(heartMidBuffer),
+  fast: loopFoley(heartFastBuffer),
+};
+let heartBand = '';
 const idleGain = loopBreath(idleBreath);
 const walkGain = loopBreath(walkBreath);
 const runGain = audioCtx.createGain();
@@ -1459,6 +1483,23 @@ function rampParam(param, value, seconds) {
   param.cancelScheduledValues(t);
   param.setValueAtTime(param.value, t);
   param.linearRampToValueAtTime(value, t + seconds);
+}
+// A clear mind ticks slowly. At half sanity the heart takes over, and at a tenth or less it races.
+// Walking and running keep the same clip, a little quieter under the footsteps.
+function syncHeartbeat(pace) {
+  const sane = sanity.value;
+  const band = pace == null ? ''
+    : sane <= SANITY_MAX * 0.1 ? 'fast'
+    : sane <= SANITY_MAX * 0.5 ? 'mid'
+    : 'slow';
+  const moving = pace === 'walk' || pace === 'run';
+  const id = band + (moving ? '/move' : '');
+  if (id === heartBand) return;
+  heartBand = id;
+  const level = moving ? 0.75 : 1;
+  rampParam(heartGain.slow.gain, band === 'slow' ? HEART_VOLUME.slow * level : 0, 0.4);
+  rampParam(heartGain.mid.gain, band === 'mid' ? HEART_VOLUME.mid * level : 0, 0.4);
+  rampParam(heartGain.fast.gain, band === 'fast' ? HEART_VOLUME.fast * level : 0, 0.4);
 }
 function syncBodyAudio(pace, holding) {
   const id = (pace || 'off') + (holding ? '/hold' : '');
@@ -6107,7 +6148,7 @@ function frame(now) {
   const enclosed = indoors || (MAP.interior && !facility) || MAP_NAME === 'cave';
   mix.space(cult.active ? 'hall' : swim.in ? 'confined' : enclosed ? (longMixRoom ? 'hall' : 'room') : 'open');
   mix.focus(cinematic ? 'cinema' : huntSilence ? 'hunt' : !playing && started ? 'pause' : holdingBreath ? 'breath' : 'normal');
-  if (mapFall.update(dt)) return;
+  if (mapFall.update(dt)) { syncHeartbeat(null); return; }
   if (TOUCH) {
     const box = touchView();
     if (playing && box.w <= box.h) pauseTouch();
@@ -6115,11 +6156,16 @@ function frame(now) {
   }
   uTime.value += dt;
   // the landing page: nothing in the night moves until PLAY
-  if (title.active) { title.update(dt); if (title.active) { title.render(); return; } }
+  if (title.active) { title.update(dt); if (title.active) { syncHeartbeat(null); title.render(); return; } }
   // between rounds: a scene has the camera, and the night waits for it (it stops with the rest when paused)
-  if (cutscenes.active) { if (playing || cutscenes.dying) cutscenes.update(dt); if (cutscenes.active) { cutscenes.render(); return; } }
+  if (cutscenes.active) { if (playing || cutscenes.dying) cutscenes.update(dt); if (cutscenes.active) { syncHeartbeat(null); cutscenes.render(); return; } }
   if (playing && canBeginCult()) beginCult();
-  if (cult.active) { elapsed += dt; round.t += dt; cult.update(dt); return; }
+  if (cult.active) {
+    elapsed += dt; round.t += dt; cult.update(dt);
+    const cultPaceNow = bodyAudio.startsWith('walk') ? 'walk' : bodyAudio.startsWith('run') ? 'run' : bodyAudio.startsWith('idle') ? 'idle' : null;
+    syncHeartbeat(cultPaceNow);
+    return;
+  }
 
   let speed = 0, running = false;
   const bonuses = bagBonuses();
@@ -6175,6 +6221,7 @@ function frame(now) {
   syncFootsteps(stepping && surface !== 'terrain' ? (pace === 'run' ? 'run' : 'walk') : null, surface);
   updateInteriorSound(dt, stepping, running, inControl, surface);
   syncBodyAudio(pace, holdingBreath && pace != null);
+  syncHeartbeat(pace);
   syncAmbience(started ? 'outside' : null);
   syncWood(started && !finished && MAP_NAME === 'forest');
   syncLabyrinth(started && !finished && MAP_NAME === 'labyrinth');
